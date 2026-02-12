@@ -123,7 +123,7 @@ if echo "$OUTPUT" | grep -qi "invalid api key\|unauthorized\|authentication"; th
   echo "       (mount credentials via .docker-state/claude-credentials.json)"
   section "Done"
   echo "  Phase 1 passed. Phase 2 skipped (no auth)."
-  exit 0
+  exit 1
 fi
 
 if echo "$OUTPUT" | grep -qi "shaka"; then
@@ -191,6 +191,39 @@ else
   fail "No session summaries found in $MEMORY_DIR after 30s"
   ls -laR "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/" 2>&1 || true
   exit 1
+fi
+
+# ── Learnings: extraction from session ─────────────────────────────────
+
+section "Learnings"
+echo "  Running: claude -p \"<correction prompt>\""
+
+LEARN_OUTPUT=$(claude -p "Correction: always use bun, never npm. Acknowledge briefly." --allowedTools "" 2>&1) || true
+
+LEARNINGS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/learnings.md"
+
+# SessionEnd hook runs asynchronously — wait for learnings to be written
+echo "  Waiting for learnings extraction..."
+for i in $(seq 1 30); do
+  if [ -f "$LEARNINGS_FILE" ]; then
+    break
+  fi
+  sleep 1
+done
+
+if [ -f "$LEARNINGS_FILE" ]; then
+  pass "learnings.md created"
+else
+  fail "learnings.md not found after 30s"
+  ls -laR "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/" 2>&1 || true
+  exit 1
+fi
+
+if grep -qi "bun\|npm" "$LEARNINGS_FILE"; then
+  pass "learnings.md contains extracted learning"
+else
+  warn "learnings.md exists but content may not match expected keywords"
+  cat "$LEARNINGS_FILE" | head -20
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────
