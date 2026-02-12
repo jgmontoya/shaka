@@ -91,6 +91,27 @@ describe("Summarize", () => {
       const prompt = buildSummarizationPrompt(sampleMessages, metadata);
       expect(prompt).toContain("opencode");
     });
+
+    test("includes learnings extraction section", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata);
+      expect(prompt).toContain("## Learnings");
+      expect(prompt).toContain("Do NOT extract");
+      expect(prompt).toContain("DO extract");
+    });
+
+    test("includes existing learning titles when provided", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata, [
+        "Use Bun.file()",
+        "No emojis",
+      ]);
+      expect(prompt).toContain("- Use Bun.file()");
+      expect(prompt).toContain("- No emojis");
+    });
+
+    test("shows placeholder when no existing learnings", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata, []);
+      expect(prompt).toContain("No existing learnings yet.");
+    });
   });
 
   describe("parseSummaryOutput", () => {
@@ -287,6 +308,42 @@ Works without language tag.
       const result = parseSummaryOutput(fenced);
       expect(result).not.toBeNull();
       expect(result?.title).toBe("Plain fenced output");
+    });
+
+    test("strips ## Learnings section from body", () => {
+      const withLearnings = `---
+date: "2026-02-09"
+cwd: /projects/myapp
+tags: [test]
+provider: claude
+session_id: ses-abc123
+---
+
+# Session with learnings
+
+## Summary
+Did some work.
+
+## Decisions
+- Chose option A.
+
+## Learnings
+
+### (correction) Use Bun.file()
+
+This project uses Bun runtime.
+
+### (preference) No emojis
+
+User prefers no emojis.
+`;
+      const result = parseSummaryOutput(withLearnings);
+      expect(result).not.toBeNull();
+      expect(result?.body).toContain("## Summary");
+      expect(result?.body).toContain("## Decisions");
+      expect(result?.body).not.toContain("## Learnings");
+      expect(result?.body).not.toContain("Use Bun.file()");
+      expect(result?.body).not.toContain("No emojis");
     });
 
     test("returns null when title heading is missing", () => {

@@ -8,6 +8,7 @@
  */
 
 import { parse as parseYaml } from "yaml";
+import { buildExtractionPromptSection } from "./learnings";
 import type { NormalizedMessage } from "./transcript";
 
 export interface SessionMetadata {
@@ -26,13 +27,15 @@ export interface SessionSummary {
 
 /**
  * Build a prompt that asks the LLM to extract structured information
- * from a coding session transcript.
+ * from a coding session transcript, including reusable learnings.
  */
 export function buildSummarizationPrompt(
   messages: NormalizedMessage[],
   metadata: SessionMetadata,
+  existingLearningTitles: string[] = [],
 ): string {
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
+  const learningsSection = buildExtractionPromptSection(existingLearningTitles);
 
   return `You are analyzing a coding session transcript. Extract structured information.
 
@@ -47,6 +50,7 @@ Extract:
 4. Problems encountered and how they were resolved
 5. Unresolved questions or next steps
 6. 3-5 keyword tags for searchability
+${learningsSection}
 
 Format as markdown with YAML frontmatter:
 
@@ -73,7 +77,16 @@ session_id: ${metadata.sessionId}
 - ...
 
 ## Open Questions
-- ...`;
+- ...
+
+## Next Steps
+- ...
+
+## Learnings
+
+### (category) Title
+
+Body (1-3 sentences).`;
 }
 
 /**
@@ -151,8 +164,17 @@ function extractBody(markdown: string, title: string): string {
   // Find the title line and take everything after it
   const titleLine = `# ${title}`;
   const titleIndex = markdown.indexOf(titleLine);
-  if (titleIndex === -1) return markdown.trim();
+  if (titleIndex === -1) return stripLearningsSection(markdown.trim());
 
   const afterTitle = markdown.slice(titleIndex + titleLine.length);
-  return afterTitle.trim();
+  return stripLearningsSection(afterTitle.trim());
+}
+
+/**
+ * Remove the ## Learnings section from the body.
+ * Learnings are extracted separately by parseExtractedLearnings()
+ * and stored in learnings.md, not in session summary files.
+ */
+function stripLearningsSection(body: string): string {
+  return body.replace(/\n*## Learnings[\s\S]*$/, "").trim();
 }

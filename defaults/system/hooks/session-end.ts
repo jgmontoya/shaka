@@ -18,13 +18,19 @@ import {
   type SessionMetadata,
   buildSummarizationPrompt,
   getSummarizationModel,
+  hashSessionId,
   inference,
   isSubagent,
+  loadLearnings,
+  mergeNewLearnings,
   parseClaudeCodeTranscript,
+  parseExtractedLearnings,
   parseOpencodeTranscript,
   parseSummaryOutput,
   resolveShakaHome,
   truncateTranscript,
+  undoSessionLearnings,
+  writeLearnings,
   writeSummary,
 } from "shaka";
 
@@ -156,8 +162,15 @@ async function main() {
     sessionId,
   };
 
-  // Build prompt and call inference
-  const prompt = buildSummarizationPrompt(truncated, metadata);
+  const shakaHome = resolveShakaHome();
+  const memoryDir = join(shakaHome, "memory");
+
+  // Load existing learnings for title matching in extraction prompt
+  const existingLearnings = await loadLearnings(memoryDir);
+  const existingTitles = existingLearnings.map((e) => e.title);
+
+  // Build prompt (single call produces both summary + learnings)
+  const prompt = buildSummarizationPrompt(truncated, metadata, existingTitles);
 
   const model = await getSummarizationModel(provider);
   console.error(`Calling inference for summarization${model ? ` (model: ${model})` : ""}...`);
@@ -172,12 +185,10 @@ async function main() {
     process.exit(0);
   }
 
-  // Parse the summary output
+  // Parse the summary output (## Learnings section is stripped from body)
   const parsed = parseSummaryOutput(result.text);
   if (!parsed) {
     console.error("Failed to parse inference output as summary");
-    const shakaHome = resolveShakaHome();
-    const memoryDir = join(shakaHome, "memory");
     await saveFailedOutput(memoryDir, sessionId, result.text);
     process.exit(0);
   }
@@ -186,10 +197,47 @@ async function main() {
   const summary = { ...parsed, metadata };
 
   // Write summary to disk
-  const shakaHome = resolveShakaHome();
-  const memoryDir = join(shakaHome, "memory");
   const filePath = await writeSummary(memoryDir, summary);
   console.error(`Summary written to ${filePath}`);
+
+  // Extract and write learnings (fail-open: summary already written)
+  await extractAndWriteLearnings(result.text, metadata, memoryDir);
+}
+
+/**
+ * Extract learnings from inference output and write to learnings.md.
+ * Fail-open: any error is logged but does not affect the summary.
+ */
+async function extractAndWriteLearnings(
+  rawOutput: string,
+  metadata: SessionMetadata,
+  memoryDir: string,
+): Promise<void> {
+  try {
+    const sessionHash = hashSessionId(metadata.sessionId);
+    const extracted = parseExtractedLearnings(rawOutput, {
+      date: metadata.date,
+      cwd: metadata.cwd,
+      sessionHash,
+    });
+
+    if (extracted.length === 0) {
+      console.error("No learnings extracted from this session");
+      return;
+    }
+
+    // Load, undo previous extractions from this session, merge new
+    let entries = await loadLearnings(memoryDir);
+    entries = undoSessionLearnings(entries, sessionHash);
+    entries = mergeNewLearnings(entries, extracted);
+
+    await writeLearnings(memoryDir, entries);
+    console.error(`Wrote ${extracted.length} learning(s) to learnings.md`);
+  } catch (err) {
+    console.error(
+      `Learnings extraction failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 if (import.meta.main) {
