@@ -8,6 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
+- **Automatic continuous learning** — The assistant learns from sessions and improves over time
+  - Learnings extracted from transcripts at session end (single inference call, no extra cost)
+  - Learnings loaded into context at session start within a 3000-char budget
+  - Scoring by CWD relevance, recency (90-day decay), and reinforcement (exposure count)
+  - Title-match reinforcement: repeated learnings gain weight automatically
+- **`shaka memory consolidate` command** — Merge duplicates and resolve contradictions
+  - Two-pass LLM classification: duplicate detection then contradiction detection
+  - Deterministic CWD overlap resolution (newer entry wins)
+  - Interactive CWD-to-global promotion with nonglobal opt-out
+  - Backup written before every consolidation
+- **Learnings search** — `shaka memory search` and MCP tool now return learnings alongside sessions
+- **Search result type discriminator** — `SearchResult.type` field (`"session"` | `"learning"`)
 - **Windows support** — Shaka now runs on Windows alongside macOS and Linux
   - Cross-platform path utilities (`src/platform/paths.ts`) with `readSymlinkTarget()` and `removeLink()` helpers
   - Junctions instead of directory symlinks for zero-privilege Windows support (no Developer Mode or admin required)
@@ -18,6 +30,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Changed
 
+- **Summarization prompt extended** — Now extracts learnings alongside session summaries in a single inference call
+- **Session summaries exclude learnings** — `## Learnings` section stripped from session summary body (stored separately in `learnings.md`)
+- **`hashSessionId` extracted** — Shared utility in `src/memory/utils.ts` (was private in storage.ts)
 - **All path construction uses `path.join()`** — Replaced hardcoded `/` separators across `src/` modules, `defaults/` hooks, providers, configurers, and tests
 - **`pathToFileURL()` for dynamic imports** — Bare Windows paths (`C:\...`) fail with `import()`, now converted to `file://` URLs
 - **Security pattern matching is cross-platform** — Path patterns normalize separators before matching
