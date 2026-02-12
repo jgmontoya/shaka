@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeLearnings } from "../../../src/memory/learnings";
 import { type SearchResult, searchMemory } from "../../../src/memory/search";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
@@ -223,5 +224,106 @@ describe("searchMemory", () => {
     expect(results[0]?.date).toBe("2026-02-09");
     expect(results[0]?.tags).toEqual(["important", "test"]);
     expect(results[0]?.filePath).toContain(".md");
+  });
+
+  test("session results have type 'session'", async () => {
+    await writeSummary(
+      testMemoryDir,
+      makeSummary({ title: "Typed session", sessionId: "ses-type0001" }),
+    );
+
+    const results = await searchMemory("typed", testMemoryDir);
+    expect(results[0]?.type).toBe("session");
+  });
+
+  test("finds matches in learnings", async () => {
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "correction",
+        cwds: ["/projects/myapp"],
+        exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+        nonglobal: false,
+        title: "Use Bun.file() instead of fs.readFile()",
+        body: "This project uses Bun runtime.",
+      },
+    ]);
+
+    const results = await searchMemory("Bun.file", testMemoryDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.type).toBe("learning");
+    expect(results[0]?.title).toBe("Use Bun.file() instead of fs.readFile()");
+  });
+
+  test("learning results use last exposure date", async () => {
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "preference",
+        cwds: ["*"],
+        exposures: [
+          { date: "2026-02-09", sessionHash: "aaaa0000" },
+          { date: "2026-02-12", sessionHash: "bbbb0000" },
+        ],
+        nonglobal: false,
+        title: "No emojis in comments",
+        body: "User prefers no emojis.",
+      },
+    ]);
+
+    const results = await searchMemory("emojis", testMemoryDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.date).toBe("2026-02-12");
+  });
+
+  test("returns results from both sessions and learnings", async () => {
+    await writeSummary(
+      testMemoryDir,
+      makeSummary({
+        title: "Session about testing patterns",
+        body: "## Summary\nWrote tests.",
+        sessionId: "ses-both0001",
+      }),
+    );
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "pattern",
+        cwds: ["/projects/myapp"],
+        exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+        nonglobal: false,
+        title: "Always write testing patterns first",
+        body: "TDD approach.",
+      },
+    ]);
+
+    const results = await searchMemory("testing patterns", testMemoryDir);
+
+    expect(results).toHaveLength(2);
+    const types = results.map((r) => r.type);
+    expect(types).toContain("session");
+    expect(types).toContain("learning");
+  });
+
+  test("learnings search is case-insensitive", async () => {
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "correction",
+        cwds: ["/x"],
+        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+        nonglobal: false,
+        title: "Use UPPERCASE Convention",
+        body: "Constants should be SCREAMING_SNAKE.",
+      },
+    ]);
+
+    const results = await searchMemory("uppercase", testMemoryDir);
+    expect(results).toHaveLength(1);
+  });
+
+  test("returns empty when learnings file is missing", async () => {
+    // No learnings file, no sessions directory
+    await rm(testMemoryDir, { recursive: true, force: true });
+    const results = await searchMemory("anything", testMemoryDir);
+    expect(results).toEqual([]);
   });
 });

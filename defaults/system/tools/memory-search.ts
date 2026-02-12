@@ -1,8 +1,8 @@
 /**
  * Memory Search Tool for MCP
  *
- * Exposes session memory search as an MCP tool so coding assistants
- * can look up past decisions, context, and work history.
+ * Exposes memory search as an MCP tool so coding assistants
+ * can look up past decisions, learnings, and work history.
  */
 
 import { join } from "node:path";
@@ -11,8 +11,8 @@ import { resolveShakaHome, searchMemory } from "shaka";
 export default {
   name: "memory-search",
   description:
-    "Search past session summaries for context, decisions, and work history. " +
-    "Returns matching sessions with snippets.",
+    "Search past session summaries and learnings for context, decisions, and work history. " +
+    "Returns matching sessions and learnings with snippets.",
 
   inputSchema: {
     type: "object" as const,
@@ -38,10 +38,11 @@ export default {
     }
 
     const formatted = results.map((r) => {
+      const typeLabel = r.type === "learning" ? "[learning]" : "[session]";
       const tags = r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
-      return `### ${r.title}\n*${r.date}*${tags}\n\n${r.snippet}`;
+      return `### ${typeLabel} ${r.title}\n*${r.date}*${tags}\n\n${r.snippet}`;
     });
 
-    return `Found ${results.length} matching session${results.length > 1 ? "s" : ""}:\n\n${formatted.join("\n\n---\n\n")}`;
+    return `Found ${results.length} matching result${results.length > 1 ? "s" : ""}:\n\n${formatted.join("\n\n---\n\n")}`;
   },
 };
