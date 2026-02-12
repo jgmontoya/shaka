@@ -4,7 +4,7 @@ A personal AI assistant framework. Provider-agnostic. Clear architecture. Your d
 
 ## Status
 
-**v0.2.2** — Core infrastructure plus session memory. Shaka sets up your environment, injects context into AI sessions, validates tool usage for security, summarizes sessions for cross-session memory, and works with both Claude Code and opencode.
+**v0.3.0** — Core infrastructure, session memory, and continuous learning. Shaka sets up your environment, injects context into AI sessions, validates tool usage for security, summarizes sessions, learns from your corrections and preferences, and works with both Claude Code and opencode.
 
 | Area                       | Status  | Notes                                                                        |
 | -------------------------- | ------- | ---------------------------------------------------------------------------- |
@@ -19,9 +19,9 @@ A personal AI assistant framework. Provider-agnostic. Clear architecture. Your d
 | Skills (markdown)          | Done    | 5 skills: BeCreative, Council, RedTeam, Science, FirstPrinciples             |
 | Agents (markdown)          | Done    | 12 agent definitions                                                         |
 | Doctor command             | Done    | Health checks for installation                                               |
-| Tests                      | Done    | 390+ unit tests, Docker-based E2E                                            |
+| Tests                      | Done    | 550+ unit tests, Docker-based E2E                                            |
 | Tools                      | Done    | `inference.ts` + `memory-search.ts`; MCP server exposes to Claude Code       |
-| Memory                     | Partial | Session summarization, transcript parsing, search via CLI + MCP (MCP server) |
+| Memory                     | Done    | Session summaries, continuous learning, search via CLI + MCP                 |
 | TUI                        | Planned | No interactive terminal UI yet                                               |
 | Session management         | Planned | No persistent sessions yet                                                   |
 | Slash commands             | Planned | No `/commit`, `/diff` style commands yet                                     |

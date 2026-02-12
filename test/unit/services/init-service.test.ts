@@ -102,7 +102,11 @@ describe("InitService", () => {
       await service.createDirectories();
 
       // Create symlink to wrong target (use platform-appropriate path)
-      await symlink(join(tmpdir(), "shaka-test-wrong-target"), join(testHome, "system"), "junction");
+      await symlink(
+        join(tmpdir(), "shaka-test-wrong-target"),
+        join(testHome, "system"),
+        "junction",
+      );
 
       const result = await service.linkSystem();
 
@@ -248,7 +252,7 @@ describe("InitService", () => {
       }
 
       const content = await Bun.file(join(testHome, "config.json")).json();
-      expect(content.version).toBe("0.2.2");
+      expect(content.version).toBe("0.3.0");
     });
 
     test("creates config.json with personalized names", async () => {
@@ -360,7 +364,7 @@ describe("InitService", () => {
       if (result.ok) {
         expect(result.value.providers.claude.detected).toBe(true);
         expect(result.value.providers.claude.installed).toBe(true);
-        expect(result.value.currentVersion).toBe("0.2.2");
+        expect(result.value.currentVersion).toBe("0.3.0");
         expect(result.value.directories.length).toBeGreaterThan(0);
         expect(result.value.files.length).toBeGreaterThan(0);
       }
@@ -384,7 +388,7 @@ describe("InitService", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.currentVersion).toBe("0.2.2");
+        expect(result.value.currentVersion).toBe("0.3.0");
       }
     });
 
@@ -453,7 +457,7 @@ describe("InitService", () => {
 
       // User customizes a file
       await Bun.write(join(testHome, "user", "user.md"), "# Custom content");
-      await Bun.write(join(testHome, "config.json"), '{"version":"0.2.2","custom":true}');
+      await Bun.write(join(testHome, "config.json"), '{"version":"0.3.0","custom":true}');
 
       // Re-init
       const result = await service.init();

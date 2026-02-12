@@ -51,7 +51,7 @@ describe("unmodified template detection", () => {
     await Bun.write(
       `${fakeShakaHome}/config.json`,
       JSON.stringify({
-        version: "0.2.2",
+        version: "0.3.0",
         reasoning: { enabled: true },
         providers: { claude: { enabled: false }, opencode: { enabled: false } },
         assistant: { name: "TestBot" },
