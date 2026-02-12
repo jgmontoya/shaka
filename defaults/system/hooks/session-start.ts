@@ -11,9 +11,12 @@ import {
   getPrincipalName,
   isSubagent,
   listSummaries,
+  loadLearnings,
   loadShakaFile,
   loadSummary,
+  renderEntry,
   resolveShakaHome,
+  selectLearnings,
   selectRecentSummaries,
 } from "shaka";
 
@@ -23,6 +26,9 @@ export const HOOK_VERSION = "0.5.0";
 
 /** Max total characters for the memory section (~5KB) */
 const MAX_MEMORY_CHARS = 5000;
+
+/** Max characters for learnings context (~3KB) */
+const MAX_LEARNINGS_CHARS = 3000;
 
 /**
  * Resolve the defaults/user/ directory from the system/ symlink.
@@ -101,6 +107,28 @@ async function loadUserFiles(shakaHome: string): Promise<string[]> {
 }
 
 /**
+ * Load learned knowledge for context.
+ * Returns a formatted markdown section, or empty string if none available.
+ */
+async function loadLearnedKnowledge(shakaHome: string): Promise<string> {
+  const memoryDir = `${shakaHome}/memory`;
+  const cwd = process.cwd();
+
+  try {
+    const entries = await loadLearnings(memoryDir);
+    if (entries.length === 0) return "";
+
+    const selected = selectLearnings(entries, cwd, MAX_LEARNINGS_CHARS);
+    if (selected.length === 0) return "";
+
+    const rendered = selected.map(renderEntry).join("\n\n---\n\n");
+    return `## Learnings\n\n${rendered}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Load recent session summaries for context.
  * Returns a formatted markdown section, or empty string if none available.
  */
@@ -162,6 +190,13 @@ async function main() {
   console.error("📂 Loading user files...");
   const userFiles = await loadUserFiles(shakaHome);
   contextParts.push(...userFiles);
+
+  // Load learnings (between user files and sessions — stable knowledge first)
+  const learningsSections = await loadLearnedKnowledge(shakaHome);
+  if (learningsSections) {
+    contextParts.push(learningsSections);
+    console.error("📝 Loaded learnings");
+  }
 
   // Load recent session summaries
   const memorySections = await loadRecentSessions(shakaHome);
