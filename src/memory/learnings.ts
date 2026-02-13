@@ -35,7 +35,7 @@ export interface LearningEntry {
 
 const RECENCY_WINDOW_DAYS = 90;
 const REINFORCEMENT_SATURATE = 4;
-const DEFAULT_BUDGET = 3000;
+const DEFAULT_BUDGET = 6000;
 
 // --- Parsing ---
 

@@ -28,7 +28,7 @@ export const HOOK_VERSION = "0.5.0";
 const MAX_MEMORY_CHARS = 5000;
 
 /** Max characters for learnings context (~3KB) */
-const MAX_LEARNINGS_CHARS = 3000;
+const MAX_LEARNINGS_CHARS = 6000;
 
 /**
  * Resolve the defaults/user/ directory from the system/ symlink.
