@@ -417,7 +417,6 @@ ${
         const info = event.properties?.info as { id?: string } | undefined;
         sessionId = info?.id ?? sessionId;
         if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
-        console.error(\`[shaka] Session created: \${sessionId}\`);
       }
 
       if (event.type === "session.status") {
@@ -436,7 +435,6 @@ ${
         // Start debounce timer — if user stays idle, run session-end hooks
         idleTimer = setTimeout(async () => {
           idleTimer = null;
-          console.error("[shaka] Idle timeout — running session-end hooks");
 
           const sessionEndHookPaths = ${JSON.stringify(sessionEndHooks.map((h) => h.path))};
           for (const hookPath of sessionEndHookPaths) {
