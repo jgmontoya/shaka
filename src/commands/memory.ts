@@ -111,7 +111,7 @@ export function createMemoryCommand(): Command {
         XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
         HOME: process.env.HOME,
       });
-      const memoryDir = `${shakaHome}/memory`;
+      const memoryDir = join(shakaHome, "memory");
 
       await runConsolidation(memoryDir);
     });
@@ -136,7 +136,7 @@ async function runConsolidation(memoryDir: string): Promise<void> {
   );
 
   // Backup before any changes
-  await Bun.write(`${memoryDir}/learnings.backup.md`, content);
+  await Bun.write(join(memoryDir, "learnings.backup.md"), content);
   console.log("Backup written to memory/learnings.backup.md");
 
   // Pass 1: Duplicate detection

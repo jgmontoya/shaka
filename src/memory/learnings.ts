@@ -8,6 +8,7 @@
  */
 
 import { mkdir, rename } from "node:fs/promises";
+import { isAbsolute, join, relative } from "node:path";
 import { hashSessionId } from "./utils";
 
 // --- Types ---
@@ -144,7 +145,7 @@ const LEARNINGS_FILE = "learnings.md";
 
 /** Read and parse learnings from disk. Returns empty array if file missing. */
 export async function loadLearnings(memoryDir: string): Promise<LearningEntry[]> {
-  const filePath = `${memoryDir}/${LEARNINGS_FILE}`;
+  const filePath = join(memoryDir, LEARNINGS_FILE);
   const file = Bun.file(filePath);
 
   if (!(await file.exists())) return [];
@@ -164,8 +165,8 @@ export async function loadLearnings(memoryDir: string): Promise<LearningEntry[]>
 export async function writeLearnings(memoryDir: string, entries: LearningEntry[]): Promise<void> {
   await mkdir(memoryDir, { recursive: true });
 
-  const filePath = `${memoryDir}/${LEARNINGS_FILE}`;
-  const tmpPath = `${memoryDir}/.${LEARNINGS_FILE}.tmp.${process.pid}`;
+  const filePath = join(memoryDir, LEARNINGS_FILE);
+  const tmpPath = join(memoryDir, `.${LEARNINGS_FILE}.tmp.${process.pid}`);
   const content = renderLearnings(entries);
 
   await Bun.write(tmpPath, content);
@@ -193,7 +194,11 @@ function reinforcementScore(entry: LearningEntry): number {
 
 function cwdScore(entry: LearningEntry, cwd: string): number {
   if (entry.cwds.includes("*")) return 1.0;
-  return entry.cwds.some((c) => cwd === c || cwd.startsWith(`${c}/`)) ? 1.0 : 0.0;
+  const isWithin = (parent: string, child: string) => {
+    const rel = relative(parent, child);
+    return !rel.startsWith("..") && !isAbsolute(rel);
+  };
+  return entry.cwds.some((c) => isWithin(c, cwd)) ? 1.0 : 0.0;
 }
 
 /** Score a single entry for context loading. Range: 0.0 to 3.0. */

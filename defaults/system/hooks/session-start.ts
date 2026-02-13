@@ -111,7 +111,7 @@ async function loadUserFiles(shakaHome: string): Promise<string[]> {
  * Returns a formatted markdown section, or empty string if none available.
  */
 async function loadLearnedKnowledge(shakaHome: string): Promise<string> {
-  const memoryDir = `${shakaHome}/memory`;
+  const memoryDir = join(shakaHome, "memory");
   const cwd = process.cwd();
 
   try {
