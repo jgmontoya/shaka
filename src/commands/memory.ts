@@ -171,7 +171,6 @@ async function deduplicateEntries(entries: LearningEntry[]): Promise<LearningEnt
   }
 
   const merged = applyDuplicateMerges(entries, groups);
-  const dropCount = entries.length - merged.length;
   console.log(`Merged ${groups.length} duplicate group(s). Reduced to ${merged.length} entries.`);
   return merged;
 }
@@ -230,6 +229,8 @@ async function promptForPromotions(entries: LearningEntry[]): Promise<LearningEn
 }
 
 function promptUser(question: string): Promise<string> {
+  if (!process.stdin.isTTY) return Promise.resolve("y");
+
   return new Promise((resolve) => {
     process.stdout.write(question);
     let data = "";

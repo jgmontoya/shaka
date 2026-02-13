@@ -8,7 +8,7 @@
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { type LearningEntry, loadLearnings, renderEntry } from "./learnings";
+import { loadLearnings, renderEntry } from "./learnings";
 import { parseSummaryOutput } from "./summarize";
 
 const MAX_RESULTS = 10;

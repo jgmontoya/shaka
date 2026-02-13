@@ -7,7 +7,7 @@
  * Stored in a single markdown file with HTML comment metadata per entry.
  */
 
-import { mkdir } from "node:fs/promises";
+import { mkdir, rename } from "node:fs/promises";
 import { hashSessionId } from "./utils";
 
 // --- Types ---
@@ -169,8 +169,6 @@ export async function writeLearnings(memoryDir: string, entries: LearningEntry[]
   const content = renderLearnings(entries);
 
   await Bun.write(tmpPath, content);
-
-  const { rename } = await import("node:fs/promises");
   await rename(tmpPath, filePath);
 }
 
@@ -195,7 +193,7 @@ function reinforcementScore(entry: LearningEntry): number {
 
 function cwdScore(entry: LearningEntry, cwd: string): number {
   if (entry.cwds.includes("*")) return 1.0;
-  return entry.cwds.some((c) => cwd.startsWith(c)) ? 1.0 : 0.0;
+  return entry.cwds.some((c) => cwd === c || cwd.startsWith(`${c}/`)) ? 1.0 : 0.0;
 }
 
 /** Score a single entry for context loading. Range: 0.0 to 3.0. */
