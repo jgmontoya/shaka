@@ -117,7 +117,21 @@ async function saveFailedOutput(
   console.error(`Saved raw output to ${filePath}`);
 }
 
+function elapsedMs(start: number): number {
+  return Math.round(performance.now() - start);
+}
+
 async function main() {
+  const t0 = performance.now();
+  const timings: string[] = [];
+
+  function mark(label: string, startMs: number, detail = "") {
+    const ms = elapsedMs(startMs);
+    const line = `  [${ms}ms] ${label}${detail ? ` (${detail})` : ""}`;
+    console.error(line);
+    timings.push(line);
+  }
+
   // Skip for subagent sessions
   if (isSubagent()) {
     process.exit(0);
@@ -145,11 +159,13 @@ async function main() {
   console.error(`Session end: ${provider} session ${sessionId}`);
 
   // Load and parse transcript
+  let t = performance.now();
   const messages = await loadTranscript(input);
   if (messages.length === 0) {
     console.error("Empty transcript, skipping summarization");
     process.exit(0);
   }
+  mark("Loaded transcript", t, `${messages.length} messages`);
 
   // Truncate if needed
   const truncated = truncateTranscript(messages, MAX_TRANSCRIPT_CHARS);
@@ -166,19 +182,24 @@ async function main() {
   const memoryDir = join(shakaHome, "memory");
 
   // Load existing learnings for title matching in extraction prompt
+  t = performance.now();
   const existingLearnings = await loadLearnings(memoryDir);
   const existingTitles = existingLearnings.map((e) => e.title);
+  mark("Loaded existing learnings", t, `${existingTitles.length} titles`);
 
   // Build prompt (single call produces both summary + learnings)
   const prompt = buildSummarizationPrompt(truncated, metadata, existingTitles);
 
+  // Call inference
   const model = await getSummarizationModel(provider);
-  console.error(`Calling inference for summarization${model ? ` (model: ${model})` : ""}...`);
+  console.error(`  Calling inference${model ? ` (model: ${model})` : ""}...`);
+  t = performance.now();
   const result = await inference({
     userPrompt: prompt,
     model,
     timeout: 60000,
   });
+  mark("Inference complete", t, result.success ? "ok" : "failed");
 
   if (!result.success || !result.text) {
     console.error(`Inference failed: ${result.error ?? "no response"}`);
@@ -197,11 +218,20 @@ async function main() {
   const summary = { ...parsed, metadata };
 
   // Write summary to disk
+  t = performance.now();
   const filePath = await writeSummary(memoryDir, summary);
-  console.error(`Summary written to ${filePath}`);
+  mark("Summary written", t);
 
   // Extract and write learnings (fail-open: summary already written)
+  t = performance.now();
   await extractAndWriteLearnings(result.text, metadata, memoryDir);
+  mark("Learnings extraction", t);
+
+  mark("Session-end hook total", t0, provider);
+
+  // Write timing to file for diagnostics (non-blocking, fail-silent)
+  const timingPath = join(memoryDir, ".timing-session-end.log");
+  Bun.write(timingPath, `${new Date().toISOString()}\n${timings.join("\n")}\n`).catch(() => {});
 }
 
 /**
