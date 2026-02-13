@@ -192,18 +192,17 @@ function reinforcementScore(entry: LearningEntry): number {
   return Math.min((entry.exposures.length - 1) / REINFORCEMENT_SATURATE, 1.0);
 }
 
-function cwdScore(entry: LearningEntry, cwd: string): number {
-  if (entry.cwds.includes("*")) return 1.0;
-  const isWithin = (parent: string, child: string) => {
-    const rel = relative(parent, child);
+function matchesCwd(entry: LearningEntry, cwd: string): boolean {
+  if (entry.cwds.includes("*")) return true;
+  return entry.cwds.some((parent) => {
+    const rel = relative(parent, cwd);
     return !rel.startsWith("..") && !isAbsolute(rel);
-  };
-  return entry.cwds.some((c) => isWithin(c, cwd)) ? 1.0 : 0.0;
+  });
 }
 
-/** Score a single entry for context loading. Range: 0.0 to 3.0. */
-export function scoreEntry(entry: LearningEntry, cwd: string, now = new Date()): number {
-  return recencyScore(entry, now) + reinforcementScore(entry) + cwdScore(entry, cwd);
+/** Score a single entry for context loading. Range: 0.0 to 2.0. */
+export function scoreEntry(entry: LearningEntry, now = new Date()): number {
+  return recencyScore(entry, now) + reinforcementScore(entry);
 }
 
 /** Select entries for context loading within a character budget. */
@@ -212,8 +211,12 @@ export function selectLearnings(
   cwd: string,
   budget = DEFAULT_BUDGET,
 ): LearningEntry[] {
-  const scored = entries
-    .map((entry) => ({ entry, score: scoreEntry(entry, cwd) }))
+  // Pre-filter: only global entries and CWD-matching entries are candidates.
+  // Scoped entries for unrelated projects are excluded before scoring
+  const relevant = entries.filter((e) => matchesCwd(e, cwd));
+
+  const scored = relevant
+    .map((entry) => ({ entry, score: scoreEntry(entry) }))
     .sort((a, b) => b.score - a.score);
 
   const selected: LearningEntry[] = [];

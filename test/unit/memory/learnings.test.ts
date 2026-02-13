@@ -288,73 +288,42 @@ describe("renderLearnings", () => {
 describe("scoreEntry", () => {
   const now = new Date("2026-02-12");
 
-  test("CWD prefix match gets cwdBonus 1.0", () => {
-    const entry = makeEntry({ cwds: ["/projects/myapp"] });
-    const score = scoreEntry(entry, "/projects/myapp/src", now);
-    expect(score).toBeGreaterThanOrEqual(1.0); // at least the CWD bonus
-  });
-
-  test("global cwd gets cwdBonus 1.0", () => {
-    const entry = makeEntry({ cwds: ["*"] });
-    const score = scoreEntry(entry, "/anywhere", now);
-    expect(score).toBeGreaterThanOrEqual(1.0);
-  });
-
-  test("non-matching CWD gets cwdBonus 0.0", () => {
-    const entry = makeEntry({
-      cwds: ["/projects/other"],
-      exposures: [{ date: "2026-02-12", sessionHash: "aaaa0000" }],
-    });
-    const matchScore = scoreEntry({ ...entry, cwds: ["/projects/myapp"] }, "/projects/myapp", now);
-    const noMatchScore = scoreEntry(entry, "/projects/myapp", now);
-    expect(matchScore - noMatchScore).toBeCloseTo(1.0, 1);
-  });
-
   test("recency: 1 day ago is close to 1.0", () => {
     const entry = makeEntry({
-      cwds: ["/x"],
       exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
     });
-    const score = scoreEntry(entry, "/other", now);
-    // recency ~0.99, reinforcement 0.0, cwdBonus 0.0
+    const score = scoreEntry(entry, now);
     expect(score).toBeGreaterThan(0.95);
     expect(score).toBeLessThan(1.05);
   });
 
   test("recency: 90+ days ago is 0.0", () => {
     const entry = makeEntry({
-      cwds: ["/x"],
       exposures: [{ date: "2025-11-01", sessionHash: "aaaa0000" }],
     });
-    const score = scoreEntry(entry, "/other", now);
-    expect(score).toBe(0.0);
+    expect(scoreEntry(entry, now)).toBe(0.0);
   });
 
   test("reinforcement: 1 exposure = 0.0", () => {
     const entry = makeEntry({
-      cwds: ["/x"],
       exposures: [{ date: "2025-11-01", sessionHash: "aaaa0000" }],
     });
-    // Old entry, no CWD match — only reinforcement matters, and it's 0
-    expect(scoreEntry(entry, "/other", now)).toBe(0.0);
+    expect(scoreEntry(entry, now)).toBe(0.0);
   });
 
   test("reinforcement: 3 exposures = 0.5", () => {
     const entry = makeEntry({
-      cwds: ["/x"],
       exposures: [
         { date: "2025-11-01", sessionHash: "aaaa0000" },
         { date: "2025-11-01", sessionHash: "bbbb0000" },
         { date: "2025-11-01", sessionHash: "cccc0000" },
       ],
     });
-    // Old entry, no CWD match — score is just reinforcement
-    expect(scoreEntry(entry, "/other", now)).toBeCloseTo(0.5, 1);
+    expect(scoreEntry(entry, now)).toBeCloseTo(0.5, 1);
   });
 
   test("reinforcement: 5+ exposures = 1.0", () => {
     const entry = makeEntry({
-      cwds: ["/x"],
       exposures: [
         { date: "2025-11-01", sessionHash: "a0000000" },
         { date: "2025-11-01", sessionHash: "b0000000" },
@@ -363,7 +332,7 @@ describe("scoreEntry", () => {
         { date: "2025-11-01", sessionHash: "e0000000" },
       ],
     });
-    expect(scoreEntry(entry, "/other", now)).toBeCloseTo(1.0, 1);
+    expect(scoreEntry(entry, now)).toBeCloseTo(1.0, 1);
   });
 });
 
@@ -403,15 +372,49 @@ describe("selectLearnings", () => {
       cwds: ["/projects/myapp"],
       exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
     });
-    const noMatch = makeEntry({
-      title: "No match",
-      cwds: ["/other"],
+    const globalEntry = makeEntry({
+      title: "Global entry",
+      cwds: ["*"],
       exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
     });
-    // Give enough budget for only one
+    // Give enough budget for only one — CWD match has same base score as global
     const entrySize = renderEntry(cwdMatch).length;
-    const selected = selectLearnings([noMatch, cwdMatch], "/projects/myapp", entrySize + 10);
-    expect(selected[0]?.title).toBe("CWD match");
+    const selected = selectLearnings([globalEntry, cwdMatch], "/projects/myapp", entrySize + 10);
+    expect(selected).toHaveLength(1);
+  });
+
+  test("excludes non-matching CWD entries before scoring", () => {
+    const relevant = makeEntry({
+      title: "Relevant",
+      cwds: ["/projects/myapp"],
+      exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+    });
+    const irrelevant = makeEntry({
+      title: "Irrelevant",
+      cwds: ["/projects/other"],
+      // Heavily reinforced — would outscore relevant entry without pre-filtering
+      exposures: [
+        { date: "2026-02-11", sessionHash: "b0000000" },
+        { date: "2026-02-11", sessionHash: "c0000000" },
+        { date: "2026-02-11", sessionHash: "d0000000" },
+        { date: "2026-02-11", sessionHash: "e0000000" },
+        { date: "2026-02-11", sessionHash: "f0000000" },
+      ],
+    });
+    const selected = selectLearnings([irrelevant, relevant], "/projects/myapp", 10000);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.title).toBe("Relevant");
+  });
+
+  test("global entries pass through pre-filter", () => {
+    const global = makeEntry({
+      title: "Global",
+      cwds: ["*"],
+      exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+    });
+    const selected = selectLearnings([global], "/any/path", 10000);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.title).toBe("Global");
   });
 });
 

@@ -11,7 +11,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 - **Automatic continuous learning** — The assistant learns from sessions and improves over time
   - Learnings extracted from transcripts at session end (single inference call, no extra cost)
   - Learnings loaded into context at session start within a 6000-char budget
-  - Scoring by CWD relevance, recency (90-day decay), and reinforcement (exposure count)
+  - Non-matching CWD entries excluded before scoring; only global and CWD-matching entries are candidates
+  - Scoring by recency (90-day decay) and reinforcement (exposure count) within the relevant set
   - Title-match reinforcement: repeated learnings gain weight automatically
 - **`shaka memory consolidate` command** — Merge duplicates and resolve contradictions
   - Two-pass LLM classification: duplicate detection then contradiction detection
