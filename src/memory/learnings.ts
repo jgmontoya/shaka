@@ -314,14 +314,17 @@ export function buildExtractionPromptSection(existingTitles: string[]): string {
 Do NOT extract:
 - Obvious programming knowledge anyone would know
 - One-time debugging steps that won't recur
+- One-time decisions that won't recur
 - Information already in the project's config files or README
 - Speculative observations without clear evidence in the transcript
+- Very specific observations that won't be useful for future sessions
 
 DO extract:
 - User corrections ("no, do X instead of Y")
 - Stated preferences ("I always want X")
 - Project conventions discovered by reading code
 - Non-obvious environment facts ("this project uses X for Y")
+- User clarifications that are likely to be useful for future sessions
 
 If a learning matches an existing entry below, use its EXACT title
 character-for-character (this enables automatic reinforcement tracking):
@@ -329,7 +332,8 @@ character-for-character (this enables automatic reinforcement tracking):
 ${titlesBlock}
 
 If nothing in the transcript is worth persisting, return an empty Learnings section.
-Most sessions will have 0-1 learnings. More than 3 from one session is suspicious.
+We expect most sessions to have 0 learnings and some to have 1 learning.
+More than 2 learnings from one session is suspicious.
 
 Format learnings as:
 
