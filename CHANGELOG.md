@@ -31,6 +31,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Changed
 
+- **`session-end` hook is fire-and-forget** — Dispatch reads stdin and spawns a detached background worker, returning control to the CLI in milliseconds instead of blocking during inference
 - **Summarization prompt extended** — Now extracts learnings alongside session summaries in a single inference call
 - **Session summaries exclude learnings** — `## Learnings` section stripped from session summary body (stored separately in `learnings.md`)
 - **`hashSessionId` extracted** — Shared utility in `src/memory/utils.ts` (was private in storage.ts)

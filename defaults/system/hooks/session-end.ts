@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 /**
- * SessionEnd hook — transcript summarization
+ * SessionEnd hook — transcript summarization (fire-and-forget)
  *
- * Fires when a coding session ends. Reads the transcript, calls inference
- * to summarize it, and writes a summary file to memory/sessions/.
+ * Architecture:
+ *   Dispatch (default): reads stdin → writes temp file → spawns detached worker → exits 0
+ *   Worker (--worker <tmpfile>): reads temp file → inference → writes summary + learnings
+ *
+ * The dispatch process exits in milliseconds so the CLI is never blocked.
+ * The worker runs detached and writes results to disk asynchronously.
  *
  * Provider detection:
  * - Claude Code sends { transcript_path, session_id, reason, cwd }
@@ -12,6 +16,7 @@
  * Fail-open: any error logs to stderr and exits 0.
  */
 
+import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type NormalizedMessage,
@@ -36,10 +41,13 @@ import {
 
 /** Hook trigger events — Shaka canonical names */
 export const TRIGGER = ["session.end"] as const;
-export const HOOK_VERSION = "0.1.0";
+export const HOOK_VERSION = "0.2.0";
 
 /** Max transcript chars to send to inference (avoid token limits) */
 const MAX_TRANSCRIPT_CHARS = 100_000;
+
+/** CLI flag that switches to worker mode */
+const WORKER_FLAG = "--worker";
 
 interface SessionEndInput {
   session_id?: string;
@@ -107,7 +115,6 @@ async function saveFailedOutput(
   rawOutput: string,
 ): Promise<void> {
   const failedDir = join(memoryDir, "sessions", "failed");
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(failedDir, { recursive: true });
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -121,21 +128,14 @@ function elapsedMs(start: number): number {
   return Math.round(performance.now() - start);
 }
 
-async function main() {
-  const t0 = performance.now();
-  const timings: string[] = [];
+// ─── Dispatch (parent) ──────────────────────────────────────────────────────
 
-  function mark(label: string, startMs: number, detail = "") {
-    const ms = elapsedMs(startMs);
-    const line = `  [${ms}ms] ${label}${detail ? ` (${detail})` : ""}`;
-    console.error(line);
-    timings.push(line);
-  }
-
-  // Skip for subagent sessions
-  if (isSubagent()) {
-    process.exit(0);
-  }
+/**
+ * Dispatch mode: read stdin, write temp file, spawn background worker, exit 0.
+ * This returns control to the CLI in milliseconds.
+ */
+async function dispatch() {
+  if (isSubagent()) process.exit(0);
 
   const rawInput = await readStdin();
   if (!rawInput) {
@@ -152,18 +152,68 @@ async function main() {
   }
 
   const sessionId = input.session_id ?? "unknown";
+  const shakaHome = resolveShakaHome();
+  const memoryDir = join(shakaHome, "memory");
+  await mkdir(memoryDir, { recursive: true });
+
+  // Write stdin payload to temp file so the worker can read it
+  const tmpPath = join(memoryDir, `.session-end-input-${sessionId.slice(0, 8)}.json`);
+  await Bun.write(tmpPath, rawInput);
+
+  // Spawn detached worker — stderr goes to log file for diagnostics
+  const logPath = join(memoryDir, ".session-end-worker.log");
+  const proc = Bun.spawn(["bun", import.meta.path, WORKER_FLAG, tmpPath], {
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: Bun.file(logPath),
+  });
+  proc.unref();
+
+  console.error(`[session-end] Dispatched worker for session ${sessionId}`);
+}
+
+// ─── Worker ─────────────────────────────────────────────────────────────────
+
+/**
+ * Worker mode: read temp file, process transcript, write summary + learnings.
+ * Runs as a detached background process — CLI is not waiting for this.
+ */
+async function worker(tmpPath: string) {
+  const t0 = performance.now();
+  const timings: string[] = [];
+
+  function mark(label: string, startMs: number, detail = "") {
+    const ms = elapsedMs(startMs);
+    const line = `  [${ms}ms] ${label}${detail ? ` (${detail})` : ""}`;
+    console.error(line);
+    timings.push(line);
+  }
+
+  // Read input from temp file, then delete it
+  const rawInput = await Bun.file(tmpPath).text();
+  await unlink(tmpPath).catch(() => {});
+
+  let input: SessionEndInput;
+  try {
+    input = JSON.parse(rawInput);
+  } catch {
+    console.error("Failed to parse temp file JSON");
+    return;
+  }
+
+  const sessionId = input.session_id ?? "unknown";
   const cwd = input.cwd ?? process.cwd();
   const isClaudeCode = "transcript_path" in input && typeof input.transcript_path === "string";
   const provider = isClaudeCode ? "claude" : "opencode";
 
-  console.error(`Session end: ${provider} session ${sessionId}`);
+  console.error(`Worker started: ${provider} session ${sessionId}`);
 
   // Load and parse transcript
   let t = performance.now();
   const messages = await loadTranscript(input);
   if (messages.length === 0) {
     console.error("Empty transcript, skipping summarization");
-    process.exit(0);
+    return;
   }
   mark("Loaded transcript", t, `${messages.length} messages`);
 
@@ -203,7 +253,7 @@ async function main() {
 
   if (!result.success || !result.text) {
     console.error(`Inference failed: ${result.error ?? "no response"}`);
-    process.exit(0);
+    return;
   }
 
   // Parse the summary output (## Learnings section is stripped from body)
@@ -211,7 +261,7 @@ async function main() {
   if (!parsed) {
     console.error("Failed to parse inference output as summary");
     await saveFailedOutput(memoryDir, sessionId, result.text);
-    process.exit(0);
+    return;
   }
 
   // Use original metadata (not LLM's echo) to ensure deterministic filenames
@@ -219,7 +269,7 @@ async function main() {
 
   // Write summary to disk
   t = performance.now();
-  const filePath = await writeSummary(memoryDir, summary);
+  await writeSummary(memoryDir, summary);
   mark("Summary written", t);
 
   // Extract and write learnings (fail-open: summary already written)
@@ -227,7 +277,7 @@ async function main() {
   await extractAndWriteLearnings(result.text, metadata, memoryDir);
   mark("Learnings extraction", t);
 
-  mark("Session-end hook total", t0, provider);
+  mark("Session-end worker total", t0, provider);
 
   // Write timing to file for diagnostics (non-blocking, fail-silent)
   const timingPath = join(memoryDir, ".timing-session-end.log");
@@ -271,8 +321,24 @@ async function extractAndWriteLearnings(
 }
 
 if (import.meta.main) {
-  main().catch((err) => {
-    console.error(`Session-end hook error: ${err instanceof Error ? err.message : String(err)}`);
-    process.exit(0);
-  });
+  const workerIdx = process.argv.indexOf(WORKER_FLAG);
+
+  if (workerIdx !== -1) {
+    // Worker mode: process the session in background
+    const tmpPath = process.argv[workerIdx + 1];
+    if (!tmpPath) {
+      console.error("Worker mode requires a temp file path");
+      process.exit(0);
+    }
+    worker(tmpPath).catch((err) => {
+      console.error(`Session-end worker error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(0);
+    });
+  } else {
+    // Dispatch mode: read stdin, spawn worker, exit immediately
+    dispatch().catch((err) => {
+      console.error(`Session-end hook error: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(0);
+    });
+  }
 }

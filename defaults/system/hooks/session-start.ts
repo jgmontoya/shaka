@@ -27,7 +27,7 @@ export const HOOK_VERSION = "0.5.0";
 /** Max total characters for the memory section (~5KB) */
 const MAX_MEMORY_CHARS = 5000;
 
-/** Max characters for learnings context (~3KB) */
+/** Max characters for learnings context (~6KB) */
 const MAX_LEARNINGS_CHARS = 6000;
 
 /**

@@ -219,11 +219,21 @@ else
   exit 1
 fi
 
-if grep -qi "bun\|npm" "$LEARNINGS_FILE"; then
+# Content may lag behind file creation (worker writes async) — retry
+FOUND_KEYWORDS=false
+for i in $(seq 1 15); do
+  if grep -qi "bun\|npm" "$LEARNINGS_FILE" 2>/dev/null; then
+    FOUND_KEYWORDS=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$FOUND_KEYWORDS" = true ]; then
   pass "learnings.md contains extracted learning"
 else
   warn "learnings.md exists but content may not match expected keywords"
-  cat "$LEARNINGS_FILE" | head -20
+  head -20 "$LEARNINGS_FILE"
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────
