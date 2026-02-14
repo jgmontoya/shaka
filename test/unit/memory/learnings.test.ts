@@ -225,7 +225,7 @@ describe("renderEntry", () => {
 
   test("renders multiple CWDs as comma-separated", () => {
     const entry = makeEntry({ cwds: ["/a", "/b", "/c"] });
-    expect(renderEntry(entry)).toContain("cwd: /a,/b,/c");
+    expect(renderEntry(entry)).toContain("cwd: /a, /b, /c");
   });
 
   test("renders multiple exposures as comma-separated", () => {

@@ -118,7 +118,7 @@ export function parseLearnings(content: string): LearningEntry[] {
 
 /** Render a single entry to markdown format. */
 export function renderEntry(entry: LearningEntry): string {
-  const cwdStr = entry.cwds.join(",");
+  const cwdStr = entry.cwds.join(", ");
   const exposuresStr = entry.exposures.map((e) => `${e.date}@${e.sessionHash}`).join(",");
   const nonglobalStr = entry.nonglobal ? " | nonglobal" : "";
 

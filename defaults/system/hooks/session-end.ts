@@ -157,7 +157,7 @@ async function dispatch() {
   await mkdir(memoryDir, { recursive: true });
 
   // Write stdin payload to temp file so the worker can read it
-  const tmpPath = join(memoryDir, `.session-end-input-${sessionId.slice(0, 8)}.json`);
+  const tmpPath = join(memoryDir, `.session-end-input-${sessionId.slice(0, 8)}-${process.pid}.json`);
   await Bun.write(tmpPath, rawInput);
 
   // Spawn detached worker — stderr goes to log file for diagnostics
@@ -256,11 +256,17 @@ async function worker(tmpPath: string) {
     return;
   }
 
+  // Strip outer code fences if the LLM wrapped its entire response in ```markdown...```
+  const rawOutput = result.text
+    .trim()
+    .replace(/^```\w*\n/, "")
+    .replace(/\n```$/, "");
+
   // Parse the summary output (## Learnings section is stripped from body)
-  const parsed = parseSummaryOutput(result.text);
+  const parsed = parseSummaryOutput(rawOutput);
   if (!parsed) {
     console.error("Failed to parse inference output as summary");
-    await saveFailedOutput(memoryDir, sessionId, result.text);
+    await saveFailedOutput(memoryDir, sessionId, rawOutput);
     return;
   }
 
@@ -274,7 +280,7 @@ async function worker(tmpPath: string) {
 
   // Extract and write learnings (fail-open: summary already written)
   t = performance.now();
-  await extractAndWriteLearnings(result.text, metadata, memoryDir);
+  await extractAndWriteLearnings(rawOutput, metadata, memoryDir);
   mark("Learnings extraction", t);
 
   mark("Session-end worker total", t0, provider);
