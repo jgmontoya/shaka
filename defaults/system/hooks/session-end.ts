@@ -157,7 +157,10 @@ async function dispatch() {
   await mkdir(memoryDir, { recursive: true });
 
   // Write stdin payload to temp file so the worker can read it
-  const tmpPath = join(memoryDir, `.session-end-input-${sessionId.slice(0, 8)}-${process.pid}.json`);
+  const tmpPath = join(
+    memoryDir,
+    `.session-end-input-${sessionId.slice(0, 8)}-${process.pid}.json`,
+  );
   await Bun.write(tmpPath, rawInput);
 
   // Spawn detached worker — stderr goes to log file for diagnostics
@@ -337,7 +340,9 @@ if (import.meta.main) {
       process.exit(0);
     }
     worker(tmpPath).catch((err) => {
-      console.error(`Session-end worker error: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `Session-end worker error: ${err instanceof Error ? err.message : String(err)}`,
+      );
       process.exit(0);
     });
   } else {

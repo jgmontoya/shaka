@@ -198,11 +198,15 @@ console.log("security");
 
       expect(bashEntry).toBeDefined();
       expect(bashEntry.hooks).toHaveLength(1);
-      expect(bashEntry.hooks[0].command).toBe(`bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`);
+      expect(bashEntry.hooks[0].command).toBe(
+        `bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`,
+      );
 
       expect(editEntry).toBeDefined();
       expect(editEntry.hooks).toHaveLength(1);
-      expect(editEntry.hooks[0].command).toBe(`bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`);
+      expect(editEntry.hooks[0].command).toBe(
+        `bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`,
+      );
     });
 
     test("handles mixed hooks with and without matchers", async () => {
@@ -284,7 +288,9 @@ console.log("custom");
         (h: { matcher?: string }) => !h.matcher,
       );
       expect(catchAll).toBeDefined();
-      expect(catchAll.hooks[0].command).toContain(join("customizations", "hooks", "custom-prompt.ts"));
+      expect(catchAll.hooks[0].command).toContain(
+        join("customizations", "hooks", "custom-prompt.ts"),
+      );
     });
   });
 
