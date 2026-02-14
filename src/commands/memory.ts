@@ -28,6 +28,16 @@ import { listSummaries } from "../memory/storage";
 
 const CONSOLIDATION_THRESHOLD = 20;
 
+function resolveMemoryDir(): string {
+  const shakaHome = resolveShakaHome({
+    SHAKA_HOME: process.env.SHAKA_HOME,
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+  });
+  return join(shakaHome, "memory");
+}
+
 export function createMemoryCommand(): Command {
   const memory = new Command("memory").description("Search and browse session memory");
 
@@ -35,13 +45,7 @@ export function createMemoryCommand(): Command {
     .command("search <query>")
     .description("Search session summaries and learnings for a query")
     .action(async (query: string) => {
-      const shakaHome = resolveShakaHome({
-        SHAKA_HOME: process.env.SHAKA_HOME,
-        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-        HOME: process.env.HOME,
-        USERPROFILE: process.env.USERPROFILE,
-      });
-      const memoryDir = join(shakaHome, "memory");
+      const memoryDir = resolveMemoryDir();
 
       const results = await searchMemory(query, memoryDir);
 
@@ -70,13 +74,7 @@ export function createMemoryCommand(): Command {
     .description("List recent session summaries")
     .option("-n, --limit <count>", "Number of summaries to show", "10")
     .action(async (options: { limit: string }) => {
-      const shakaHome = resolveShakaHome({
-        SHAKA_HOME: process.env.SHAKA_HOME,
-        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-        HOME: process.env.HOME,
-        USERPROFILE: process.env.USERPROFILE,
-      });
-      const memoryDir = join(shakaHome, "memory");
+      const memoryDir = resolveMemoryDir();
 
       const summaries = await listSummaries(memoryDir);
 
@@ -106,12 +104,7 @@ export function createMemoryCommand(): Command {
     .command("consolidate")
     .description("Consolidate learnings: merge duplicates, resolve contradictions")
     .action(async () => {
-      const shakaHome = resolveShakaHome({
-        SHAKA_HOME: process.env.SHAKA_HOME,
-        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
-        HOME: process.env.HOME,
-      });
-      const memoryDir = join(shakaHome, "memory");
+      const memoryDir = resolveMemoryDir();
 
       await runConsolidation(memoryDir);
     });
