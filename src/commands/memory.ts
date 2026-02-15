@@ -136,8 +136,9 @@ async function runConsolidation(memoryDir: string): Promise<void> {
   );
 
   // Backup before any changes
-  await Bun.write(join(memoryDir, "learnings.backup.md"), content);
-  console.log("Backup written to memory/learnings.backup.md");
+  const backupPath = join(memoryDir, "learnings.backup.md");
+  await Bun.write(backupPath, content);
+  console.log(`Backup written to ${backupPath}`);
 
   // Pass 1: Duplicate detection
   console.log("\n--- Pass 1: Duplicate detection ---");
