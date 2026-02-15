@@ -38,6 +38,13 @@ function resolveMemoryDir(): string {
   return join(shakaHome, "memory");
 }
 
+/**
+ * Creates the `shaka memory` command with subcommands: search, list, consolidate.
+ *
+ * The `consolidate` subcommand merges duplicates, resolves contradictions, and
+ * auto-promotes learnings seen across 3+ CWDs to global scope (cwd: *) in
+ * non-TTY environments. In a TTY, promotion is interactive (Y/n per candidate).
+ */
 export function createMemoryCommand(): Command {
   const memory = new Command("memory").description("Search and browse session memory");
 
