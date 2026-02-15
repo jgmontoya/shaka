@@ -200,7 +200,7 @@ async function promptForPromotions(entries: LearningEntry[]): Promise<LearningEn
   const result = [...entries];
 
   for (const candidate of candidates) {
-    const idx = result.findIndex((e) => e.title === candidate.title);
+    const idx = result.findIndex((e) => e === candidate);
     if (idx === -1) continue;
 
     console.log(`\n  ${renderEntry(candidate).split("\n").slice(0, 4).join("\n  ")}`);
