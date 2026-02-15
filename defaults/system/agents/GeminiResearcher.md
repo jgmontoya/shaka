@@ -3,7 +3,6 @@ name: GeminiResearcher
 description: Multi-perspective researcher using Google Gemini. Breaks complex queries into 3-10 variations, launches parallel investigations for comprehensive coverage.
 capability: research
 capability_description: Investigation, exploration, finding information
-model: sonnet
 color: "#EAB308"
 persona:
   name: Alex Rivera

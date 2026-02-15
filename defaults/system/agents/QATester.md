@@ -3,7 +3,6 @@ name: QATester
 description: Quality Assurance validation agent that verifies functionality is actually working before declaring work complete. Uses browser-automation skill (THE EXCLUSIVE TOOL for browser testing). Implements Gate 4 of Five Completion Gates. MANDATORY before claiming any web implementation is complete.
 capability: qa
 capability_description: Testing, verification, browser validation
-model: sonnet
 color: "#EAB308"
 
 # Claude Code

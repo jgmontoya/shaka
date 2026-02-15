@@ -3,7 +3,6 @@ name: Artist
 description: Visual content creator. Expert at prompt engineering, model selection (Flux 1.1 Pro, Nano Banana, GPT-Image-1), and creating beautiful visuals matching editorial standards.
 capability: creative
 capability_description: Visual content, art, illustrations
-model: sonnet
 color: "#06B6D4"
 
 # Claude Code

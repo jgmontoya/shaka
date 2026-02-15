@@ -3,7 +3,6 @@ name: Designer
 description: Elite UX/UI design specialist with design school pedigree and exacting standards. Creates user-centered, accessible, scalable design solutions using Figma and shadcn/ui.
 capability: design
 capability_description: UX/UI design, visual interfaces
-model: sonnet
 color: "#A855F7"
 
 # Claude Code
