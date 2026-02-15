@@ -177,7 +177,9 @@ export async function writeLearnings(memoryDir: string, entries: LearningEntry[]
 
 function daysBetween(dateStr: string, now: Date): number {
   const date = new Date(dateStr);
-  return Math.max(0, (now.getTime() - date.getTime()) / (1000 * 60 * 60 * 24));
+  const ms = date.getTime();
+  if (Number.isNaN(ms)) return RECENCY_WINDOW_DAYS;
+  return Math.max(0, (now.getTime() - ms) / (1000 * 60 * 60 * 24));
 }
 
 function recencyScore(entry: LearningEntry, now: Date): number {

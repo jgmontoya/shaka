@@ -334,6 +334,13 @@ describe("scoreEntry", () => {
     });
     expect(scoreEntry(entry, now)).toBeCloseTo(1.0, 1);
   });
+
+  test("malformed date scores 0 recency (maximally stale)", () => {
+    const entry = makeEntry({
+      exposures: [{ date: "not-a-date", sessionHash: "aaaa0000" }],
+    });
+    expect(scoreEntry(entry, now)).toBe(0.0);
+  });
 });
 
 // --- selectLearnings ---
