@@ -14,6 +14,9 @@ export interface ShakaConfig {
   readonly reasoning: {
     readonly enabled: boolean;
   };
+  readonly permissions: {
+    readonly managed: boolean;
+  };
   readonly providers: {
     readonly claude: {
       readonly enabled: boolean;
@@ -45,6 +48,10 @@ export function validateConfig(config: unknown): Result<ShakaConfig, Error> {
 
   if (!c.reasoning || typeof c.reasoning !== "object") {
     return err(new Error("Config must have reasoning section"));
+  }
+
+  if (!c.permissions || typeof c.permissions !== "object") {
+    return err(new Error("Config must have permissions section"));
   }
 
   if (!c.providers || typeof c.providers !== "object") {
@@ -147,6 +154,14 @@ export async function getPrincipalName(shakaHome?: string): Promise<string> {
 }
 
 /**
+ * Check if Shaka is managing provider permissions.
+ * Defaults to true when config is null (pre-init state).
+ */
+export function isPermissionsManaged(config: ShakaConfig | null): boolean {
+  return config?.permissions.managed !== false;
+}
+
+/**
  * Get the model to use for session summarization for a given provider.
  *
  * Per-provider config (providers.claude.summarization_model, etc.):
@@ -202,4 +217,30 @@ export async function loadShakaFile(
   }
 
   return null;
+}
+
+/**
+ * Ensure config.json has all expected fields.
+ * Backfills missing fields with defaults. Called from reload, doctor --fix, update.
+ * Returns true if the config was modified.
+ */
+export async function ensureConfigComplete(shakaHome: string): Promise<boolean> {
+  const configPath = join(shakaHome, "config.json");
+  const file = Bun.file(configPath);
+
+  if (!(await file.exists())) return false;
+
+  const config = (await file.json()) as Record<string, unknown>;
+  let changed = false;
+
+  if (config.permissions === undefined) {
+    config.permissions = { managed: true };
+    changed = true;
+  }
+
+  if (changed) {
+    await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  }
+
+  return changed;
 }

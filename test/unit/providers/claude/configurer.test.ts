@@ -294,6 +294,114 @@ console.log("custom");
     });
   });
 
+  describe("permissions", () => {
+    test("applies default permissions on fresh install", async () => {
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      expect(settings.permissions).toBeDefined();
+      expect(settings.permissions.allow).toContain("Bash");
+      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.ask).toContain("Bash(rm -rf /)");
+      expect(settings.permissions.deny).toEqual([]);
+    });
+
+    test("merges defaults into existing permissions by default", async () => {
+      await Bun.write(
+        `${testClaudeHome}/settings.json`,
+        JSON.stringify({
+          permissions: {
+            allow: ["CustomTool"],
+            deny: ["WebFetch"],
+            ask: ["Bash(custom:*)"],
+          },
+        }),
+      );
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      // Existing entries preserved
+      expect(settings.permissions.allow).toContain("CustomTool");
+      expect(settings.permissions.deny).toEqual(["WebFetch"]);
+      expect(settings.permissions.ask).toContain("Bash(custom:*)");
+      // Defaults merged in
+      expect(settings.permissions.allow).toContain("Bash");
+      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.ask).toContain("Bash(rm -rf /)");
+    });
+
+    test("applies permissions when mode is apply", async () => {
+      await Bun.write(
+        `${testClaudeHome}/settings.json`,
+        JSON.stringify({
+          permissions: {
+            allow: ["Bash"],
+            deny: ["WebFetch"],
+            ask: [],
+          },
+        }),
+      );
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.deny).toEqual([]);
+    });
+
+    test("merges permissions when mode is merge", async () => {
+      await Bun.write(
+        `${testClaudeHome}/settings.json`,
+        JSON.stringify({
+          permissions: {
+            allow: ["CustomTool"],
+            deny: ["WebFetch"],
+            ask: ["Bash(custom:*)"],
+          },
+        }),
+      );
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "merge" });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      expect(settings.permissions.allow).toContain("CustomTool");
+      expect(settings.permissions.allow).toContain("Bash");
+      expect(settings.permissions.deny).toEqual(["WebFetch"]);
+      expect(settings.permissions.ask).toContain("Bash(custom:*)");
+      expect(settings.permissions.ask).toContain("Bash(rm -rf /)");
+    });
+
+    test("skips permissions when mode is skip", async () => {
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "skip" });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      expect(settings.permissions).toBeUndefined();
+    });
+
+    test("merge is idempotent across repeated installs", async () => {
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+
+      await configurer.install({ shakaHome: testShakaHome });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+      // Merging twice produces the same result
+      expect(settings.permissions.allow).toContain("Bash");
+      expect(settings.permissions.allow).toContain("mcp__*");
+      // No duplicates
+      const bashCount = settings.permissions.allow.filter((p: string) => p === "Bash").length;
+      expect(bashCount).toBe(1);
+    });
+  });
+
   describe("uninstall", () => {
     test("removes shaka hooks from all events", async () => {
       const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });

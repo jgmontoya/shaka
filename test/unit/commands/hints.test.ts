@@ -11,6 +11,7 @@ describe("hints", () => {
   const validConfig: ShakaConfig = {
     version: "0.1.0",
     reasoning: { enabled: true },
+    permissions: { managed: true },
     providers: {
       claude: { enabled: false },
       opencode: { enabled: true },

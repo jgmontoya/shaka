@@ -18,7 +18,13 @@ import { join } from "node:path";
 import { type Result, err, ok } from "../../domain/result";
 import { installAssetSymlink, uninstallAssetSymlink, verifyAssetSymlink } from "../asset-installer";
 import { type DiscoveredHook, discoverAllHooks } from "../hook-discovery";
-import type { InstallConfig, InstallationStatus, ProviderConfigurer } from "../types";
+import { OPENCODE_PERMISSION_DEFAULTS, hasExistingOpencodePermissions } from "../permissions";
+import type {
+  InstallConfig,
+  InstallationStatus,
+  PermissionMode,
+  ProviderConfigurer,
+} from "../types";
 
 /** Resolve the global opencode config directory (XDG-compliant). */
 function defaultOpencodeConfigDir(): string {
@@ -70,10 +76,34 @@ export class OpencodeProviderConfigurer implements ProviderConfigurer {
         join(this.opencodeConfigDir, "skills"),
       );
 
+      await this.applyPermissions(config.permissionMode);
+
       return ok(undefined);
     } catch (e) {
       return err(e instanceof Error ? e : new Error(String(e)));
     }
+  }
+
+  private async applyPermissions(mode?: PermissionMode): Promise<void> {
+    if (mode === "skip") return;
+
+    const configPath = join(this.opencodeConfigDir, "opencode.json");
+    const file = Bun.file(configPath);
+
+    let config: Record<string, unknown> = {};
+    if (await file.exists()) {
+      config = (await file.json()) as Record<string, unknown>;
+    }
+
+    const hasExisting = hasExistingOpencodePermissions(config);
+
+    // "merge" (default): apply defaults only if no permissions exist yet.
+    // opencode's simple model (edit/bash) doesn't support union-merge.
+    if ((mode ?? "merge") === "merge" && hasExisting) return;
+
+    // "apply" or "merge" with no existing → set defaults
+    config.permission = { ...OPENCODE_PERMISSION_DEFAULTS };
+    await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`);
   }
 
   private async validatePluginSyntax(pluginPath: string): Promise<Result<void, Error>> {

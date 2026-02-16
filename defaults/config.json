@@ -3,6 +3,9 @@
   "reasoning": {
     "enabled": true
   },
+  "permissions": {
+    "managed": true
+  },
   "providers": {
     "claude": {
       "enabled": false,

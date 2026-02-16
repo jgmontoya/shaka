@@ -19,7 +19,13 @@ import {
   SHAKA_TO_CLAUDE_EVENT,
   discoverAllHooks,
 } from "../hook-discovery";
-import type { InstallConfig, InstallationStatus, ProviderConfigurer } from "../types";
+import { CLAUDE_PERMISSION_DEFAULTS, mergeClaudePermissions } from "../permissions";
+import type {
+  InstallConfig,
+  InstallationStatus,
+  PermissionMode,
+  ProviderConfigurer,
+} from "../types";
 
 /** Default command runner using Bun.spawn. */
 async function defaultRunCommand(args: string[]): Promise<{ exitCode: number; stderr: string }> {
@@ -166,6 +172,8 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
       const hooksByEvent = groupHooksByEvent(discoveredHooks);
       this.registerAllHooks(settings, hooksByEvent);
 
+      this.applyPermissions(settings, config.permissionMode);
+
       await this.saveSettings(settings);
 
       // Install agents from defaults/system/agents/
@@ -239,6 +247,27 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
         new Error(`Failed to unregister MCP server: ${e instanceof Error ? e.message : String(e)}`),
       );
     }
+  }
+
+  private applyPermissions(settings: ClaudeSettings, mode?: PermissionMode): void {
+    if (mode === "skip") return;
+
+    if (mode === "apply") {
+      settings.permissions = {
+        allow: [...CLAUDE_PERMISSION_DEFAULTS.allow],
+        deny: [...CLAUDE_PERMISSION_DEFAULTS.deny],
+        ask: [...CLAUDE_PERMISSION_DEFAULTS.ask],
+      };
+      return;
+    }
+
+    // Default and explicit "merge": union-dedupe defaults into existing
+    const existing = (settings.permissions ?? {}) as Record<string, string[]>;
+    settings.permissions = mergeClaudePermissions({
+      allow: existing.allow,
+      deny: existing.deny,
+      ask: existing.ask,
+    });
   }
 
   private async loadSettings(): Promise<ClaudeSettings> {

@@ -7,7 +7,7 @@
 
 import { createInterface } from "node:readline";
 import { Command } from "commander";
-import { loadConfig, resolveShakaHome } from "../domain/config";
+import { isPermissionsManaged, loadConfig, resolveShakaHome } from "../domain/config";
 import { findNewerLocalTag, getGitRef } from "../domain/version";
 import { resolveFromModule } from "../platform/paths";
 import type { ClaudeProviderConfigurer } from "../providers/claude/configurer";
@@ -154,11 +154,14 @@ async function installProviders(
   providers: InitResult["providers"],
   shakaHome: string,
 ): Promise<void> {
+  const config = await loadConfig(shakaHome);
+  const permissionMode = isPermissionsManaged(config) ? undefined : "skip";
+
   const providerNames: ProviderName[] = ["claude", "opencode"];
   for (const providerName of providerNames) {
     if (providers[providerName].installed) {
       const provider = createProvider(providerName);
-      const result = await provider.install({ shakaHome });
+      const result = await provider.install({ shakaHome, permissionMode });
       if (!result.ok) {
         console.error(
           `  ✗ Failed to install ${providerName} configuration: ${result.error.message}`,

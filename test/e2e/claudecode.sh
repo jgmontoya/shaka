@@ -58,7 +58,7 @@ section "Hook registration"
 
 SETTINGS="$HOME/.claude/settings.json"
 
-if grep -q '"SessionStart"' "$SETTINGS"; then
+if jq -e '.hooks.SessionStart' "$SETTINGS" >/dev/null 2>&1; then
   pass "SessionStart hook registered"
 else
   fail "SessionStart hook not found in settings.json"
@@ -66,7 +66,7 @@ else
   exit 1
 fi
 
-if grep -q '"UserPromptSubmit"' "$SETTINGS"; then
+if jq -e '.hooks.UserPromptSubmit' "$SETTINGS" >/dev/null 2>&1; then
   pass "UserPromptSubmit hook registered"
 else
   fail "UserPromptSubmit hook not found in settings.json"
@@ -74,7 +74,7 @@ else
   exit 1
 fi
 
-if grep -q '"PreToolUse"' "$SETTINGS"; then
+if jq -e '.hooks.PreToolUse' "$SETTINGS" >/dev/null 2>&1; then
   pass "PreToolUse hook registered"
 else
   fail "PreToolUse hook not found in settings.json"
@@ -82,7 +82,7 @@ else
   exit 1
 fi
 
-if grep -q '"SessionEnd"' "$SETTINGS"; then
+if jq -e '.hooks.SessionEnd' "$SETTINGS" >/dev/null 2>&1; then
   pass "SessionEnd hook registered"
 else
   fail "SessionEnd hook not found in settings.json"
@@ -90,11 +90,65 @@ else
   exit 1
 fi
 
+# ── Permissions ──────────────────────────────────────────────────────
+
+section "Permissions"
+
+if jq -e '.permissions' "$SETTINGS" >/dev/null 2>&1; then
+  pass "permissions block present in settings.json"
+else
+  fail "permissions block not found in settings.json"
+  cat "$SETTINGS"
+  exit 1
+fi
+
+if jq -e '.permissions.allow | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+  pass "allow list present"
+else
+  fail "allow list not found"
+  exit 1
+fi
+
+if jq -e '.permissions.allow | index("Bash")' "$SETTINGS" >/dev/null 2>&1; then
+  pass "Bash in allow list"
+else
+  fail "Bash not in allow list"
+  exit 1
+fi
+
+if jq -e '.permissions.allow | index("mcp__*")' "$SETTINGS" >/dev/null 2>&1; then
+  pass "mcp__* wildcard in allow list"
+else
+  fail "mcp__* not in allow list"
+  exit 1
+fi
+
+if jq -e '.permissions.ask | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+  pass "ask list present (safety guards)"
+else
+  fail "ask list not found"
+  exit 1
+fi
+
+if jq -e '.permissions.ask | index("Bash(rm -rf /)")' "$SETTINGS" >/dev/null 2>&1; then
+  pass "rm -rf / guard in ask list"
+else
+  fail "rm -rf / guard not in ask list"
+  exit 1
+fi
+
+if jq -e '.permissions.ask | map(select(contains("git push --force"))) | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+  pass "force push guard in ask list"
+else
+  fail "force push guard not in ask list"
+  exit 1
+fi
+
 # ── Command format ────────────────────────────────────────────────────
 
 section "Command format"
 
-HOOK_CMD=$(grep -o '"command": "[^"]*"' "$SETTINGS" | head -1 | cut -d'"' -f4)
+HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$SETTINGS")
 HOOK_PATH="${HOOK_CMD#bun run }"
 
 if echo "$HOOK_CMD" | grep -q "^bun run "; then

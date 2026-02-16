@@ -4,9 +4,11 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type ShakaConfig,
+  ensureConfigComplete,
   getAssistantName,
   getPrincipalName,
   getSummarizationModel,
+  isPermissionsManaged,
   isSubagent,
   loadConfig,
   loadShakaFile,
@@ -19,6 +21,7 @@ describe("Config", () => {
     const validConfig: ShakaConfig = {
       version: "0.1.0",
       reasoning: { enabled: true },
+      permissions: { managed: true },
       providers: {
         claude: { enabled: false },
         opencode: { enabled: false },
@@ -63,6 +66,15 @@ describe("Config", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.message).toBe("Config must have reasoning section");
+      }
+    });
+
+    test("returns error for missing permissions section", () => {
+      const { permissions: _, ...configWithoutPermissions } = validConfig;
+      const result = validateConfig(configWithoutPermissions);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toBe("Config must have permissions section");
       }
     });
 
@@ -136,6 +148,7 @@ describe("Config", () => {
     const validConfig: ShakaConfig = {
       version: "0.1.0",
       reasoning: { enabled: true },
+      permissions: { managed: true },
       providers: {
         claude: { enabled: false },
         opencode: { enabled: false },
@@ -177,6 +190,20 @@ describe("Config", () => {
 
     test("returns null when config.json fails validation", async () => {
       await Bun.write(`${testShakaHome}/config.json`, JSON.stringify({ invalid: true }));
+
+      const config = await loadConfig(testShakaHome);
+      expect(config).toBeNull();
+    });
+
+    test("returns null for pre-v0.4.0 config missing permissions", async () => {
+      const legacyConfig = {
+        version: "0.3.0",
+        reasoning: { enabled: true },
+        providers: { claude: { enabled: true }, opencode: { enabled: false } },
+        assistant: { name: "Shaka" },
+        principal: { name: "Chief" },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(legacyConfig));
 
       const config = await loadConfig(testShakaHome);
       expect(config).toBeNull();
@@ -248,6 +275,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: { claude: { enabled: false }, opencode: { enabled: false } },
         assistant: { name: "TestBot" },
         principal: { name: "TestUser" },
@@ -280,6 +308,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: { claude: { enabled: false }, opencode: { enabled: false } },
         assistant: { name: "TestBot" },
         principal: { name: "Alice" },
@@ -322,6 +351,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: {
           claude: { enabled: false, summarization_model: "sonnet" },
           opencode: { enabled: false },
@@ -339,6 +369,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: {
           claude: { enabled: false },
           opencode: {
@@ -359,6 +390,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: {
           claude: { enabled: false, summarization_model: "auto" },
           opencode: { enabled: false },
@@ -376,6 +408,7 @@ describe("Config", () => {
       const config: ShakaConfig = {
         version: "0.1.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: {
           claude: { enabled: false, summarization_model: "haiku" },
           opencode: { enabled: false, summarization_model: "openrouter/google/gemini-2.0-flash" },
@@ -425,6 +458,111 @@ describe("Config", () => {
       expect(isSubagent({ CLAUDE_PROJECT_DIR: "C:\\Users\\test\\.claude\\Agents\\task-123" })).toBe(
         true,
       );
+    });
+  });
+
+  describe("ensureConfigComplete", () => {
+    const testShakaHome = join(tmpdir(), "shaka-test-ensure-config");
+
+    beforeEach(async () => {
+      await rm(testShakaHome, { recursive: true, force: true });
+      await mkdir(testShakaHome, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await rm(testShakaHome, { recursive: true, force: true });
+    });
+
+    test("adds permissions field to config missing it", async () => {
+      const config = {
+        version: "0.3.0",
+        reasoning: { enabled: true },
+        providers: { claude: { enabled: true }, opencode: { enabled: false } },
+        assistant: { name: "Shaka" },
+        principal: { name: "Chief" },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
+
+      const changed = await ensureConfigComplete(testShakaHome);
+
+      expect(changed).toBe(true);
+      const updated = await Bun.file(`${testShakaHome}/config.json`).json();
+      expect(updated.permissions).toEqual({ managed: true });
+    });
+
+    test("does not modify config that already has permissions", async () => {
+      const config = {
+        version: "0.3.0",
+        reasoning: { enabled: true },
+        permissions: { managed: false },
+        providers: { claude: { enabled: true }, opencode: { enabled: false } },
+        assistant: { name: "Shaka" },
+        principal: { name: "Chief" },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
+
+      const changed = await ensureConfigComplete(testShakaHome);
+
+      expect(changed).toBe(false);
+      const updated = await Bun.file(`${testShakaHome}/config.json`).json();
+      expect(updated.permissions.managed).toBe(false);
+    });
+
+    test("returns false when config.json does not exist", async () => {
+      const changed = await ensureConfigComplete(testShakaHome);
+      expect(changed).toBe(false);
+    });
+
+    test("preserves all existing fields", async () => {
+      const config = {
+        version: "0.3.0",
+        reasoning: { enabled: true },
+        providers: {
+          claude: { enabled: true, summarization_model: "sonnet" },
+          opencode: { enabled: false },
+        },
+        assistant: { name: "Alfred" },
+        principal: { name: "Bruce" },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
+
+      await ensureConfigComplete(testShakaHome);
+
+      const updated = await Bun.file(`${testShakaHome}/config.json`).json();
+      expect(updated.assistant.name).toBe("Alfred");
+      expect(updated.principal.name).toBe("Bruce");
+      expect(updated.providers.claude.summarization_model).toBe("sonnet");
+      expect(updated.permissions).toEqual({ managed: true });
+    });
+  });
+
+  describe("isPermissionsManaged", () => {
+    test("returns true when config is null", () => {
+      expect(isPermissionsManaged(null)).toBe(true);
+    });
+
+    test("returns true when permissions.managed is true", () => {
+      const config: ShakaConfig = {
+        version: "0.1.0",
+        reasoning: { enabled: true },
+        permissions: { managed: true },
+        providers: { claude: { enabled: false }, opencode: { enabled: false } },
+        assistant: { name: "Shaka" },
+        principal: { name: "User" },
+      };
+      expect(isPermissionsManaged(config)).toBe(true);
+    });
+
+    test("returns false when permissions.managed is false", () => {
+      const config: ShakaConfig = {
+        version: "0.1.0",
+        reasoning: { enabled: true },
+        permissions: { managed: false },
+        providers: { claude: { enabled: false }, opencode: { enabled: false } },
+        assistant: { name: "Shaka" },
+        principal: { name: "User" },
+      };
+      expect(isPermissionsManaged(config)).toBe(false);
     });
   });
 });

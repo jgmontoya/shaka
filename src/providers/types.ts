@@ -23,8 +23,12 @@ export interface ProviderConfigurer {
   checkInstallation(config: InstallConfig): Promise<InstallationStatus>;
 }
 
+export type PermissionMode = "apply" | "merge" | "skip";
+
 export interface InstallConfig {
   shakaHome: string;
+  /** How to handle permissions. Default: merge (union-dedupe for Claude, apply-if-missing for opencode). */
+  permissionMode?: PermissionMode;
 }
 
 export interface ComponentStatus {

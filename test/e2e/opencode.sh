@@ -51,6 +51,43 @@ fi
 section "Init"
 shaka init --all --defaults
 
+# ── Permissions ──────────────────────────────────────────────────────
+
+section "Permissions"
+
+OC_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+
+if [ -f "$OC_CONFIG" ]; then
+  pass "opencode.json config created"
+else
+  fail "opencode.json not found at $OC_CONFIG"
+  exit 1
+fi
+
+if jq -e '.permission' "$OC_CONFIG" >/dev/null 2>&1; then
+  pass "permission block present in opencode.json"
+else
+  fail "permission block not found in opencode.json"
+  cat "$OC_CONFIG"
+  exit 1
+fi
+
+if jq -e '.permission.edit == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
+  pass "edit permission set to allow"
+else
+  fail "edit permission not set to allow"
+  cat "$OC_CONFIG"
+  exit 1
+fi
+
+if jq -e '.permission.bash == "allow"' "$OC_CONFIG" >/dev/null 2>&1; then
+  pass "bash permission set to allow"
+else
+  fail "bash permission not set to allow"
+  cat "$OC_CONFIG"
+  exit 1
+fi
+
 # ── Session start hook ────────────────────────────────────────────────
 
 section "Session start hook"

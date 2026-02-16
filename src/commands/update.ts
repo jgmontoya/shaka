@@ -10,7 +10,7 @@
 
 import { createInterface } from "node:readline";
 import { Command } from "commander";
-import { loadConfig, resolveShakaHome } from "../domain/config";
+import { ensureConfigComplete, loadConfig, resolveShakaHome } from "../domain/config";
 import {
   compareSemver,
   findLatestTag,
@@ -111,6 +111,9 @@ async function checkoutAndInit(repoRoot: string, tag: string): Promise<boolean> 
   }
 
   console.log("Re-initializing...\n");
+
+  // Backfill missing config fields (e.g., permissions added in v0.4.0)
+  await ensureConfigComplete(resolveShakaHome());
 
   // Read config to determine which providers the user originally selected
   const config = await loadConfig();

@@ -397,6 +397,75 @@ console.log("format");
     });
   });
 
+  describe("permissions", () => {
+    test("applies default permissions on fresh install", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const configFile = Bun.file(`${testProjectRoot}/opencode.json`);
+      expect(await configFile.exists()).toBe(true);
+      const config = await configFile.json();
+      expect(config.permission.edit).toBe("allow");
+      expect(config.permission.bash).toBe("allow");
+    });
+
+    test("does not overwrite existing permissions by default", async () => {
+      await Bun.write(
+        `${testProjectRoot}/opencode.json`,
+        JSON.stringify({ permission: { edit: "ask", bash: "ask" } }),
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const config = await Bun.file(`${testProjectRoot}/opencode.json`).json();
+      expect(config.permission.edit).toBe("ask");
+      expect(config.permission.bash).toBe("ask");
+    });
+
+    test("applies permissions when mode is apply", async () => {
+      await Bun.write(
+        `${testProjectRoot}/opencode.json`,
+        JSON.stringify({ permission: { edit: "ask", bash: "ask" } }),
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+
+      const config = await Bun.file(`${testProjectRoot}/opencode.json`).json();
+      expect(config.permission.edit).toBe("allow");
+      expect(config.permission.bash).toBe("allow");
+    });
+
+    test("skips permissions when mode is skip", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "skip" });
+
+      const configFile = Bun.file(`${testProjectRoot}/opencode.json`);
+      if (await configFile.exists()) {
+        const config = await configFile.json();
+        expect(config.permission).toBeUndefined();
+      }
+    });
+
+    test("preserves other opencode config fields", async () => {
+      await Bun.write(
+        `${testProjectRoot}/opencode.json`,
+        JSON.stringify({ model: "anthropic/claude-sonnet-4-5", theme: "dark" }),
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const config = await Bun.file(`${testProjectRoot}/opencode.json`).json();
+      expect(config.model).toBe("anthropic/claude-sonnet-4-5");
+      expect(config.theme).toBe("dark");
+      expect(config.permission.edit).toBe("allow");
+    });
+  });
+
   describe("uninstall", () => {
     test("removes shaka.ts plugin file", async () => {
       const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });

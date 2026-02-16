@@ -5,7 +5,12 @@
 
 import { join } from "node:path";
 import { Command } from "commander";
-import { type ShakaConfig, loadConfig, resolveShakaHome } from "../domain/config";
+import {
+  type ShakaConfig,
+  ensureConfigComplete,
+  loadConfig,
+  resolveShakaHome,
+} from "../domain/config";
 import { getAllProviders } from "../providers/registry";
 import type { InstallationStatus, ProviderConfigurer, ProviderName } from "../providers/types";
 import { printOpencodeSummarizationHint } from "./hints";
@@ -198,6 +203,67 @@ function printSummary(hasIssues: boolean): void {
   }
 }
 
+async function checkIncompleteConfig(shakaHome: string): Promise<boolean> {
+  const configFile = Bun.file(join(shakaHome, "config.json"));
+  if (!(await configFile.exists())) return false;
+
+  // Read raw JSON to detect missing fields without going through validateConfig
+  const raw = (await configFile.json()) as Record<string, unknown>;
+  if (raw.permissions === undefined) {
+    console.log("  ✗ config.json is incomplete (missing permissions field)");
+    console.log("    Run `shaka doctor --fix` to backfill missing fields.");
+    return true;
+  }
+
+  return false;
+}
+
+async function runDoctor(shakaHome: string, options: { fix?: boolean }): Promise<void> {
+  let hasIssues = await checkShakaHome(shakaHome);
+  let fixedSomething = false;
+
+  // Backfill missing config fields before loading (e.g., permissions added in v0.4.0)
+  if (options.fix) {
+    const configBackfilled = await ensureConfigComplete(shakaHome);
+    if (configBackfilled) {
+      console.log("  ✓ Backfilled missing config fields (permissions)");
+      fixedSomething = true;
+    }
+  }
+
+  const config = await loadConfig(shakaHome);
+
+  // Detect incomplete config when not fixing
+  if (!config && !hasIssues) {
+    const incomplete = await checkIncompleteConfig(shakaHome);
+    hasIssues = hasIssues || incomplete;
+  }
+
+  // Collect all provider statuses once (avoids duplicate checkInstallation calls)
+  const statuses = await collectProviderStatuses(shakaHome);
+
+  console.log("\nProvider status:");
+  const providerIssues = logProviderStatuses(config, statuses);
+  hasIssues = hasIssues || providerIssues;
+
+  const mismatches = findConfigMismatches(config, statuses);
+  const alignmentIssues = logConfigAlignment(mismatches);
+  hasIssues = hasIssues || alignmentIssues;
+
+  if (options.fix && mismatches.length > 0) {
+    await fixConfigAlignment(shakaHome, mismatches);
+    fixedSomething = true;
+    hasIssues = await recheckAfterFix(shakaHome);
+  }
+
+  if (fixedSomething) {
+    console.log("\n  Run `shaka reload` to apply changes to provider configurations.");
+  }
+
+  printSummary(hasIssues);
+  await printOpencodeSummarizationHint(shakaHome);
+}
+
 export function createDoctorCommand(): Command {
   return new Command("doctor")
     .description("Check Shaka installation health")
@@ -213,27 +279,6 @@ export function createDoctorCommand(): Command {
         USERPROFILE: process.env.USERPROFILE,
       });
 
-      let hasIssues = await checkShakaHome(shakaHome);
-
-      const config = await loadConfig(shakaHome);
-
-      // Collect all provider statuses once (avoids duplicate checkInstallation calls)
-      const statuses = await collectProviderStatuses(shakaHome);
-
-      console.log("\nProvider status:");
-      const providerIssues = logProviderStatuses(config, statuses);
-      hasIssues = hasIssues || providerIssues;
-
-      const mismatches = findConfigMismatches(config, statuses);
-      const alignmentIssues = logConfigAlignment(mismatches);
-      hasIssues = hasIssues || alignmentIssues;
-
-      if (options.fix && mismatches.length > 0) {
-        await fixConfigAlignment(shakaHome, mismatches);
-        hasIssues = await recheckAfterFix(shakaHome);
-      }
-
-      printSummary(hasIssues);
-      await printOpencodeSummarizationHint(shakaHome);
+      await runDoctor(shakaHome, options);
     });
 }
