@@ -4,11 +4,18 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.3.2] — 2026-02-16
+## [0.3.2] — 2026-02-17
+
+### Added
+
+- **`shaka memory review` command** — Interactive TUI for browsing, filtering, and deleting learnings with pagination. `--prune` flag enables AI-assisted quality assessment that flags low-value entries for review. `--filter` pre-filters by text match.
+- **Learnings quality criteria constants** — Shared `QUALITY_GATES`, `LOW_QUALITY_PATTERNS`, and `HIGH_QUALITY_PATTERNS` ensure extraction and pruning prompts stay in sync.
 
 ### Changed
 
 - **Reasoning framework upgraded** — Adopted improvements from PAI v3: stricter constraint-to-criteria traceability, explicit/inferred tagging, mandatory anti-criteria, drift prevention checkpoints, and empirical-over-inferred verification. Algorithm agent and docs updated to match.
+- **Learnings extraction prompt tightened** — Reduced max learnings per session from 3 to 2, added three-gate quality test (NON-OBVIOUS, RECURRING, BEHAVIOR-CHANGING), expanded anti-patterns list to reduce low-value extractions.
+- **`learnings.ts` split into focused modules** — Extracted `memory/consolidation.ts` (duplicate/contradiction detection) and `commands/memory/` directory (consolidate, review subcommands). Largest file reduced from 776 to ~520 lines.
 
 ## [0.3.1] — 2026-02-16
 
