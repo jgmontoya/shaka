@@ -76,7 +76,7 @@ export async function runReview(
 
 function shortenCwd(cwd: string): string {
   if (cwd === "*") return "global";
-  const parts = cwd.split("/").filter(Boolean);
+  const parts = cwd.split(/[\\/]/).filter(Boolean);
   return parts.length <= 3 ? cwd : `.../${parts.slice(-2).join("/")}`;
 }
 
@@ -145,6 +145,11 @@ async function deleteAndRefresh(
 
 async function runPruneReview(review: ReviewState, initialFilter?: string): Promise<void> {
   const candidates = applyFilter(review, initialFilter ?? "");
+
+  if (candidates.length === 0) {
+    console.log("\nNo candidates to assess.");
+    return;
+  }
 
   console.log(`\nAnalyzing ${candidates.length} learnings for quality...`);
 

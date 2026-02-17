@@ -425,9 +425,13 @@ export function parseExtractedLearnings(
 
 // --- Promotion ---
 
+const PROMOTION_CWD_THRESHOLD = 3;
+
 /** Find entries eligible for CWD-to-global promotion. */
 export function findPromotionCandidates(entries: LearningEntry[]): LearningEntry[] {
-  return entries.filter((e) => !e.nonglobal && !e.cwds.includes("*") && e.cwds.length >= 3);
+  return entries.filter(
+    (e) => !e.nonglobal && !e.cwds.includes("*") && e.cwds.length >= PROMOTION_CWD_THRESHOLD,
+  );
 }
 
 /** Promote an entry to global. */
@@ -487,7 +491,7 @@ export function parseQualityAssessmentOutput(raw: string): QualityVerdict[] {
   if (raw.trim() === "ALL HIGH QUALITY") return [];
 
   const verdicts: QualityVerdict[] = [];
-  const lineRe = /^LOW\s*\[(\d+)\]\s*—\s*(.+)$/;
+  const lineRe = /^LOW\s*\[(\d+)\]\s*[-–—]\s*(.+)$/;
 
   for (const line of raw.split("\n")) {
     const match = line.trim().match(lineRe);
@@ -495,7 +499,7 @@ export function parseQualityAssessmentOutput(raw: string): QualityVerdict[] {
 
     const index = Number.parseInt(match[1] ?? "", 10) - 1;
     const reason = match[2]?.trim() ?? "";
-    if (Number.isNaN(index) || !reason) continue;
+    if (!(index >= 0) || !reason) continue;
 
     verdicts.push({ index, reason });
   }

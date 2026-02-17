@@ -96,7 +96,14 @@ function absorbDropEntry(
   drop: LearningEntry,
 ): void {
   keep.cwds = [...new Set([...keep.cwds, ...drop.cwds])];
-  keep.exposures = [...keep.exposures, ...drop.exposures];
+  const seen = new Set(keep.exposures.map((e) => `${e.date}@${e.sessionHash}`));
+  for (const e of drop.exposures) {
+    const key = `${e.date}@${e.sessionHash}`;
+    if (!seen.has(key)) {
+      keep.exposures.push(e);
+      seen.add(key);
+    }
+  }
   if (drop.nonglobal) keep.nonglobal = true;
 }
 

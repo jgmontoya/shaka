@@ -66,7 +66,8 @@ export function createMemoryCommand(): Command {
         return;
       }
 
-      const limit = Math.min(Number.parseInt(options.limit, 10) || 10, summaries.length);
+      const parsed = Number.parseInt(options.limit, 10);
+      const limit = Math.min(parsed > 0 ? parsed : 10, summaries.length);
       const shown = summaries.slice(0, limit);
 
       console.log(
