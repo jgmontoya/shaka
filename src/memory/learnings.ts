@@ -311,22 +311,32 @@ export function buildExtractionPromptSection(existingTitles: string[]): string {
 
   return `
 7. Reusable learnings: corrections, preferences, patterns, and environment facts worth
-   persisting for future sessions. Return 0-3 learnings.
+   persisting for future sessions. Return 0-2 learnings. Most sessions should have 0.
+
+The bar for extraction is HIGH. A learning must pass ALL three tests:
+- NON-OBVIOUS: Would an experienced engineer or LLM get this wrong without being told?
+- RECURRING: Will this exact situation come up again in a future session?
+- SPECIFIC: Would it change the LLM's default behavior? Vague truisms ("validate early") don't — but project-specific gotchas do, even if narrow.
+
+If a candidate fails ANY test, do not extract it.
 
 Do NOT extract:
-- Obvious programming knowledge anyone would know
-- One-time debugging steps that won't recur
-- One-time decisions that won't recur
-- Information already in the project's config files or README
+- General engineering wisdom (DRY, test through public interfaces, validate early, etc.)
+- One-time code review findings — the fix is now in the code, the learning is redundant
+- Architectural descriptions of how a codebase works — these belong in project docs, not learnings
+- Meta-observations about your own reasoning process or approach
+- Process advice (how to plan, how to review, how to evaluate ideas)
+- Patterns that any senior engineer would apply without being told
+- Information already in the project's config files, README, or CLAUDE.md
 - Speculative observations without clear evidence in the transcript
-- Very specific observations that won't be useful for future sessions
+- One-time debugging steps or decisions that won't recur
 
 DO extract:
-- User corrections ("no, do X instead of Y")
-- Stated preferences ("I always want X")
-- Project conventions discovered by reading code
-- Non-obvious environment facts ("this project uses X for Y")
-- User clarifications that are likely to be useful for future sessions
+- User corrections where you got something wrong ("no, do X instead of Y")
+- Stated user preferences ("I always want X", "never do Y")
+- Non-obvious project conventions that contradict common defaults
+- Environment gotchas that would cause real bugs (wrong units, surprising config values)
+- Framework/library behaviors that are counterintuitive or version-specific
 
 If a learning matches an existing entry below, use its EXACT title
 character-for-character (this enables automatic reinforcement tracking):
@@ -334,8 +344,7 @@ character-for-character (this enables automatic reinforcement tracking):
 ${titlesBlock}
 
 If nothing in the transcript is worth persisting, return an empty Learnings section.
-We expect most sessions to have 0 learnings and some to have 1 learning.
-More than 2 learnings from one session is suspicious.
+The default is 0 learnings. Extract only when something genuinely surprising was learned.
 
 Format learnings as:
 

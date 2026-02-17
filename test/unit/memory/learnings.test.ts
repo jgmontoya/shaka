@@ -601,7 +601,7 @@ describe("buildExtractionPromptSection", () => {
     const prompt = buildExtractionPromptSection([]);
     expect(prompt).toContain("Do NOT extract");
     expect(prompt).toContain("DO extract");
-    expect(prompt).toContain("0-3 learnings");
+    expect(prompt).toContain("0-2 learnings");
   });
 
   test("includes existing titles when provided", () => {
