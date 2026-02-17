@@ -4,6 +4,12 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] — 2026-02-16
+
+### Changed
+
+- **Reasoning framework upgraded** — Adopted improvements from PAI v3: stricter constraint-to-criteria traceability, explicit/inferred tagging, mandatory anti-criteria, drift prevention checkpoints, and empirical-over-inferred verification. Algorithm agent and docs updated to match.
+
 ## [0.3.1] — 2026-02-16
 
 ### Added
@@ -157,6 +163,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.3.2]: https://github.com/jgmontoya/shaka/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/jgmontoya/shaka/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jgmontoya/shaka/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/jgmontoya/shaka/compare/v0.2.1...v0.2.2
