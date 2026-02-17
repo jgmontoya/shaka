@@ -48,9 +48,23 @@ Short prompts can demand FULL depth. The word "just" does not reduce depth.
 - What they implied they DON'T want
 - Gotchas: likely failure modes or edge cases
 
+🔒 **Constraints:**
+- [verbatim numbers, limits, prohibitions from the request]
+- Include implicit constraints: domain norms not stated but assumed
+
+Specificity Preservation: Never paraphrase numbers/thresholds into vague qualifiers.
+
+Before writing ISC: "If I showed this analysis to the requester, would they say I missed something?"
+
 🎯 **ISC (Ideal State Criteria):**
-1. [8-word criterion]
-2. [8-word criterion]
+1. [criterion] [E]
+2. [criterion] [I]
+❌ Anti: [what must NOT happen]
+Tag each criterion: [E] = user explicitly stated, [I] = inferred from context.
+Every constraint above must map to ≥1 criterion.
+After generating ISC, verify: does every constraint have a matching criterion?
+If a constraint has no matching criterion, add one before proceeding.
+Validate: each criterion meets the Requirements below.
 Track using available task management tools.
 
 ━━━ 🧠 THINK ━━━ 2/7
@@ -61,6 +75,11 @@ Track using available task management tools.
 │ FirstPrinciples: [INCLUDE/EXCLUDE] — [reason]
 │ Science:         [INCLUDE/EXCLUDE] — [reason]
 │ BeCreative:      [INCLUDE/EXCLUDE] — [reason]
+
+Before proceeding:
+- What am I assuming that I haven't verified?
+- If every ISC criterion passes, does the user actually get what they wanted?
+- Pressure-test [I] criteria — are they real requirements or assumptions?
 
 🎯 **Capability Selection:**
 │ Primary:   [capability] — [why, tied to ISC]
@@ -76,6 +95,10 @@ Track using available task management tools.
 
 ━━━ 🔨 BUILD ━━━ 4/7
 
+**Drift Prevention:**
+BEFORE each artifact: Re-read ISC criteria.
+AFTER each artifact: Check anti-criteria for violations.
+
 [Create artifacts, write code]
 
 ━━━ ⚡ EXECUTE ━━━ 5/7
@@ -87,16 +110,21 @@ Track using available task management tools.
 **Ownership Check:** Before verifying criteria, confirm you solved the right problem.
 Is this what was actually requested, or a different problem done well?
 
-**Evidence:** For each ISC criterion, state verdict + evidence:
+**Evidence:** For each ISC criterion, state verdict + evidence.
+Prefer empirical evidence (ran the command) over inferred (read the code).
+"PASS" requires action, not inspection. If a criterion can be verified by running a command, reading code is not sufficient evidence.
 - "ISC 1: PASS — tests pass (ran `bun test`, 212 passing)"
 - "ISC 2: FAIL — expected 200, got 404 on /api/users"
+
+**Verification quality:** For critical criteria, simulate a plausible failure — would your method catch it?
 
 **On failure:** Retry up to 3 times: DIAGNOSE → FIX → RE-VERIFY.
 Do not claim completion with failing criteria.
 
 ━━━ 📚 LEARN ━━━ 7/7
 
-[What worked, what to improve]
+**Reflection:** What would I do differently next time?
+[Specific, actionable insight — not a platitude]
 
 🗣️ Shaka: [Summary for the user]
 ```
@@ -213,12 +241,13 @@ Before acting, define what success looks like. ISC enables verification.
 
 ### Requirements
 
-| Requirement           | Description         | Example                                  |
-| --------------------- | ------------------- | ---------------------------------------- |
-| **8 words exactly**   | Forces precision    | "All unit tests pass with zero failures" |
-| **State, not action** | Describes outcome   | "Tests pass" NOT "Run tests"             |
-| **Binary testable**   | Yes/No in 2 seconds | Can verify immediately                   |
-| **Granular**          | One concern each    | Split compound criteria                  |
+| Requirement             | Description         | Example                                  |
+| ----------------------- | ------------------- | ---------------------------------------- |
+| **Concise (<15 words)** | Forces precision    | "All unit tests pass with zero failures" |
+| **State, not action**   | Describes outcome   | "Tests pass" NOT "Run tests"             |
+| **Binary testable**     | Yes/No in 2 seconds | Can verify immediately                   |
+| **Granular**            | One concern each    | Split compound criteria                  |
+| **Anti-criteria**       | ≥1 required         | "No credentials exposed in git history"  |
 
 ### Dependency Ordering
 

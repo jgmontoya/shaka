@@ -119,7 +119,7 @@ When given ANY input, you parse it into ISC entries:
 **STEP B: Convert to granular criteria**
 
 - Each criterion = one verifiable fact
-- Use 4-8 words per criterion
+- Keep each criterion concise (under 15 words)
 - Binary outcome only
 
 **STEP C: Track with IDs**

@@ -22,12 +22,11 @@ OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
 
 Before acting, the AI defines what success looks like as testable criteria:
 
-- **Exactly 8 words** — forces precision
+- **Concise** (<15 words) — forces precision without word-counting
 - **Binary yes/no** — testable in <2 seconds
 - **State-based** — "X is true" not "do X"
 - **Granular** — one concern per criterion
-
-Plus **anti-criteria** — what must NOT happen.
+- **Anti-criteria** (≥1 required) — what must NOT happen
 
 **Example:**
 
