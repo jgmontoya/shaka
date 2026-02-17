@@ -4,7 +4,7 @@ A personal AI assistant framework. Provider-agnostic. Clear architecture. Your d
 
 ## Status
 
-**v0.3.0** — Core infrastructure, session memory, and continuous learning. Shaka sets up your environment, injects context into AI sessions, validates tool usage for security, summarizes sessions, learns from your corrections and preferences, and works with both Claude Code and opencode.
+**v0.3.1** — Core infrastructure, session memory, and continuous learning. Shaka sets up your environment, injects context into AI sessions, validates tool usage for security, summarizes sessions, learns from your corrections and preferences, manages default permissions, and works with both Claude Code and opencode.
 
 | Area                       | Status  | Notes                                                                        |
 | -------------------------- | ------- | ---------------------------------------------------------------------------- |

@@ -4,6 +4,24 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] — 2026-02-16
+
+### Added
+
+- **Default permission management** — Shaka applies sensible default permissions during `shaka init` for both providers
+  - Claude Code: allow list for standard dev tools, ask list guarding destructive operations (force push, rm -rf, secret file reads)
+  - OpenCode: edit and bash set to `allow` when no existing permissions found
+  - Merge strategy: union-dedupe for Claude Code (preserves user customizations), apply-if-missing for OpenCode
+- **`permissions.managed` config field** — Toggle to disable Shaka's permission management (`shaka config set permissions.managed=false`)
+- **`ensureConfigComplete()` utility** — Backfills missing config fields with defaults, called from reload, doctor --fix, and update
+- **Permission mode support** — `InstallConfig.permissionMode` controls behavior: `apply`, `merge`, or `skip`
+
+### Changed
+
+- **`shaka doctor` expanded** — Now checks and reports permission installation status for each provider
+- **`shaka reload` applies permissions** — Reloading now re-applies permission defaults alongside hooks, agents, and skills
+- **`shaka init` applies permissions** — Permission defaults applied during initial setup when `permissions.managed` is true
+
 ## [0.3.0] — 2026-02-12
 
 ### Added
@@ -139,6 +157,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.3.1]: https://github.com/jgmontoya/shaka/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/jgmontoya/shaka/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/jgmontoya/shaka/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jgmontoya/shaka/compare/v0.2.0...v0.2.1
