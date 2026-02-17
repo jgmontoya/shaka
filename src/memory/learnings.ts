@@ -1,10 +1,13 @@
 /**
- * Learnings: parse, render, storage, scoring, undo-and-rewrite, merge,
- * extraction prompts, and consolidation.
+ * Core learnings module: types, parsing, rendering, storage, scoring,
+ * selection, undo-and-rewrite, merge, promotion, extraction prompts,
+ * quality assessment, and filtering.
  *
  * A learning is a reusable insight extracted from session transcripts —
  * corrections, preferences, patterns, or facts worth persisting.
  * Stored in a single markdown file with HTML comment metadata per entry.
+ *
+ * See also: consolidation.ts for duplicate/contradiction detection.
  */
 
 import { mkdir, rename } from "node:fs/promises";
@@ -297,6 +300,36 @@ export function mergeNewLearnings(
   return result;
 }
 
+// --- Shared quality criteria ---
+
+/**
+ * Single source of truth for what makes a learning worth keeping.
+ * Used by both extraction (session-end) and quality assessment (review --prune).
+ */
+
+const QUALITY_GATES = `\
+- NON-OBVIOUS: Would an experienced engineer or LLM get this wrong without being told?
+- RECURRING: Will this exact situation come up again in a future session?
+- BEHAVIOR-CHANGING: Would it change the LLM's default behavior? Vague truisms ("validate early") don't — but project-specific gotchas do, even if narrow.`;
+
+const LOW_QUALITY_PATTERNS = `\
+- General engineering wisdom (DRY, test through public interfaces, validate early, etc.)
+- One-time code review findings — the fix is now in the code, the learning is redundant
+- Architectural descriptions of how a codebase works — these belong in project docs, not learnings
+- Meta-observations about your own reasoning process or approach
+- Process advice (how to plan, how to review, how to evaluate ideas)
+- Patterns that any senior engineer would apply without being told
+- Information already in the project's config files, README, or CLAUDE.md
+- Speculative observations without clear evidence in the transcript
+- One-time debugging steps or decisions that won't recur`;
+
+const HIGH_QUALITY_PATTERNS = `\
+- User corrections where the LLM got something wrong ("no, do X instead of Y")
+- Stated user preferences ("I always want X", "never do Y")
+- Non-obvious project conventions that contradict common defaults
+- Environment gotchas that would cause real bugs (wrong units, surprising config values)
+- Framework/library behaviors that are counterintuitive or version-specific`;
+
 // --- Extraction (session-end) ---
 
 /**
@@ -314,29 +347,15 @@ export function buildExtractionPromptSection(existingTitles: string[]): string {
    persisting for future sessions. Return 0-2 learnings. Most sessions should have 0.
 
 The bar for extraction is HIGH. A learning must pass ALL three tests:
-- NON-OBVIOUS: Would an experienced engineer or LLM get this wrong without being told?
-- RECURRING: Will this exact situation come up again in a future session?
-- SPECIFIC: Would it change the LLM's default behavior? Vague truisms ("validate early") don't — but project-specific gotchas do, even if narrow.
+${QUALITY_GATES}
 
 If a candidate fails ANY test, do not extract it.
 
 Do NOT extract:
-- General engineering wisdom (DRY, test through public interfaces, validate early, etc.)
-- One-time code review findings — the fix is now in the code, the learning is redundant
-- Architectural descriptions of how a codebase works — these belong in project docs, not learnings
-- Meta-observations about your own reasoning process or approach
-- Process advice (how to plan, how to review, how to evaluate ideas)
-- Patterns that any senior engineer would apply without being told
-- Information already in the project's config files, README, or CLAUDE.md
-- Speculative observations without clear evidence in the transcript
-- One-time debugging steps or decisions that won't recur
+${LOW_QUALITY_PATTERNS}
 
 DO extract:
-- User corrections where you got something wrong ("no, do X instead of Y")
-- Stated user preferences ("I always want X", "never do Y")
-- Non-obvious project conventions that contradict common defaults
-- Environment gotchas that would cause real bugs (wrong units, surprising config values)
-- Framework/library behaviors that are counterintuitive or version-specific
+${HIGH_QUALITY_PATTERNS}
 
 If a learning matches an existing entry below, use its EXACT title
 character-for-character (this enables automatic reinforcement tracking):
@@ -404,253 +423,6 @@ export function parseExtractedLearnings(
   return entries;
 }
 
-// --- Consolidation: Pass 1 (Duplicate Detection) ---
-
-export interface DuplicateGroup {
-  readonly keep: number; // 0-based index
-  readonly drop: number[];
-}
-
-/** Build prompt for duplicate detection. Entries numbered [1]...[N]. */
-export function buildDuplicatePrompt(entries: LearningEntry[]): string {
-  const numbered = entries
-    .map((e, i) => `[${i + 1}] (${e.category}) ${e.title}\n${e.body}`)
-    .join("\n\n");
-
-  return `Identify entries that describe the SAME knowledge. For each duplicate group,
-indicate which entry to KEEP (the more specific, actionable one) and which to DROP.
-
-## Entries
-
-${numbered}
-
-## Instructions
-
-For each group of duplicate entries, output one line:
-KEEP [N] DROP [N, N, ...] — reason
-
-If there are no duplicates, output exactly:
-NO DUPLICATES
-
-Do not output entries that have no duplicates.
-Do not invent new entries.
-Do not modify any entry's content.`;
-}
-
-/**
- * Parse KEEP/DROP groups from duplicate detection output.
- * Returns 0-based indices.
- */
-export function parseDuplicateOutput(raw: string): DuplicateGroup[] {
-  if (raw.trim() === "NO DUPLICATES") return [];
-
-  const groups: DuplicateGroup[] = [];
-  const lineRe = /KEEP\s*\[(\d+)\]\s*DROP\s*\[([0-9,\s]+)\]/;
-
-  for (const line of raw.split("\n")) {
-    const match = line.match(lineRe);
-    if (!match) continue;
-
-    const keep = Number.parseInt(match[1] ?? "", 10) - 1;
-    const dropStr = match[2];
-    if (!dropStr || Number.isNaN(keep)) continue;
-
-    const drop = dropStr
-      .split(",")
-      .map((s) => Number.parseInt(s.trim(), 10) - 1)
-      .filter((n) => !Number.isNaN(n));
-
-    if (drop.length > 0) {
-      groups.push({ keep, drop });
-    }
-  }
-
-  return groups;
-}
-
-function isValidIndex(idx: number, length: number): boolean {
-  return idx >= 0 && idx < length;
-}
-
-function absorbDropEntry(
-  keep: { cwds: string[]; exposures: Exposure[]; nonglobal: boolean },
-  drop: LearningEntry,
-): void {
-  keep.cwds = [...new Set([...keep.cwds, ...drop.cwds])];
-  keep.exposures = [...keep.exposures, ...drop.exposures];
-  if (drop.nonglobal) keep.nonglobal = true;
-}
-
-type MutableEntry = ReturnType<typeof toMutable>;
-
-function toMutable(e: LearningEntry) {
-  return { ...e, cwds: [...e.cwds], exposures: [...e.exposures] };
-}
-
-function applyGroup(result: MutableEntry[], group: DuplicateGroup, dropped: Set<number>): void {
-  if (!isValidIndex(group.keep, result.length) || dropped.has(group.keep)) return;
-
-  const keepEntry = result[group.keep];
-  if (!keepEntry) return;
-
-  for (const dropIdx of group.drop) {
-    if (!isValidIndex(dropIdx, result.length) || dropped.has(dropIdx)) continue;
-    if (dropIdx === group.keep) continue;
-
-    const dropEntry = result[dropIdx];
-    if (!dropEntry) continue;
-
-    absorbDropEntry(keepEntry, dropEntry);
-    dropped.add(dropIdx);
-  }
-
-  keepEntry.exposures.sort((a, b) => a.date.localeCompare(b.date));
-}
-
-/**
- * Apply duplicate merges. KEEP entry absorbs metadata from DROP entries.
- * Safe against out-of-range indices and overlapping groups.
- */
-export function applyDuplicateMerges(
-  entries: LearningEntry[],
-  groups: DuplicateGroup[],
-): LearningEntry[] {
-  const result = entries.map(toMutable);
-  const dropped = new Set<number>();
-
-  for (const group of groups) {
-    applyGroup(result, group, dropped);
-  }
-
-  return result.filter((_, i) => !dropped.has(i));
-}
-
-// --- Consolidation: Pass 2 (Contradiction Detection) ---
-
-export interface ContradictionPair {
-  readonly a: number; // 0-based index
-  readonly b: number;
-}
-
-/** Build prompt for contradiction detection. Entries numbered [1]...[M]. */
-export function buildContradictionPrompt(entries: LearningEntry[]): string {
-  const numbered = entries
-    .map((e, i) => `[${i + 1}] (${e.category}) ${e.title}\n${e.body}`)
-    .join("\n\n");
-
-  return `Identify entries that give OPPOSITE advice for the SAME situation.
-Only flag genuine contradictions — entries that cannot both be true simultaneously.
-Do NOT flag entries that are merely different topics.
-
-## Entries
-
-${numbered}
-
-## Instructions
-
-For each contradiction pair, output one line:
-[N] CONTRADICTS [N] — reason
-
-If there are no contradictions, output exactly:
-NO CONTRADICTIONS
-
-Do not modify any entry's content.
-Do not resolve contradictions — just identify them.`;
-}
-
-/**
- * Parse contradiction pairs from detection output.
- * Returns 0-based indices.
- */
-export function parseContradictionOutput(raw: string): ContradictionPair[] {
-  if (raw.trim() === "NO CONTRADICTIONS") return [];
-
-  const pairs: ContradictionPair[] = [];
-  const lineRe = /\[(\d+)\]\s*CONTRADICTS\s*\[(\d+)\]/;
-
-  for (const line of raw.split("\n")) {
-    const match = line.match(lineRe);
-    if (!match) continue;
-
-    const a = Number.parseInt(match[1] ?? "", 10) - 1;
-    const b = Number.parseInt(match[2] ?? "", 10) - 1;
-    if (Number.isNaN(a) || Number.isNaN(b)) continue;
-
-    pairs.push({ a, b });
-  }
-
-  return pairs;
-}
-
-function lastExposureDate(entry: LearningEntry): string {
-  return entry.exposures[entry.exposures.length - 1]?.date ?? "";
-}
-
-function cwdsOverlap(a: string[], b: string[]): string[] {
-  if (a.includes("*") || b.includes("*")) return ["*"];
-  return a.filter((cwd) => b.includes(cwd));
-}
-
-function isNewerEntry(a: LearningEntry, b: LearningEntry): boolean {
-  const dateA = lastExposureDate(a);
-  const dateB = lastExposureDate(b);
-  if (dateA !== dateB) return dateA > dateB;
-  // Tiebreak: more exposures wins, then B wins
-  return a.exposures.length > b.exposures.length;
-}
-
-function narrowCwds(
-  older: MutableEntry,
-  olderIdx: number,
-  overlap: string[],
-  removed: Set<number>,
-): void {
-  if (overlap.includes("*")) {
-    removed.add(olderIdx);
-    return;
-  }
-  const remaining = older.cwds.filter((c) => !overlap.includes(c));
-  if (remaining.length === 0) {
-    removed.add(olderIdx);
-  } else {
-    older.cwds = remaining;
-  }
-}
-
-function resolvePair(result: MutableEntry[], pair: ContradictionPair, removed: Set<number>): void {
-  if (!isValidIndex(pair.a, result.length) || !isValidIndex(pair.b, result.length)) return;
-  if (removed.has(pair.a) || removed.has(pair.b)) return;
-
-  const entryA = result[pair.a];
-  const entryB = result[pair.b];
-  if (!entryA || !entryB) return;
-
-  const overlap = cwdsOverlap(entryA.cwds, entryB.cwds);
-  if (overlap.length === 0) return; // False positive — no-op
-
-  const [older, olderIdx] = isNewerEntry(entryA, entryB) ? [entryB, pair.b] : [entryA, pair.a];
-
-  narrowCwds(older, olderIdx, overlap, removed);
-}
-
-/**
- * Resolve contradictions by CWD overlap. Newer entry wins in overlapping CWDs.
- * Safe against false positives (no overlap = no-op) and hallucinated indices.
- */
-export function resolveContradictions(
-  entries: LearningEntry[],
-  pairs: ContradictionPair[],
-): LearningEntry[] {
-  const result = entries.map(toMutable);
-  const removed = new Set<number>();
-
-  for (const pair of pairs) {
-    resolvePair(result, pair, removed);
-  }
-
-  return result.filter((_, i) => !removed.has(i));
-}
-
 // --- Promotion ---
 
 /** Find entries eligible for CWD-to-global promotion. */
@@ -666,6 +438,99 @@ export function promoteToGlobal(entry: LearningEntry): LearningEntry {
 /** Mark an entry as nonglobal to prevent future promotion prompts. */
 export function markNonglobal(entry: LearningEntry): LearningEntry {
   return { ...entry, nonglobal: true };
+}
+
+// --- Quality Assessment (review --prune) ---
+
+export interface QualityVerdict {
+  readonly index: number; // 0-based
+  readonly reason: string;
+}
+
+/** Build prompt for AI quality assessment. Returns indices of low-quality entries. */
+export function buildQualityAssessmentPrompt(entries: LearningEntry[]): string {
+  const numbered = entries
+    .map(
+      (e, i) =>
+        `[${i + 1}] (${e.category}) ${e.title} [${e.exposures.length} exposure(s)]\n${e.body}`,
+    )
+    .join("\n\n");
+
+  return `Evaluate each learning entry for future-session utility. Flag entries that are LOW QUALITY.
+
+A learning is low quality if it fails ANY of these tests:
+${QUALITY_GATES}
+
+Common low-quality patterns:
+${LOW_QUALITY_PATTERNS}
+
+High-quality entries to KEEP (do NOT flag these):
+${HIGH_QUALITY_PATTERNS}
+
+## Entries
+
+${numbered}
+
+## Instructions
+
+For each LOW QUALITY entry, output one line:
+LOW [N] — reason (one sentence)
+
+If all entries are high quality, output exactly:
+ALL HIGH QUALITY
+
+Do not modify any entry. Only flag entries you are confident are low quality.`;
+}
+
+/** Parse quality assessment output into verdicts. Returns 0-based indices. */
+export function parseQualityAssessmentOutput(raw: string): QualityVerdict[] {
+  if (raw.trim() === "ALL HIGH QUALITY") return [];
+
+  const verdicts: QualityVerdict[] = [];
+  const lineRe = /^LOW\s*\[(\d+)\]\s*—\s*(.+)$/;
+
+  for (const line of raw.split("\n")) {
+    const match = line.trim().match(lineRe);
+    if (!match) continue;
+
+    const index = Number.parseInt(match[1] ?? "", 10) - 1;
+    const reason = match[2]?.trim() ?? "";
+    if (Number.isNaN(index) || !reason) continue;
+
+    verdicts.push({ index, reason });
+  }
+
+  return verdicts;
+}
+
+// --- Filtering ---
+
+/** Filter entries by free-text query. Global entries always included. */
+export function filterLearnings(entries: LearningEntry[], query: string): LearningEntry[] {
+  if (!query || query.toLowerCase() === "all") return entries;
+
+  const q = query.toLowerCase();
+  const isGlobalQuery = q === "global";
+
+  return entries.filter((entry) => {
+    // Global entries always appear in any filter
+    if (entry.cwds.includes("*")) return true;
+
+    // "global" keyword shows only global entries
+    if (isGlobalQuery) return false;
+
+    // Match against CWD paths, title, body
+    const cwdMatch = entry.cwds.some((cwd) => cwd.toLowerCase().includes(q));
+    const titleMatch = entry.title.toLowerCase().includes(q);
+    const bodyMatch = entry.body.toLowerCase().includes(q);
+
+    return cwdMatch || titleMatch || bodyMatch;
+  });
+}
+
+/** Sort entries by exposure count, highest first. */
+export function sortByExposures(entries: LearningEntry[]): LearningEntry[] {
+  return [...entries].sort((a, b) => b.exposures.length - a.exposures.length);
 }
 
 // Re-export for hooks

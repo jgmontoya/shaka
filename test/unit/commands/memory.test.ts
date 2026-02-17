@@ -8,7 +8,7 @@ mock.module("../../../src/inference", () => ({
   inference: async () => ({ success: true, text: "NO DUPLICATES" }),
 }));
 
-import { createMemoryCommand } from "../../../src/commands/memory";
+import { createMemoryCommand } from "../../../src/commands/memory/index";
 import { type LearningEntry, loadLearnings, writeLearnings } from "../../../src/memory/learnings";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {

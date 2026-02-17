@@ -1,27 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import {
-  type ContradictionPair,
-  type DuplicateGroup,
   type LearningEntry,
-  applyDuplicateMerges,
-  buildContradictionPrompt,
-  buildDuplicatePrompt,
   buildExtractionPromptSection,
+  buildQualityAssessmentPrompt,
+  filterLearnings,
   findPromotionCandidates,
   loadLearnings,
   markNonglobal,
   mergeNewLearnings,
-  parseContradictionOutput,
-  parseDuplicateOutput,
   parseExtractedLearnings,
   parseLearnings,
+  parseQualityAssessmentOutput,
   promoteToGlobal,
   renderEntry,
   renderLearnings,
-  resolveContradictions,
   scoreEntry,
   selectLearnings,
+  sortByExposures,
   undoSessionLearnings,
   writeLearnings,
 } from "../../../src/memory/learnings";
@@ -678,310 +674,159 @@ Body.`;
 
 // --- Consolidation: Pass 1 ---
 
-describe("buildDuplicatePrompt", () => {
-  test("numbers entries starting at [1]", () => {
-    const entries = [makeEntry({ title: "A" }), makeEntry({ title: "B" })];
-    const prompt = buildDuplicatePrompt(entries);
-    expect(prompt).toContain("[1]");
-    expect(prompt).toContain("[2]");
-  });
+// --- Quality Assessment ---
 
-  test("includes category and title", () => {
-    const prompt = buildDuplicatePrompt([makeEntry()]);
-    expect(prompt).toContain("(correction)");
-    expect(prompt).toContain("Use Bun.file()");
-  });
-
-  test("does not include CWDs or exposures", () => {
-    const prompt = buildDuplicatePrompt([makeEntry({ cwds: ["/secret/path"] })]);
-    expect(prompt).not.toContain("/secret/path");
-    expect(prompt).not.toContain("a1b2c3d4");
+describe("buildQualityAssessmentPrompt", () => {
+  test("includes numbered entries with exposure counts", () => {
+    const entries = [
+      makeEntry({
+        title: "First",
+        body: "Body one",
+        exposures: [{ date: "2026-02-10", sessionHash: "aaaa0000" }],
+      }),
+      makeEntry({
+        title: "Second",
+        body: "Body two",
+        exposures: [
+          { date: "2026-02-10", sessionHash: "bbbb0000" },
+          { date: "2026-02-11", sessionHash: "cccc0000" },
+        ],
+      }),
+    ];
+    const prompt = buildQualityAssessmentPrompt(entries);
+    expect(prompt).toContain("[1] (correction) First [1 exposure(s)]");
+    expect(prompt).toContain("[2] (correction) Second [2 exposure(s)]");
+    expect(prompt).toContain("LOW [N]");
   });
 });
 
-describe("parseDuplicateOutput", () => {
-  test("parses KEEP/DROP line to 0-indexed", () => {
-    const groups = parseDuplicateOutput("KEEP [1] DROP [3] — Both about Bun.file()");
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.keep).toBe(0);
-    expect(groups[0]?.drop).toEqual([2]);
+describe("parseQualityAssessmentOutput", () => {
+  test("parses LOW verdicts", () => {
+    const raw = `LOW [2] — Generic engineering advice
+LOW [5] — One-time code review finding`;
+    const verdicts = parseQualityAssessmentOutput(raw);
+    expect(verdicts).toHaveLength(2);
+    expect(verdicts[0]).toEqual({ index: 1, reason: "Generic engineering advice" });
+    expect(verdicts[1]).toEqual({ index: 4, reason: "One-time code review finding" });
   });
 
-  test("parses multi-drop", () => {
-    const groups = parseDuplicateOutput("KEEP [1] DROP [3, 7] — duplicates");
-    expect(groups[0]?.drop).toEqual([2, 6]);
+  test("returns empty for ALL HIGH QUALITY", () => {
+    expect(parseQualityAssessmentOutput("ALL HIGH QUALITY")).toEqual([]);
   });
 
-  test("NO DUPLICATES returns empty array", () => {
-    expect(parseDuplicateOutput("NO DUPLICATES")).toEqual([]);
-  });
-
-  test("malformed lines are skipped", () => {
-    const groups = parseDuplicateOutput("This is not a valid line\nKEEP [1] DROP [2] — ok");
-    expect(groups).toHaveLength(1);
-  });
-});
-
-describe("applyDuplicateMerges", () => {
-  test("KEEP absorbs DROP metadata", () => {
-    const entries = [
-      makeEntry({
-        title: "A",
-        cwds: ["/a"],
-        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
-      }),
-      makeEntry({
-        title: "B",
-        cwds: ["/b"],
-        exposures: [{ date: "2026-02-10", sessionHash: "bbbb0000" }],
-      }),
-    ];
-    const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [1] }]);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.cwds).toContain("/a");
-    expect(result[0]?.cwds).toContain("/b");
-    expect(result[0]?.exposures).toHaveLength(2);
-  });
-
-  test("nonglobal preserved if any source had it", () => {
-    const entries = [
-      makeEntry({ title: "A", nonglobal: false }),
-      makeEntry({ title: "B", nonglobal: true }),
-    ];
-    const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [1] }]);
-    expect(result[0]?.nonglobal).toBe(true);
-  });
-
-  test("out-of-range index skips group", () => {
-    const entries = [makeEntry()];
-    const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [99] }]);
-    expect(result).toHaveLength(1);
-  });
-
-  test("result count equals original minus drops", () => {
-    const entries = [
-      makeEntry({ title: "A" }),
-      makeEntry({ title: "B" }),
-      makeEntry({ title: "C" }),
-    ];
-    const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [1, 2] }]);
-    expect(result).toHaveLength(1);
-  });
-
-  test("exposures sorted chronologically after merge", () => {
-    const entries = [
-      makeEntry({
-        title: "A",
-        exposures: [{ date: "2026-02-11", sessionHash: "late0000" }],
-      }),
-      makeEntry({
-        title: "B",
-        exposures: [{ date: "2026-02-09", sessionHash: "early000" }],
-      }),
-    ];
-    const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [1] }]);
-    expect(result[0]?.exposures[0]?.date).toBe("2026-02-09");
-    expect(result[0]?.exposures[1]?.date).toBe("2026-02-11");
+  test("ignores malformed lines", () => {
+    const raw = `LOW [3] — Valid reason
+Not a valid line
+LOW [] — Missing index`;
+    const verdicts = parseQualityAssessmentOutput(raw);
+    expect(verdicts).toHaveLength(1);
+    expect(verdicts[0]?.index).toBe(2);
   });
 });
 
-// --- Consolidation: Pass 2 ---
+// --- filterLearnings ---
 
-describe("buildContradictionPrompt", () => {
-  test("numbers entries starting at [1]", () => {
-    const entries = [makeEntry({ title: "A" }), makeEntry({ title: "B" })];
-    const prompt = buildContradictionPrompt(entries);
-    expect(prompt).toContain("[1]");
-    expect(prompt).toContain("[2]");
+describe("filterLearnings", () => {
+  const entries = [
+    makeEntry({ title: "Path check", cwds: ["/Users/j/Documents/shaka"], body: "Use relative" }),
+    makeEntry({ title: "USD cents", cwds: ["/Users/j/Documents/arbitrage/sasori"], body: "Mills" }),
+    makeEntry({ title: "Global rule", cwds: ["*"], body: "Always do this" }),
+    makeEntry({
+      title: "Whitenoise pattern",
+      cwds: ["/Users/j/Documents/whitenoise/whitenoise-rs"],
+      body: "Interior mutability",
+    }),
+  ];
+
+  test("empty query returns all", () => {
+    expect(filterLearnings(entries, "")).toHaveLength(4);
   });
 
-  test("does not include CWDs or exposures", () => {
-    const prompt = buildContradictionPrompt([makeEntry({ cwds: ["/secret"] })]);
-    expect(prompt).not.toContain("/secret");
-  });
-});
-
-describe("parseContradictionOutput", () => {
-  test("parses contradiction pair to 0-indexed", () => {
-    const pairs = parseContradictionOutput("[2] CONTRADICTS [3] — opposite advice");
-    expect(pairs).toHaveLength(1);
-    expect(pairs[0]?.a).toBe(1);
-    expect(pairs[0]?.b).toBe(2);
+  test("'all' returns all", () => {
+    expect(filterLearnings(entries, "all")).toHaveLength(4);
   });
 
-  test("NO CONTRADICTIONS returns empty array", () => {
-    expect(parseContradictionOutput("NO CONTRADICTIONS")).toEqual([]);
-  });
-
-  test("malformed lines are skipped", () => {
-    const pairs = parseContradictionOutput("garbage\n[1] CONTRADICTS [2] — ok");
-    expect(pairs).toHaveLength(1);
-  });
-});
-
-describe("resolveContradictions", () => {
-  test("partial CWD overlap: older loses overlapping CWDs", () => {
-    const entries = [
-      makeEntry({
-        title: "Use tabs",
-        cwds: ["/shaka", "/myapp"],
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
-      }),
-      makeEntry({
-        title: "Use spaces",
-        cwds: ["/myapp", "/tools"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-
+  test("filters by CWD path substring", () => {
+    const result = filterLearnings(entries, "sasori");
+    // sasori entry + global entry
     expect(result).toHaveLength(2);
-    expect(result[0]?.cwds).toEqual(["/shaka"]);
-    expect(result[1]?.cwds).toEqual(["/myapp", "/tools"]);
+    expect(result.map((e) => e.title)).toContain("USD cents");
+    expect(result.map((e) => e.title)).toContain("Global rule");
   });
 
-  test("full CWD overlap: older removed entirely", () => {
-    const entries = [
-      makeEntry({
-        title: "Use tabs",
-        cwds: ["/shaka"],
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
-      }),
-      makeEntry({
-        title: "Use spaces",
-        cwds: ["/shaka"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
+  test("global entries always included in project filter", () => {
+    const result = filterLearnings(entries, "shaka");
+    expect(result.map((e) => e.title)).toContain("Global rule");
+    expect(result.map((e) => e.title)).toContain("Path check");
+  });
+
+  test("'global' keyword shows only global entries", () => {
+    const result = filterLearnings(entries, "global");
     expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("Use spaces");
+    expect(result[0]?.title).toBe("Global rule");
   });
 
-  test("global vs specific (specific newer): global removed", () => {
-    const entries = [
-      makeEntry({
-        title: "Always semicolons",
-        cwds: ["*"],
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
-      }),
-      makeEntry({
-        title: "No semicolons",
-        cwds: ["/shaka"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("No semicolons");
+  test("matches title text", () => {
+    const result = filterLearnings(entries, "whitenoise");
+    expect(result).toHaveLength(2); // whitenoise + global
+    expect(result.map((e) => e.title)).toContain("Whitenoise pattern");
   });
 
-  test("global vs specific (global newer): specific removed", () => {
-    const entries = [
-      makeEntry({
-        title: "No semicolons",
-        cwds: ["/shaka"],
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
-      }),
-      makeEntry({
-        title: "Always semicolons",
-        cwds: ["*"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("Always semicolons");
+  test("matches body text", () => {
+    const result = filterLearnings(entries, "mutability");
+    expect(result).toHaveLength(2); // whitenoise (body match) + global
   });
 
-  test("global vs global: older removed", () => {
-    const entries = [
-      makeEntry({
-        title: "Tabs everywhere",
-        cwds: ["*"],
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
-      }),
-      makeEntry({
-        title: "Spaces everywhere",
-        cwds: ["*"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("Spaces everywhere");
-  });
-
-  test("no CWD overlap: both unchanged (false positive safe)", () => {
-    const entries = [
-      makeEntry({
-        title: "Use Bun",
-        cwds: ["/shaka"],
-        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
-      }),
-      makeEntry({
-        title: "Use Result",
-        cwds: ["/tools"],
-        exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
-      }),
-    ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
+  test("case insensitive", () => {
+    const result = filterLearnings(entries, "SASORI");
     expect(result).toHaveLength(2);
   });
 
-  test("out-of-range index: pair skipped", () => {
-    const entries = [makeEntry()];
-    const result = resolveContradictions(entries, [{ a: 0, b: 99 }]);
+  test("no matches returns only global", () => {
+    const result = filterLearnings(entries, "nonexistent");
     expect(result).toHaveLength(1);
+    expect(result[0]?.title).toBe("Global rule");
   });
+});
 
-  test("preserves original entry ordering", () => {
-    const entries = [
-      makeEntry({ title: "First", cwds: ["/a"] }),
-      makeEntry({ title: "Second", cwds: ["/b"] }),
-      makeEntry({ title: "Third", cwds: ["/c"] }),
-    ];
-    const result = resolveContradictions(entries, []);
-    expect(result[0]?.title).toBe("First");
-    expect(result[1]?.title).toBe("Second");
-    expect(result[2]?.title).toBe("Third");
-  });
+// --- sortByExposures ---
 
-  test("nonglobal preserved on surviving entries", () => {
+describe("sortByExposures", () => {
+  test("sorts by exposure count descending", () => {
     const entries = [
+      makeEntry({ title: "One", exposures: [{ date: "2026-02-10", sessionHash: "aaaa0000" }] }),
       makeEntry({
-        title: "Use tabs",
-        cwds: ["/shaka", "/myapp"],
-        nonglobal: true,
-        exposures: [{ date: "2026-02-09", sessionHash: "old00000" }],
+        title: "Three",
+        exposures: [
+          { date: "2026-02-10", sessionHash: "bbbb0000" },
+          { date: "2026-02-11", sessionHash: "cccc0000" },
+          { date: "2026-02-12", sessionHash: "dddd0000" },
+        ],
       }),
       makeEntry({
-        title: "Use spaces",
-        cwds: ["/myapp"],
-        exposures: [{ date: "2026-02-11", sessionHash: "new00000" }],
+        title: "Two",
+        exposures: [
+          { date: "2026-02-10", sessionHash: "eeee0000" },
+          { date: "2026-02-11", sessionHash: "ffff0000" },
+        ],
       }),
     ];
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-    expect(result[0]?.nonglobal).toBe(true);
+    const sorted = sortByExposures(entries);
+    expect(sorted.map((e) => e.title)).toEqual(["Three", "Two", "One"]);
   });
 
-  test("same-date tiebreak: more exposures wins, then B wins", () => {
+  test("does not mutate original array", () => {
     const entries = [
+      makeEntry({ title: "B", exposures: [{ date: "2026-02-10", sessionHash: "aaaa0000" }] }),
       makeEntry({
         title: "A",
-        cwds: ["/x"],
-        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
-      }),
-      makeEntry({
-        title: "B",
-        cwds: ["/x"],
-        exposures: [{ date: "2026-02-09", sessionHash: "bbbb0000" }],
+        exposures: [
+          { date: "2026-02-10", sessionHash: "bbbb0000" },
+          { date: "2026-02-11", sessionHash: "cccc0000" },
+        ],
       }),
     ];
-    // Same date, same exposure count — B wins (A is removed)
-    const result = resolveContradictions(entries, [{ a: 0, b: 1 }]);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.title).toBe("B");
+    sortByExposures(entries);
+    expect(entries[0]?.title).toBe("B");
   });
 });
