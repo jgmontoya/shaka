@@ -13,6 +13,7 @@ import {
 } from "../domain/config";
 import { getAllProviders } from "../providers/registry";
 import type { InstallationStatus, ProviderConfigurer, ProviderName } from "../providers/types";
+import { measureContext } from "./context-measurement";
 import { printOpencodeSummarizationHint } from "./hints";
 
 async function checkShakaHome(shakaHome: string): Promise<boolean> {
@@ -270,7 +271,13 @@ export function createDoctorCommand(): Command {
   return new Command("doctor")
     .description("Check Shaka installation health")
     .option("--fix", "Auto-fix config mismatches")
+    .option("--context", "Measure context injection overhead")
     .action(async (options) => {
+      if (options.context) {
+        await measureContext();
+        return;
+      }
+
       console.log("Shaka Doctor\n");
       console.log("Checking system health...\n");
 

@@ -135,9 +135,7 @@ describe("Rollups", () => {
     });
 
     test("handles Windows backslashes", () => {
-      expect(projectSlug("C:\\Users\\j\\Documents\\shaka")).toBe(
-        "C-Users-j-Documents-shaka",
-      );
+      expect(projectSlug("C:\\Users\\j\\Documents\\shaka")).toBe("C-Users-j-Documents-shaka");
     });
 
     test("strips Windows drive colon", () => {
@@ -145,9 +143,7 @@ describe("Rollups", () => {
     });
 
     test("handles mixed separators", () => {
-      expect(projectSlug("C:\\Users/j\\Documents/shaka")).toBe(
-        "C-Users-j-Documents-shaka",
-      );
+      expect(projectSlug("C:\\Users/j\\Documents/shaka")).toBe("C-Users-j-Documents-shaka");
     });
   });
 

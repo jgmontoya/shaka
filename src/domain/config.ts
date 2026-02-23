@@ -5,8 +5,9 @@
  * This file defines the TypeScript interface and validation.
  */
 
+import { readlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { type Result, err, ok } from "./result";
 
 export interface ShakaConfig {
@@ -262,4 +263,38 @@ export async function ensureConfigComplete(shakaHome: string): Promise<boolean> 
   }
 
   return changed;
+}
+
+/**
+ * Resolve the defaults/user/ directory from the system/ symlink.
+ *
+ * SHAKA_HOME/system is a symlink to <repo>/defaults/system.
+ * The user templates live at <repo>/defaults/user/ — one level up
+ * from the symlink target.
+ */
+export async function resolveDefaultsUserDir(shakaHome: string): Promise<string | null> {
+  try {
+    const systemTarget = await readlink(join(shakaHome, "system"));
+    return join(resolve(shakaHome, systemTarget), "..", "user");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Check whether a user file is identical to its default template.
+ *
+ * Returns true if the file at `defaultsUserDir/filename` exists and
+ * its trimmed content matches the given content verbatim.
+ */
+export async function isUnmodifiedTemplate(
+  content: string,
+  filename: string,
+  defaultsUserDir: string,
+): Promise<boolean> {
+  const templateFile = Bun.file(join(defaultsUserDir, filename));
+  if (!(await templateFile.exists())) return false;
+
+  const defaultContent = await templateFile.text();
+  return content.trim() === defaultContent.trim();
 }

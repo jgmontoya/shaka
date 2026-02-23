@@ -119,6 +119,39 @@ export function selectRecentSummaries(
   return selected;
 }
 
+/**
+ * Render selected session summaries into a markdown section, respecting a character budget.
+ *
+ * Loads each summary from disk, renders it, and accumulates sections until the
+ * budget is exhausted. Returns the full "## Recent Sessions" section, or empty
+ * string if no summaries fit.
+ */
+export async function renderSessionSection(
+  selected: SummaryIndex[],
+  budget: number,
+): Promise<string> {
+  if (selected.length === 0) return "";
+
+  const sections: string[] = [];
+  let totalChars = 0;
+
+  for (const index of selected) {
+    const summary = await loadSummary(index.filePath);
+    if (!summary) continue;
+
+    const section = `### ${summary.title}\n*${summary.metadata.date} | ${summary.metadata.provider}*\n\n${summary.body}`;
+
+    if (totalChars + section.length > budget && sections.length > 0) break;
+
+    sections.push(section);
+    totalChars += section.length;
+  }
+
+  if (sections.length === 0) return "";
+
+  return `## Recent Sessions\n\n${sections.join("\n\n---\n\n")}`;
+}
+
 // --- Helpers ---
 
 function serializeSummary(summary: SessionSummary): string {

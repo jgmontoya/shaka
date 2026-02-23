@@ -26,6 +26,8 @@ export {
   getAssistantName,
   getPrincipalName,
   getSummarizationModel,
+  resolveDefaultsUserDir,
+  isUnmodifiedTemplate,
 } from "./domain/config";
 
 export {
@@ -81,6 +83,7 @@ export {
   listSummaries,
   loadSummary,
   selectRecentSummaries,
+  renderSessionSection,
 } from "./memory/storage";
 
 export { type SearchFilter, type SearchResult, searchMemory } from "./memory/search";

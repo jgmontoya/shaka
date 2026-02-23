@@ -15,9 +15,9 @@ describe("session-start hook", () => {
     expect(source).toContain("selectRecentSummaries");
   });
 
-  test("source file includes Recent Sessions header", async () => {
+  test("source file uses shared renderSessionSection", async () => {
     const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    expect(source).toContain("Recent Sessions");
+    expect(source).toContain("renderSessionSection");
   });
 
   test("source file includes memory size cap", async () => {

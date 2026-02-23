@@ -11,12 +11,14 @@ import {
   getAssistantName,
   getPrincipalName,
   isSubagent,
+  isUnmodifiedTemplate,
   listSummaries,
   loadConfig,
   loadLearnings,
   loadShakaFile,
-  loadSummary,
   renderEntry,
+  renderSessionSection,
+  resolveDefaultsUserDir,
   resolveShakaHome,
   selectLearnings,
   loadRollups,
@@ -35,51 +37,6 @@ const DEFAULT_LEARNINGS_BUDGET = 6000;
 
 /** Default recency window for learnings scoring */
 const DEFAULT_RECENCY_WINDOW_DAYS = 90;
-
-/**
- * Resolve the defaults/user/ directory from the system/ symlink.
- *
- * SHAKA_HOME/system is always a symlink to <repo>/defaults/system.
- * The user templates live at <repo>/defaults/user/ — one level up
- * from the symlink target.
- *
- * Returns null if the symlink can't be resolved (shouldn't happen
- * in a properly initialized installation).
- */
-async function resolveDefaultsUserDir(shakaHome: string): Promise<string | null> {
-  try {
-    const { readlink } = await import("node:fs/promises");
-    const systemTarget = await readlink(join(shakaHome, "system"));
-    // systemTarget is e.g. /path/to/shaka/defaults/system
-    // defaults/user/ is at ../user relative to that
-    return join(systemTarget, "..", "user");
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Check whether a user file is identical to its default plain-markdown template.
- *
- * Only compares against direct .md files in defaults/user/ (goals.md, etc.).
- * Files sourced from .eta templates (user.md, assistant.md) are always included
- * because they contain configured identity info that's useful as context.
- *
- * Returns true if the file matches its template verbatim (i.e. unmodified).
- * Returns false if no template exists or the content differs.
- */
-async function isUnmodifiedTemplate(
-  content: string,
-  filename: string,
-  defaultsUserDir: string,
-): Promise<boolean> {
-  const templatePath = join(defaultsUserDir, filename);
-  const templateFile = Bun.file(templatePath);
-  if (!(await templateFile.exists())) return false;
-
-  const defaultContent = await templateFile.text();
-  return content.trim() === defaultContent.trim();
-}
 
 /**
  * Load all markdown files from user/ directory.
@@ -148,31 +105,8 @@ async function loadRecentSessions(shakaHome: string, budget: number): Promise<st
 
   try {
     const allSummaries = await listSummaries(memoryDir);
-    if (allSummaries.length === 0) return "";
-
     const selected = selectRecentSummaries(allSummaries, cwd);
-    if (selected.length === 0) return "";
-
-    const sections: string[] = [];
-    let totalChars = 0;
-
-    for (const index of selected) {
-      const summary = await loadSummary(index.filePath);
-      if (!summary) continue;
-
-      const section = `### ${summary.title}\n*${summary.metadata.date} | ${summary.metadata.provider}*\n\n${summary.body}`;
-
-      if (totalChars + section.length > budget && sections.length > 0) {
-        break;
-      }
-
-      sections.push(section);
-      totalChars += section.length;
-    }
-
-    if (sections.length === 0) return "";
-
-    return `## Recent Sessions\n\n${sections.join("\n\n---\n\n")}`;
+    return await renderSessionSection(selected, budget);
   } catch {
     // Memory directory doesn't exist or can't be read — that's fine
     return "";
