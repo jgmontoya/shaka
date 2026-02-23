@@ -492,11 +492,15 @@ console.log("format");
       const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
 
       await installWithCommands(configurer);
-      expect(await Bun.file(join(projectDir, ".opencode", "commands", "deploy.md")).exists()).toBe(true);
+      expect(await Bun.file(join(projectDir, ".opencode", "commands", "deploy.md")).exists()).toBe(
+        true,
+      );
 
       await configurer.uninstall({ shakaHome: testShakaHome });
 
-      expect(await Bun.file(join(projectDir, ".opencode", "commands", "deploy.md")).exists()).toBe(false);
+      expect(await Bun.file(join(projectDir, ".opencode", "commands", "deploy.md")).exists()).toBe(
+        false,
+      );
     });
 
     test("applies provider overrides during compilation", async () => {

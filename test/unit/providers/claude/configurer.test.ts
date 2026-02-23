@@ -680,11 +680,15 @@ console.log("custom");
       const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
 
       await installWithCommands(configurer);
-      expect(await Bun.file(join(projectDir, ".claude", "skills", "deploy", "SKILL.md")).exists()).toBe(true);
+      expect(
+        await Bun.file(join(projectDir, ".claude", "skills", "deploy", "SKILL.md")).exists(),
+      ).toBe(true);
 
       await configurer.uninstall({ shakaHome: testShakaHome });
 
-      expect(await Bun.file(join(projectDir, ".claude", "skills", "deploy", "SKILL.md")).exists()).toBe(false);
+      expect(
+        await Bun.file(join(projectDir, ".claude", "skills", "deploy", "SKILL.md")).exists(),
+      ).toBe(false);
     });
 
     test("applies provider overrides during compilation", async () => {

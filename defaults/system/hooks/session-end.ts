@@ -35,6 +35,7 @@ import {
   resolveShakaHome,
   truncateTranscript,
   undoSessionLearnings,
+  updateRollups,
   writeLearnings,
   writeSummary,
 } from "shaka";
@@ -285,6 +286,14 @@ async function worker(tmpPath: string) {
   t = performance.now();
   await extractAndWriteLearnings(rawOutput, metadata, memoryDir);
   mark("Learnings extraction", t);
+
+  // Update rolling summaries (fail-open: session summary already written)
+  t = performance.now();
+  const summaryText = `### ${summary.title}\n\n${summary.body}`;
+  await updateRollups(memoryDir, summaryText, cwd, model).catch((err: unknown) => {
+    console.error(`Rollups update failed: ${err instanceof Error ? err.message : String(err)}`);
+  });
+  mark("Rollups update", t);
 
   mark("Session-end worker total", t0, provider);
 

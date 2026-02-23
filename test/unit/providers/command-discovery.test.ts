@@ -189,10 +189,7 @@ Deploy to $1`,
   });
 
   test("ignores non-.md files", async () => {
-    await Bun.write(
-      join(testHome, "system", "commands", "readme.txt"),
-      "not a command",
-    );
+    await Bun.write(join(testHome, "system", "commands", "readme.txt"), "not a command");
     await Bun.write(
       join(testHome, "system", "commands", "commit.md"),
       "---\ndescription: Commit\n---\nBody",
@@ -317,7 +314,7 @@ Deploy to $1`,
   test("cwd: bare ~ → [homedir]", async () => {
     await Bun.write(
       join(testHome, "system", "commands", "home.md"),
-      "---\ndescription: Home\ncwd: \"~\"\n---\nBody",
+      '---\ndescription: Home\ncwd: "~"\n---\nBody',
     );
 
     const { commands } = await discoverCommands(testHome);

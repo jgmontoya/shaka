@@ -86,6 +86,25 @@ export {
 export { type SearchFilter, type SearchResult, searchMemory } from "./memory/search";
 
 export {
+  type Rollup,
+  type RollupPeriod,
+  projectSlug,
+  projectDir,
+  needsRollover,
+  parseRollupFile,
+  serializeRollup,
+  buildDailyUpdatePrompt,
+  buildFoldPrompt,
+  gatherTodaySessions,
+  updateRollups,
+  loadRollups,
+  todayDateString,
+  isoWeekString,
+  currentIsoWeek,
+  currentMonth,
+} from "./memory/rollups";
+
+export {
   type LearningEntry,
   type LearningCategory,
   type Exposure,

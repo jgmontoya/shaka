@@ -19,6 +19,7 @@ import {
   renderEntry,
   resolveShakaHome,
   selectLearnings,
+  loadRollups,
   selectRecentSummaries,
 } from "shaka";
 
@@ -178,6 +179,20 @@ async function loadRecentSessions(shakaHome: string, budget: number): Promise<st
   }
 }
 
+/**
+ * Load rolling summaries for context.
+ * Returns a formatted markdown section, or empty string if none available.
+ */
+async function loadRollingSummaries(shakaHome: string): Promise<string> {
+  const memoryDir = join(shakaHome, "memory");
+  const cwd = process.cwd();
+  try {
+    return await loadRollups(memoryDir, cwd);
+  } catch {
+    return "";
+  }
+}
+
 function elapsedMs(start: number): number {
   return Math.round(performance.now() - start);
 }
@@ -239,12 +254,26 @@ async function main() {
 
   // Load learnings (between user files and sessions — stable knowledge first)
   t = performance.now();
-  const learningsSection = await loadLearnedKnowledge(shakaHome, learningsBudget, recencyWindowDays);
+  const learningsSection = await loadLearnedKnowledge(
+    shakaHome,
+    learningsBudget,
+    recencyWindowDays,
+  );
   if (learningsSection) {
     contextParts.push(learningsSection);
     mark("Loaded learnings", t, `${learningsSection.length} chars`);
   } else {
     mark("No learnings to load", t);
+  }
+
+  // Load rolling summaries (compressed history between learnings and sessions)
+  t = performance.now();
+  const rollupsSection = await loadRollingSummaries(shakaHome);
+  if (rollupsSection) {
+    contextParts.push(rollupsSection);
+    mark("Loaded rolling summaries", t, `${rollupsSection.length} chars`);
+  } else {
+    mark("No rolling summaries to load", t);
   }
 
   // Load recent session summaries
