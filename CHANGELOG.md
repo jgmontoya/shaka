@@ -4,6 +4,19 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.1] — 2026-02-23
+
+### Added
+
+- **Rolling summaries (rollups)** — Daily, weekly, and monthly session summary rollups provide compressed institutional knowledge per project
+  - Daily rollups accumulate session summaries, weekly folds completed days, monthly folds completed weeks
+  - Per-project storage under `memory/rollups/` with YAML frontmatter + markdown body
+  - AI-powered summarization for folding lower-period rollups into higher periods
+  - Directory-based locking with stale-lock recovery for concurrency safety
+  - Atomic writes via temp+rename pattern
+  - Fail-open integration: rollup failures never block session-end processing
+  - Rolling summaries loaded into session-start context between learnings and recent sessions
+
 ## [0.4.0] — 2026-02-21
 
 ### Added
@@ -209,6 +222,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.4.1]: https://github.com/jgmontoya/shaka/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jgmontoya/shaka/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/jgmontoya/shaka/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/jgmontoya/shaka/compare/v0.3.1...v0.3.2

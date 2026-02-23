@@ -340,6 +340,7 @@ Persistent context that survives sessions. The memory system captures what happe
 - **Session summarization** — The `session-end` hook parses transcripts (Claude Code JSONL or opencode JSON) and generates structured summaries using AI inference
 - **Summary storage** — Summaries are stored as markdown in `memory/summaries/` with a JSON index for fast lookup
 - **Session context** — The `session-start` hook loads recent summaries into context so the AI knows what you worked on recently
+- **Rolling summaries** — Daily, weekly, and monthly rollups compress session history into persistent per-project digests, loaded into context at session start
 - **Search** — `shaka memory search <query>` searches summaries by keyword; also available as an MCP tool for in-session search
 - **Review** — `shaka memory review` provides an interactive TUI for browsing, filtering, and deleting learnings. `--prune` adds AI-assisted quality scoring to flag low-value entries
 - **Consolidation** — `shaka memory consolidate` merges duplicate learnings and resolves contradictions
