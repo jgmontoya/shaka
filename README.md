@@ -56,14 +56,15 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 
 ```text
 ~/.config/shaka/              # XDG-compliant, provider-agnostic
-├── user/                     # YOUR content (flat, portable, backed up)
+├── user/                     # YOUR content (portable, backed up)
 │   ├── user.md               # Who you are (name, timezone, handles)
 │   ├── assistant.md          # How your assistant behaves
 │   ├── missions.md           # High-level purpose (TELOS-lite)
 │   ├── goals.md              # Specific objectives
 │   ├── projects.md           # Active projects and paths
-│   └── tech-stack.md         # Preferred technologies
-│   └── ...                   # Add more files as needed, these are auto-loaded at session start
+│   ├── tech-stack.md         # Preferred technologies
+│   └── <your-folders>/       # Subdirectories are NOT auto-loaded
+│       └── ...
 │
 ├── memory/                   # What Shaka LEARNS about you (dynamic)
 │   └── ...                   # Security logs, patterns (search TBD)
@@ -84,7 +85,19 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 └── config.json               # Configuration file
 ```
 
-> **User file loading:** All `.md` files directly under `user/` are automatically loaded into the AI's context at session start by the [`session-start`](#hooks) hook. Files in subdirectories (e.g., `user/projects/details.md`) are **not** auto-loaded — they must be explicitly referenced so the model can load them on demand.
+> **User file loading:** All `.md` files directly under `user/` are automatically injected into the AI's context at session start. **Keep this level lean** — only files that are useful in every session (identity, preferences, goals). For detailed reference material (style guides, API docs, project specifics), create subdirectories. Subdirectory files are **not** auto-loaded — the model can read them on demand when relevant.
+>
+> **Index pattern:** If you add subdirectories, create a `user/index.md` to help the model discover them. Since it lives at the top level, it gets auto-loaded and acts as a routing guide:
+>
+> ```markdown
+> # User Context Index
+>
+> ## reference/
+> Detailed style guides and coding conventions. Read when making style or formatting decisions.
+>
+> ## api-docs/
+> Internal API documentation. Read when integrating with or building against our services.
+> ```
 
 ### Key Principle: Separation of Concerns
 
