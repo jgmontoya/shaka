@@ -4,6 +4,18 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.2] — 2026-02-23
+
+### Added
+
+- **`shaka doctor --context`** — Measure context injection overhead across all hooks
+  - Per-component breakdown: reasoning framework, user files, learnings, rolling summaries, session summaries, separators
+  - Budget utilization bars for learnings and sessions with actual config values
+  - Format reminder measurement for FULL/ITERATION/MINIMAL depth modes
+  - Session start composition breakdown with character counts and token estimates
+  - Unmodified user template detection (skips default templates from injection totals)
+  - Shared `renderSessionSection` and `resolveDefaultsUserDir` between hook and measurement for accurate results
+
 ## [0.4.1] — 2026-02-23
 
 ### Added
@@ -222,6 +234,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.4.2]: https://github.com/jgmontoya/shaka/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jgmontoya/shaka/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jgmontoya/shaka/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/jgmontoya/shaka/compare/v0.3.2...v0.3.3
