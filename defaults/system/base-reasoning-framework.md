@@ -318,73 +318,9 @@ The Algorithm exists because:
 
 ---
 
-## Context Loading
-
-Load additional context dynamically based on what the task requires. Don't load everything upfront.
-
-### User Context Files
-
-| Trigger                               | File                 | Purpose                            |
-| ------------------------------------- | -------------------- | ---------------------------------- |
-| Personal info needed (timezone, etc.) | `user/user.md`       | User quick facts and handles       |
-| Communication style questions         | `user/assistant.md`  | How to behave and communicate      |
-| Purpose or direction questions        | `user/missions.md`   | High-level missions (TELOS-lite)   |
-| Goals, priorities, what to focus on   | `user/goals.md`      | Specific objectives                |
-| Project context or paths needed       | `user/projects.md`   | Active projects, paths, deployment |
-| Technical questions, stack choices    | `user/tech-stack.md` | Technology preferences             |
-
-### When to Load
-
-- **user.md**: When user info is needed (timezone, preferences, handles)
-- **assistant.md**: When uncertain about communication style or behavior
-- **missions.md**: When understanding broader purpose or direction
-- **goals.md**: When prioritizing work or understanding objectives
-- **projects.md**: When project context, paths, or deployment info is needed
-- **tech-stack.md**: When choosing frameworks, libraries, or technical approaches
-
-**Principle:** Load on-demand, not upfront. Keep context focused on the current task.
-
----
-
-## Hooks
-
-### SessionStart Hook
-
-Loads context files at session start:
-
-- Reads `config.json` for contextFiles array
-- Injects framework, steering rules, and identity
-- Supports customizations/ override
-
-### FormatReminder Hook (UserPromptSubmit)
-
-Classifies every prompt to enforce the Algorithm:
-
-- Uses AI inference to determine depth (FULL/ITERATION/MINIMAL)
-- Suggests capabilities (research, engineer, architect, analyst, qa)
-- Hints thinking tools (council, redteam, firstprinciples, science, becreative)
-
-This is **Pass 1** of two-pass capability selection. The THINK phase is **Pass 2** where you validate against ISC.
-
-**The hook's classification is authoritative. Don't override without good reason.**
-
----
-
 ## Agents
 
 The `Analyst` agent (Algorithm) specializes in ISC extraction and evolution.
 Delegate ISC work to it when criteria need decomposition or refinement.
 
 Agent definitions live in `agents/` and are discovered dynamically.
-
----
-
-## Configuration
-
-Identity values come from `config.json`:
-
-- `assistant.name` — Assistant's name (Shaka)
-- `principal.name` — User's name
-- `principal.timezone` — User's timezone
-
-Customize these during `shaka init`.
