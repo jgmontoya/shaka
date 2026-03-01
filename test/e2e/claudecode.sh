@@ -322,7 +322,7 @@ fi
 section "Learnings"
 echo "  Running: claude -p \"<correction prompt>\""
 
-LEARN_OUTPUT=$(claude -p "Correction: always use bun, never npm. Acknowledge briefly." --allowedTools "" 2>&1) || true
+claude -p "Correction: ALWAYS use bun, NEVER npm. Remember this, it will apply in the future. Acknowledge briefly." --allowedTools "" >/dev/null 2>&1 || true
 
 LEARNINGS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/learnings.md"
 

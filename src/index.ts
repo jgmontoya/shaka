@@ -157,6 +157,26 @@ export {
   emptyPatternsConfig,
 } from "./security";
 
+export { expandTilde, normalizeCwd } from "./domain/paths";
+
+export type {
+  Workflow,
+  WorkflowStep,
+  CommandStep,
+  PromptStep,
+  RunStep,
+  StepResult,
+  RunMetadata,
+} from "./domain/workflow";
+
+export { discoverWorkflows } from "./providers/workflow-discovery";
+
+export {
+  type AgentExecutionOptions,
+  type AgentExecutionResult,
+  runAgentStep,
+} from "./domain/agent-execution";
+
 // Import commands and version
 import { createCommandsCommand } from "./commands/commands";
 import { createConfigCommand } from "./commands/config";
@@ -165,6 +185,7 @@ import { createInitCommand } from "./commands/init";
 import { createMcpCommand } from "./commands/mcp";
 import { createMemoryCommand } from "./commands/memory";
 import { createReloadCommand } from "./commands/reload";
+import { createRunCommand } from "./commands/run";
 import { createUninstallCommand } from "./commands/uninstall";
 import { createUpdateCommand } from "./commands/update";
 import { getCurrentVersion } from "./domain/version";
@@ -184,6 +205,7 @@ if (import.meta.main) {
   program.addCommand(createMcpCommand());
   program.addCommand(createMemoryCommand());
   program.addCommand(createCommandsCommand());
+  program.addCommand(createRunCommand());
 
   program.parse(process.argv);
 }

@@ -4,6 +4,23 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-03-01
+
+### Added
+
+- **Workflows** — Multi-step agentic pipelines via `shaka run <workflow> [input...]`
+  - Three step types: `command` (slash commands), `prompt` (inline AI instructions), `run` (shell scripts)
+  - Template variables for output handoff between steps: `{input}`, `{previous.output}`, `{previous.exitCode}`, `{steps.<name>.output}`, `{steps.<name>.exitCode}`
+  - Optional git state management with `state: "git-branch"` — auto-creates branch and commits after each step that produces changes
+  - Run artifacts and metadata stored in `~/.config/shaka/runs/<workflow>-<runId>/`
+  - Workflows defined as `.yaml` files — pure configuration, no frontmatter ceremony
+  - Workflow discovery from `system/workflows/` and `customizations/workflows/` with override semantics
+  - CWD scoping for project-specific workflows
+  - Step and workflow name validation (lowercase alphanumeric with hyphens, max 64 chars)
+  - Provider-agnostic agent execution for AI steps (tools enabled, hooks active)
+- **Shipped workflow: `review-and-fix`** — Run a code review then critically assess and fix valid issues
+- **Shared path utilities** — Extracted `expandTilde()` and `normalizeCwd()` to `src/domain/paths.ts` for reuse by both command and workflow discovery
+
 ## [0.4.2] — 2026-02-23
 
 ### Added
@@ -234,6 +251,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.5.0]: https://github.com/jgmontoya/shaka/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/jgmontoya/shaka/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jgmontoya/shaka/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jgmontoya/shaka/compare/v0.3.3...v0.4.0

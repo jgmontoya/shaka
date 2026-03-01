@@ -1,0 +1,19 @@
+description: Review code changes and fix issues found
+steps:
+  - name: review
+    command: /code-review
+  - name: fix
+    prompt: |
+      Read the code review file in reviews/review.md that was just generated.
+
+      For each comment and suggestion in the review, do the following:
+
+      1. Assess the comment for accuracy and relevancy. Validate any assumptions it makes — don't blindly accept a review comment as correct.
+      2. If the comment identifies a real issue or a genuinely valuable improvement, fix it.
+      3. If the comment is wrong, based on a misunderstanding, or would introduce unnecessary complexity, skip it.
+
+      Think critically and objectively. Our goal is to write good, correct software. Follow clean code and clean architecture best practices as well as idiomatic language standards and conventions. Be careful not to introduce complexity unless it provides clear value.
+
+      We aim to write code that is a pleasure to read. We care about how code reads, how code looks, and how code makes you feel when you read it. We value simplicity. We deliberately set a high bar for every code change.
+
+      After making fixes, delete the reviews/ directory — the review has been addressed and the file is no longer needed.

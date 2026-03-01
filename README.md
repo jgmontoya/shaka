@@ -78,6 +78,7 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 │   ├── base-reasoning-framework.md   # Default reasoning framework
 │   ├── hooks/                # Event-driven automation
 │   ├── commands/             # Slash commands (markdown)
+│   ├── workflows/            # Multi-step pipelines (yaml)
 │   ├── skills/               # Reusable playbooks (markdown)
 │   ├── tools/                # Deterministic operations
 │   └── agents/               # Specialized personas (markdown)
@@ -142,6 +143,7 @@ shaka commands list            # Show all commands and status
 shaka commands new <name>     # Create a new command
 shaka commands disable <name> # Disable a command
 shaka commands enable <name>  # Re-enable a disabled command
+shaka run <workflow> [input...] # Execute a multi-step workflow
 shaka memory search <query>   # Search session summaries and learnings
 shaka memory stats            # Show learnings count, exposures, and category breakdown
 shaka memory review           # Browse and manage learnings interactively
@@ -183,7 +185,11 @@ Shaka uses a **progressive abstraction model** where each layer builds on the pr
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  SKILLS      │ Multi-step workflows, domain expertise                   │
+│  WORKFLOWS   │ Multi-step pipelines with isolated contexts              │
+│              │ Chains commands, prompts, and scripts                    │
+│              │ e.g., review-and-fix, deploy-pipeline                    │
+├──────────────┼──────────────────────────────────────────────────────────┤
+│  SKILLS      │ Domain expertise and context containers                  │
 │              │ Folder with SKILL.md + commands + context                │
 │              │ e.g., code-review/, deployment/                          │
 ├──────────────┼──────────────────────────────────────────────────────────┤
@@ -278,6 +284,58 @@ shaka commands list              # Show all commands and status
 shaka commands new <name>        # Create a new command
 shaka commands disable <name>    # Disable a command
 shaka commands enable <name>     # Re-enable a disabled command
+```
+
+### Workflows
+
+Multi-step pipelines that chain commands, prompts, and shell scripts. Each step runs with a fresh AI context, communicating through the file system and template variables — preventing the context degradation that happens when one long conversation tries to do everything.
+
+```yaml
+# review-and-fix.yaml
+description: Review code changes and fix issues found
+steps:
+  - name: review
+    command: /code-review
+  - name: fix
+    prompt: |
+      Read the code review in reviews/review.md.
+      Fix valid issues, skip incorrect suggestions.
+      Delete reviews/ when done.
+```
+
+**Step types:**
+
+| Type      | Description                                      | Example                          |
+| --------- | ------------------------------------------------ | -------------------------------- |
+| `command` | Invoke a slash command (provider resolves it)    | `command: /code-review`          |
+| `prompt`  | Inline AI instruction with full tool access      | `prompt: Fix the failing tests`  |
+| `run`     | Shell script (no AI, zero tokens)                | `run: bun test`                  |
+
+**Template variables** for passing data between steps:
+
+| Variable                    | Description                                    |
+| --------------------------- | ---------------------------------------------- |
+| `{input}`                   | CLI input (`shaka run workflow "this text"`)   |
+| `{previous.output}`        | stdout of the previous step                    |
+| `{previous.exitCode}`      | Exit code of the previous step                 |
+| `{steps.<name>.output}`    | stdout of a named step                         |
+| `{steps.<name>.exitCode}`  | Exit code of a named step                      |
+
+**Git state management:** By default (`state: "git-branch"`), the runner creates a branch, commits after each step that produces changes, and halts on failure — leaving a clean Git timeline. Use `state: "none"` for analysis-only workflows.
+
+**Error handling:** Steps fail on non-zero exit by default (fail-fast). Mark a step with `allow-failure: true` to continue regardless — useful for test steps whose output feeds the next AI step.
+
+Workflows live in `system/workflows/` (shipped) and `customizations/workflows/` (user). Customizations override system workflows by filename match.
+
+**Shipped workflows:**
+
+| Workflow         | Purpose                                            |
+| ---------------- | -------------------------------------------------- |
+| `review-and-fix` | Run a code review then assess and fix valid issues |
+
+```bash
+shaka run review-and-fix     # Run the shipped review-and-fix workflow
+shaka run my-workflow "input" # Run a custom workflow with input
 ```
 
 ### Skills
@@ -401,7 +459,8 @@ These are ideas for future development, not yet implemented:
 
 - **Interactive TUI** — `shaka` as a standalone terminal interface
 - **Session management** — Persistent sessions across CLI invocations (`shaka start`, `shaka resume`, `shaka sessions`)
-- **Single-shot CLI** — `shaka run "summarize this file"`, `shaka skill list`, `shaka tool run`
+- **Workflow loops** — Conditional looping mechanics for workflows (file-based status contracts, max iterations)
+- **Git worktrees** — `shaka run <workflow> --worktree` for isolated execution while you keep working
 - **Feature polyfills** — Subagent events and background subagents for opencode
 
 ## Development

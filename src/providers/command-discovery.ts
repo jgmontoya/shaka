@@ -8,9 +8,9 @@
  */
 
 import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
+import { normalizeCwd } from "../domain/paths";
 
 /** Valid command name: lowercase alphanumeric with hyphens, no leading/trailing hyphens, max 64 chars. */
 export const NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -173,23 +173,6 @@ async function listCommandFiles(dir: string): Promise<string[]> {
   } catch {
     return [];
   }
-}
-
-/** Resolve ~ or ~/ prefix to homedir in a path. */
-function expandTilde(path: string): string {
-  if (path === "~") return homedir();
-  return path.startsWith("~/") ? join(homedir(), path.slice(2)) : path;
-}
-
-/** Normalize cwd: absent/"*" → undefined, string → [resolved], string[] → [resolved...]. */
-function normalizeCwd(value: unknown): string[] | undefined {
-  if (value === undefined || value === null || value === "*") return undefined;
-  if (typeof value === "string") return [expandTilde(value)];
-  if (Array.isArray(value)) {
-    const paths = value.filter((v): v is string => typeof v === "string" && v !== "*");
-    return paths.length > 0 ? paths.map(expandTilde) : undefined;
-  }
-  return undefined;
 }
 
 /** Parse providers block. Returns parsed object, undefined, or error string. */

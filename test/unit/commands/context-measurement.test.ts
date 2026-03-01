@@ -15,7 +15,7 @@ const testDir = join(tmpdir(), `shaka-test-context-${process.pid}`);
 
 function makeConfig(overrides: Record<string, unknown> = {}) {
   return {
-    version: "0.4.2",
+    version: "0.5.0",
     assistant: { name: "TestBot" },
     principal: { name: "Tester", timezone: "UTC" },
     providers: {
