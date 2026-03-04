@@ -15,13 +15,13 @@ import {
   listSummaries,
   loadConfig,
   loadLearnings,
+  loadRollups,
   loadShakaFile,
   renderEntry,
   renderSessionSection,
   resolveDefaultsUserDir,
   resolveShakaHome,
   selectLearnings,
-  loadRollups,
   selectRecentSummaries,
 } from "shaka";
 
@@ -131,6 +131,23 @@ function elapsedMs(start: number): number {
   return Math.round(performance.now() - start);
 }
 
+/** Remove stale session-end temp files left by crashed workers. */
+async function cleanStaleTempFiles(memoryDir: string) {
+  try {
+    const glob = new Bun.Glob(".session-end-input-*.json");
+    const oneHourAgo = Date.now() - 60 * 60 * 1000;
+    for await (const file of glob.scan({ cwd: memoryDir })) {
+      const filePath = join(memoryDir, file);
+      const stat = await Bun.file(filePath).stat();
+      if (stat && stat.mtimeMs < oneHourAgo) {
+        await unlink(filePath).catch(() => {});
+      }
+    }
+  } catch {
+    /* memory dir might not exist yet */
+  }
+}
+
 async function main() {
   const t0 = performance.now();
   const timings: string[] = [];
@@ -154,21 +171,8 @@ async function main() {
   const sessionsBudget = config?.memory?.sessions_budget ?? DEFAULT_SESSIONS_BUDGET;
   const recencyWindowDays = config?.memory?.recency_window_days ?? DEFAULT_RECENCY_WINDOW_DAYS;
 
-  // Clean up stale session-end temp files (from crashed workers)
   const memoryDir = join(shakaHome, "memory");
-  try {
-    const glob = new Bun.Glob(".session-end-input-*.json");
-    const oneHourAgo = Date.now() - 60 * 60 * 1000;
-    for await (const file of glob.scan({ cwd: memoryDir })) {
-      const filePath = join(memoryDir, file);
-      const stat = await Bun.file(filePath).stat();
-      if (stat && stat.mtimeMs < oneHourAgo) {
-        await unlink(filePath).catch(() => {});
-      }
-    }
-  } catch {
-    /* memory dir might not exist yet */
-  }
+  await cleanStaleTempFiles(memoryDir);
 
   const contextParts: string[] = [];
 
@@ -178,6 +182,14 @@ async function main() {
   if (reasoning) {
     contextParts.push(reasoning);
     mark("Loaded reasoning framework", t, `${reasoning.length} chars`);
+  }
+
+  // Load system writing rules (with customization override support)
+  t = performance.now();
+  const writingRules = await loadShakaFile("system/writing-rules.md", shakaHome);
+  if (writingRules) {
+    contextParts.push(writingRules);
+    mark("Loaded writing rules", t, `${writingRules.length} chars`);
   }
 
   // Load user files (skips unmodified plain-markdown templates)
