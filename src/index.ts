@@ -186,6 +186,7 @@ import { createMcpCommand } from "./commands/mcp";
 import { createMemoryCommand } from "./commands/memory";
 import { createReloadCommand } from "./commands/reload";
 import { createRunCommand } from "./commands/run";
+import { createScanCommand } from "./commands/scan";
 import { createUninstallCommand } from "./commands/uninstall";
 import { createUpdateCommand } from "./commands/update";
 import { getCurrentVersion } from "./domain/version";
@@ -206,6 +207,7 @@ if (import.meta.main) {
   program.addCommand(createMemoryCommand());
   program.addCommand(createCommandsCommand());
   program.addCommand(createRunCommand());
+  program.addCommand(createScanCommand());
 
   program.parse(process.argv);
 }

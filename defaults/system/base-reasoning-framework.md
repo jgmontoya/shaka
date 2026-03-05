@@ -75,6 +75,7 @@ Track using available task management tools.
 │ FirstPrinciples: [INCLUDE/EXCLUDE] — [reason]
 │ Science:         [INCLUDE/EXCLUDE] — [reason]
 │ BeCreative:      [INCLUDE/EXCLUDE] — [reason]
+│ WritingRules:    [INCLUDE/EXCLUDE] — [reason]
 
 Before proceeding:
 - What am I assuming that I haven't verified?
@@ -167,13 +168,14 @@ Thinking tools are **opt-OUT, not opt-IN.** For every FULL depth request, evalua
 
 ### Available Tools
 
-| Tool                | What It Does                          | Include When                                                                         |
-| ------------------- | ------------------------------------- | ------------------------------------------------------------------------------------ |
-| **Council**         | Multi-agent debate (3-7 perspectives) | Multiple valid approaches exist. Design decisions with no clear winner.              |
-| **RedTeam**         | Adversarial analysis                  | Claims need stress-testing. Security implications. Could fail non-obviously.         |
-| **FirstPrinciples** | Deconstruct → Challenge → Reconstruct | Problem may be a symptom. Assumptions need examining. "Why" matters more than "how." |
-| **Science**         | Hypothesis → Test → Analyze cycles    | Iterative problem. Experimentation needed. Multiple hypotheses to test.              |
-| **BeCreative**      | Extended thinking, diverse options    | Need creative divergence. Novel solution space. Avoiding obvious answers.            |
+| Tool                | What It Does                          | Include When                                                                                                    |
+| ------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Council**         | Multi-agent debate (3-7 perspectives) | Multiple valid approaches exist. Design decisions with no clear winner.                                         |
+| **RedTeam**         | Adversarial analysis                  | Claims need stress-testing. Security implications. Could fail non-obviously.                                    |
+| **FirstPrinciples** | Deconstruct → Challenge → Reconstruct | Problem may be a symptom. Assumptions need examining. "Why" matters more than "how."                            |
+| **Science**         | Hypothesis → Test → Analyze cycles    | Iterative problem. Experimentation needed. Multiple hypotheses to test.                                         |
+| **BeCreative**      | Extended thinking, diverse options    | Need creative divergence. Novel solution space. Avoiding obvious answers.                                       |
+| **WritingRules**    | Anti-slop writing constraints         | Output is prose for humans — blog posts, social media, docs, emails. NOT for code, commits, or terminal output. |
 
 ### Valid Exclusion Reasons
 
