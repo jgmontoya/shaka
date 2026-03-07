@@ -27,7 +27,7 @@ import {
 
 /** Hook trigger events - Shaka canonical names (provider configurers handle conversion) */
 export const TRIGGER = ["session.start"] as const;
-export const HOOK_VERSION = "0.5.0";
+export const HOOK_VERSION = "0.6.0";
 
 /** Default max total characters for the memory section (~5KB) */
 const DEFAULT_SESSIONS_BUDGET = 5000;

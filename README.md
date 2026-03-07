@@ -144,6 +144,8 @@ shaka commands new <name>     # Create a new command
 shaka commands disable <name> # Disable a command
 shaka commands enable <name>  # Re-enable a disabled command
 shaka run <workflow> [input...] # Execute a multi-step workflow
+shaka scan <file>             # Scan prose for AI writing patterns (slop)
+shaka scan --dir <path>       # Scan all .md files in a directory
 shaka memory search <query>   # Search session summaries and learnings
 shaka memory stats            # Show learnings count, exposures, and category breakdown
 shaka memory review           # Browse and manage learnings interactively
@@ -351,6 +353,7 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 | RedTeam         | Adversarial validation (32 agents)            |
 | Science         | Scientific method workflows                   |
 | FirstPrinciples | Deconstruct → Challenge → Reconstruct         |
+| WritingRules    | Anti-slop prose constraints + `shaka scan`    |
 
 Skills are invoked by context ("review this PR") or explicitly ("use the code-review skill").
 

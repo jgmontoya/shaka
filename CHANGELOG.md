@@ -4,6 +4,19 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] — 2026-03-07
+
+### Added
+
+- **WritingRules skill** — Anti-slop writing constraints that the Algorithm autonomously selects for prose-writing tasks (blog posts, docs, emails). Detects banned words, AI patterns, hedging, rhythm issues, and structural anti-patterns. Customizable via override in `customizations/skills/WritingRules/`.
+- **`shaka scan` command** — CLI tool to scan prose files for AI writing patterns
+  - Scores content on a 100-point scale (pass threshold: 80+)
+  - Single file, directory (`--dir`), and stdin (`--stdin`) input modes
+  - Markdown-aware: ignores YAML frontmatter, fenced code blocks, and inline code
+  - Per-paragraph breakdown with `-p` flag
+  - JSON output for CI integration (`--json`)
+  - Directory mode validates paths and errors on empty results
+
 ## [0.5.0] — 2026-03-01
 
 ### Added
@@ -251,6 +264,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.6.0]: https://github.com/jgmontoya/shaka/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jgmontoya/shaka/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/jgmontoya/shaka/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jgmontoya/shaka/compare/v0.4.0...v0.4.1

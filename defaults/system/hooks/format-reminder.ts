@@ -19,7 +19,7 @@ import { parse as parseYaml } from "yaml";
 
 /** Hook trigger events - Shaka canonical names (provider configurers handle conversion) */
 export const TRIGGER = ["prompt.submit"] as const;
-export const HOOK_VERSION = "0.5.0";
+export const HOOK_VERSION = "0.6.0";
 
 const SHAKA_HOME = resolveShakaHome();
 
