@@ -182,6 +182,7 @@ import { createCommandsCommand } from "./commands/commands";
 import { createConfigCommand } from "./commands/config";
 import { createDoctorCommand } from "./commands/doctor";
 import { createInitCommand } from "./commands/init";
+import { createLoopCommand } from "./commands/loop";
 import { createMcpCommand } from "./commands/mcp";
 import { createMemoryCommand } from "./commands/memory";
 import { createReloadCommand } from "./commands/reload";
@@ -207,6 +208,7 @@ if (import.meta.main) {
   program.addCommand(createMemoryCommand());
   program.addCommand(createCommandsCommand());
   program.addCommand(createRunCommand());
+  program.addCommand(createLoopCommand());
   program.addCommand(createScanCommand());
 
   program.parse(process.argv);

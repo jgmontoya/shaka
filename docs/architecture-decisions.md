@@ -102,18 +102,38 @@ Since hooks run at `~/.config/shaka/` (not in the repo), any code they import mu
 
 **Context:** Some tasks require iterative refinement rather than a single-pass execution. The existing workflow system (ADR-005's linear pipeline) runs steps sequentially with output handoff but has no concept of repeated rounds, persistent state across iterations, or convergence-based termination. A separate `opencode-loop` bash script solved this outside Shaka, but the pattern belongs inside the framework as a first-class command.
 
-**Decision:** Add a `/loop` slash command that implements iterative multi-round execution within a single session. The command uses a persistent state file (`.loop-state.md`) to track progress across rounds, with structured stopping conditions (verification passes, task complete, or consecutive blocks).
+**Decision:** Add `shaka loop` as a CLI command (`src/commands/loop.ts`) that implements an outer-loop orchestrator. The CLI process owns the loop — it spawns a fresh AI agent per round via `runAgentStep()`, runs verification commands between rounds, and tracks state in a markdown file. A corresponding `/loop` slash command in `defaults/system/commands/loop.md` acts as a thin wrapper that parses user arguments and invokes `shaka loop` via shell.
+
+**Architecture:**
+
+```text
+┌─────────────────────────────────────────────────────┐
+│  shaka loop (CLI process — src/commands/loop.ts)    │
+│                                                     │
+│  for round in 1..N:                                 │
+│    1. Build prompt with task + state file context    │
+│    2. Spawn agent via runAgentStep() ← provider-    │
+│       agnostic (claude -p / opencode run)            │
+│    3. Capture output, write round log               │
+│    4. Run --verify command if configured             │
+│    5. Stop if: verify passes / 2 consecutive blocks │
+│    6. Update .loop-state-{runId}.md                 │
+└─────────────────────────────────────────────────────┘
+```
+
+The outer process controls iteration, not the AI. This is the standard pattern used by every serious agentic coding tool (Claude Code `-p --continue`, opencode `run --continue`, aider `--auto-test`). A prompt-only approach that asks the AI to self-iterate is unreliable — agents drift, lose context, or stop.
 
 **Design Principles:**
 
 | Principle | Description |
 | --- | --- |
+| External orchestration | The CLI process owns the loop; the AI executes one focused round at a time |
 | One change per round | Each round makes a single, surgical improvement — prevents scope explosion |
 | Persistent state | A markdown state file tracks completed work, rejected directions, open risks, and next steps — each round reads it before starting |
 | Verification-driven termination | A `--verify` command defines success; the loop stops when it passes (exit 0) rather than running a fixed number of rounds |
 | Scope boundaries | Optional `--scope` file defines what's in and out of bounds — out-of-scope observations are recorded, not acted on |
 | No git side effects | The loop never commits, pushes, or modifies git config — the user controls version history |
 
-**Why a command, not a workflow extension:** Workflows are pipelines of distinct steps with different capabilities (review then fix). Loops are repeated applications of the same capability with accumulated learning. These are different execution patterns. Forcing iteration into the YAML workflow schema would add complexity without clarity. The `/loop` command handles iteration; workflows handle orchestration.
+**Why a CLI command, not a workflow extension:** Workflows are pipelines of distinct steps with different capabilities (review then fix). Loops are repeated applications of the same capability with accumulated learning. The loop also needs conditional control flow (stop on verify pass, stop on consecutive blocks) that the linear workflow runner doesn't support.
 
-**Consequences:** Users can run `/loop fix all test failures --verify "bun test" --rounds 10` and get iterative, self-correcting behavior. The state file serves as an audit trail. The pattern is provider-agnostic — it works identically in Claude Code and opencode since it's a prompt-driven command, not a shell wrapper.
+**Consequences:** Users can run `shaka loop "fix all test failures" --verify "bun test" --rounds 10` from the terminal, or use the `/loop` slash command inside a session. Round logs are written to `.loop-logs/`, and the state file serves as an audit trail. The pattern is provider-agnostic via `runAgentStep()` — it uses whichever provider CLI is installed.
