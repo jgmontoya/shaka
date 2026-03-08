@@ -291,6 +291,94 @@ steps:
     expect(errors[0]?.error).toContain("invalid name");
   });
 
+  test("defaults loop to 1 when omitted", async () => {
+    await Bun.write(join(testHome, "system", "workflows", "hello.yaml"), minimalWorkflow);
+
+    const { workflows } = await discoverWorkflows(testHome);
+
+    expect(workflows[0]?.loop).toBe(1);
+  });
+
+  test("parses loop field", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "looped.yaml"),
+      `description: Looped workflow
+loop: 3
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+
+    const { workflows } = await discoverWorkflows(testHome);
+
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0]?.loop).toBe(3);
+  });
+
+  test("rejects loop: 0", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad loop
+loop: 0
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
+  test("rejects negative loop", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad loop
+loop: -1
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
+  test("rejects fractional loop", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad loop
+loop: 1.5
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
+  test("rejects non-numeric loop", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad loop
+loop: three
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
   test("returns valid workflows alongside errors", async () => {
     await Bun.write(join(testHome, "system", "workflows", "good.yaml"), minimalWorkflow);
     await Bun.write(

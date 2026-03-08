@@ -113,6 +113,11 @@ async function parseWorkflowFile(
     };
   }
 
+  const rawLoop = frontmatter.loop ?? 1;
+  const loopError = validateLoop(rawLoop);
+  if (loopError) return { name, sourcePath, error: loopError };
+  const loop = rawLoop as number;
+
   const rawSteps = frontmatter.steps;
   if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
     return { name, sourcePath, error: "Missing required field: steps (must be a non-empty array)" };
@@ -130,6 +135,7 @@ async function parseWorkflowFile(
     description: description.trim(),
     state: state as "git-branch" | "none",
     steps: stepsResult,
+    loop,
     cwd,
     sourcePath,
   };
@@ -209,6 +215,13 @@ function validateSteps(rawSteps: unknown[]): WorkflowStep[] | string {
 
 function nameFromFilename(filename: string): string {
   return filename.replace(/\.ya?ml$/, "");
+}
+
+function validateLoop(value: unknown): string | null {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+    return `Invalid loop "${value}" — must be a positive integer`;
+  }
+  return null;
 }
 
 function validateName(name: string): string | null {

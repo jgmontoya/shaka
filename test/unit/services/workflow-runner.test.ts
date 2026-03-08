@@ -23,6 +23,7 @@ describe("resolveTemplates", () => {
     exitCode: 0,
     output: "test output",
     durationMs: 100,
+    iteration: 1,
     ...overrides,
   });
 
@@ -67,6 +68,27 @@ describe("resolveTemplates", () => {
     const result = resolveTemplates("input={input} prev={previous.output}", "foo", new Map(), prev);
     expect(result).toBe("input=foo prev=data");
   });
+
+  test("replaces {loop.iteration}", () => {
+    const result = resolveTemplates("iter {loop.iteration}", "", new Map(), null, {
+      iteration: 2,
+      total: 5,
+    });
+    expect(result).toBe("iter 2");
+  });
+
+  test("replaces {loop.total}", () => {
+    const result = resolveTemplates("of {loop.total}", "", new Map(), null, {
+      iteration: 1,
+      total: 3,
+    });
+    expect(result).toBe("of 3");
+  });
+
+  test("loop variables default to 1 when omitted", () => {
+    const result = resolveTemplates("{loop.iteration}/{loop.total}", "", new Map(), null);
+    expect(result).toBe("1/1");
+  });
 });
 
 describe("runWorkflow", () => {
@@ -89,9 +111,8 @@ describe("runWorkflow", () => {
     name: "test-wf",
     description: "Test workflow",
     state: "none",
-    steps: [
-      { type: "run", name: "hello", run: "echo hello" },
-    ],
+    loop: 1,
+    steps: [{ type: "run", name: "hello", run: "echo hello" }],
     sourcePath: "/fake/path.md",
   };
 
@@ -136,6 +157,7 @@ describe("runWorkflow", () => {
       name: "lenient",
       description: "Lenient",
       state: "none",
+      loop: 1,
       steps: [
         { type: "run", name: "fail", run: "exit 1", allowFailure: true },
         { type: "run", name: "after", run: "echo after" },
@@ -161,6 +183,7 @@ describe("runWorkflow", () => {
       name: "strict",
       description: "Strict",
       state: "none",
+      loop: 1,
       steps: [
         { type: "run", name: "fail", run: "exit 1" },
         { type: "run", name: "never", run: "echo never" },
@@ -185,9 +208,8 @@ describe("runWorkflow", () => {
       name: "template",
       description: "Template test",
       state: "none",
-      steps: [
-        { type: "run", name: "greet", run: "echo {input}" },
-      ],
+      loop: 1,
+      steps: [{ type: "run", name: "greet", run: "echo {input}" }],
       sourcePath: "/fake/path.md",
     };
 
@@ -206,6 +228,7 @@ describe("runWorkflow", () => {
       name: "chain",
       description: "Chain test",
       state: "none",
+      loop: 1,
       steps: [
         { type: "run", name: "first", run: "echo FIRST" },
         { type: "run", name: "second", run: "echo got:{previous.output}" },
@@ -255,9 +278,8 @@ describe("runWorkflow", () => {
       name: "git-wf",
       description: "Git workflow",
       state: "git-branch",
-      steps: [
-        { type: "run", name: "create-file", run: "echo content > output.txt" },
-      ],
+      loop: 1,
+      steps: [{ type: "run", name: "create-file", run: "echo content > output.txt" }],
       sourcePath: "/fake/path.yaml",
     };
 
@@ -283,10 +305,11 @@ describe("runWorkflow", () => {
     expect(currentBranch).not.toBe(metadata.branch);
 
     // The workflow branch should exist with the step's commit
-    const branchExists = Bun.spawn(
-      ["git", "rev-parse", "--verify", metadata.branch!],
-      { cwd: testDir, stdout: "pipe", stderr: "pipe" },
-    );
+    const branchExists = Bun.spawn(["git", "rev-parse", "--verify", metadata.branch!], {
+      cwd: testDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     expect(await branchExists.exited).toBe(0);
 
     // Worktree should be cleaned up after run (no active worktrees besides main)
@@ -307,6 +330,7 @@ describe("runWorkflow", () => {
       name: "git-wf",
       description: "Git workflow",
       state: "git-branch",
+      loop: 1,
       steps: [{ type: "run", name: "step1", run: "echo hello" }],
       sourcePath: "/fake/path.yaml",
     };
@@ -351,6 +375,7 @@ describe("runWorkflow", () => {
       name: "git-wf",
       description: "Git workflow",
       state: "git-branch",
+      loop: 1,
       steps: [{ type: "run", name: "check", run: "cat feature.txt" }],
       sourcePath: "/fake/path.yaml",
     };
@@ -365,5 +390,254 @@ describe("runWorkflow", () => {
     expect(metadata.status).toBe("completed");
     // The worktree was created from the WIP commit, so dirty files are visible
     expect(metadata.steps[0]?.output).toContain("new feature code");
+  });
+
+  test("loop: 1 behaves identically to no loop", async () => {
+    const { metadata } = await runWorkflow({
+      workflow: simpleWorkflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.totalIterations).toBe(1);
+    expect(metadata.completedIterations).toBe(1);
+    expect(metadata.steps).toHaveLength(1);
+    expect(metadata.steps[0]?.iteration).toBe(1);
+  });
+
+  test("loop: 3 runs all steps three times", async () => {
+    const workflow: Workflow = {
+      name: "looped",
+      description: "Looped",
+      state: "none",
+      loop: 3,
+      steps: [{ type: "run", name: "count", run: "echo iteration" }],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.totalIterations).toBe(3);
+    expect(metadata.completedIterations).toBe(3);
+    expect(metadata.steps).toHaveLength(3);
+    expect(metadata.steps[0]?.iteration).toBe(1);
+    expect(metadata.steps[1]?.iteration).toBe(2);
+    expect(metadata.steps[2]?.iteration).toBe(3);
+  });
+
+  test("loop: 3 with allow-failure runs all iterations", async () => {
+    const workflow: Workflow = {
+      name: "loop-allow",
+      description: "Loop with allow-failure",
+      state: "none",
+      loop: 3,
+      steps: [
+        { type: "run", name: "fail", run: "exit 1", allowFailure: true },
+        { type: "run", name: "after", run: "echo ok" },
+      ],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(3);
+    // 2 steps * 3 iterations = 6 results
+    expect(metadata.steps).toHaveLength(6);
+  });
+
+  test("loop: 3 halts on non-allow-failure step failure", async () => {
+    const workflow: Workflow = {
+      name: "loop-halt",
+      description: "Loop halts on failure",
+      state: "none",
+      loop: 3,
+      steps: [{ type: "run", name: "boom", run: "exit 1" }],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("failed");
+    expect(metadata.completedIterations).toBe(0);
+    // Only 1 step ran (iteration 1, then halt)
+    expect(metadata.steps).toHaveLength(1);
+    expect(metadata.steps[0]?.iteration).toBe(1);
+  });
+
+  test("previousResult carries across iterations", async () => {
+    const workflow: Workflow = {
+      name: "carry",
+      description: "Cross-iteration handoff",
+      state: "none",
+      loop: 2,
+      steps: [
+        { type: "run", name: "echo-prev", run: "echo prev:{previous.output}" },
+        { type: "run", name: "produce", run: "echo PRODUCED" },
+      ],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.steps).toHaveLength(4);
+    // Iteration 1, step 1: no previous → empty
+    expect(metadata.steps[0]?.output).toContain("prev:");
+    // Iteration 2, step 1: previous is "produce" from iteration 1
+    expect(metadata.steps[2]?.output).toContain("PRODUCED");
+  });
+
+  test("loop artifacts use iter-N/ subdirectories", async () => {
+    const workflow: Workflow = {
+      name: "loop-artifacts",
+      description: "Artifact test",
+      state: "none",
+      loop: 2,
+      steps: [{ type: "run", name: "out", run: "echo hello" }],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { artifactDir } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    // When loop > 1, artifacts go into iter-N/ subdirectories
+    const iter1 = await Bun.file(join(artifactDir, "iter-1", "out.out")).text();
+    expect(iter1).toContain("hello");
+    const iter2 = await Bun.file(join(artifactDir, "iter-2", "out.out")).text();
+    expect(iter2).toContain("hello");
+  });
+
+  test("loop: 1 artifacts use flat structure", async () => {
+    const { artifactDir } = await runWorkflow({
+      workflow: simpleWorkflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    // When loop = 1, artifacts stay flat (backward compatible)
+    const file = await Bun.file(join(artifactDir, "hello.out")).text();
+    expect(file).toContain("hello");
+  });
+
+  test("stepMap overwrites across iterations", async () => {
+    const workflow: Workflow = {
+      name: "overwrite",
+      description: "stepMap overwrite test",
+      state: "none",
+      loop: 2,
+      steps: [
+        { type: "run", name: "val", run: "echo iter-{loop.iteration}" },
+        { type: "run", name: "read-map", run: "echo got:{steps.val.output}" },
+      ],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.steps).toHaveLength(4);
+    // Iteration 2, step "read-map" should see iteration 2's "val" output (overwritten)
+    expect(metadata.steps[3]?.output).toContain("iter-2");
+  });
+
+  test("loop: 3 with failure on iteration 2 halts and records partial progress", async () => {
+    // First iteration succeeds, second fails — verifies multi-iteration before halt
+    const workflow: Workflow = {
+      name: "late-fail",
+      description: "Fails on second iteration",
+      state: "none",
+      loop: 3,
+      steps: [
+        { type: "run", name: "maybe-fail", run: "test -f fail.flag && exit 1 || echo ok" },
+        { type: "run", name: "create-flag", run: "touch fail.flag" },
+      ],
+      sourcePath: "/fake/path.md",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("failed");
+    // Iteration 1: both steps pass (flag doesn't exist yet)
+    // Iteration 2: maybe-fail finds flag, exits 1, halts
+    expect(metadata.completedIterations).toBe(1);
+    expect(metadata.steps).toHaveLength(3); // 2 from iter 1, 1 from iter 2
+    expect(metadata.steps[0]?.iteration).toBe(1);
+    expect(metadata.steps[1]?.iteration).toBe(1);
+    expect(metadata.steps[2]?.iteration).toBe(2);
+    expect(metadata.steps[2]?.exitCode).not.toBe(0);
+  });
+
+  test("git-branch loop commits include iteration context", async () => {
+    await initGitRepo(testDir);
+
+    const gitWorkflow: Workflow = {
+      name: "git-loop",
+      description: "Git loop test",
+      state: "git-branch",
+      loop: 2,
+      steps: [{ type: "run", name: "touch", run: "echo {loop.iteration} > file.txt" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow: gitWorkflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(2);
+
+    // Check commit messages on the workflow branch contain iteration context
+    const logProc = Bun.spawn(["git", "log", "--format=%s", metadata.branch!], {
+      cwd: testDir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const log = (await new Response(logProc.stdout).text()).trim();
+    const commits = log.split("\n");
+
+    // Should have commits with [1/2] and [2/2] markers
+    expect(commits.some((c) => c.includes("[1/2]"))).toBe(true);
+    expect(commits.some((c) => c.includes("[2/2]"))).toBe(true);
   });
 });

@@ -54,13 +54,18 @@ async function resolveWorkflow(shakaHome: string, name: string): Promise<Workflo
 /** Print run result summary. */
 function printSummary({ metadata, artifactDir }: RunResult): void {
   console.log("");
-  console.log(`Status: ${metadata.status}`);
+  const iterInfo =
+    metadata.totalIterations > 1
+      ? ` (${metadata.completedIterations}/${metadata.totalIterations} iterations)`
+      : "";
+  console.log(`Status: ${metadata.status}${iterInfo}`);
   if (metadata.branch) console.log(`Branch: ${metadata.branch}`);
   console.log(`Artifacts: ${artifactDir}`);
 
   for (const step of metadata.steps) {
     const icon = step.exitCode === 0 ? "✓" : "✗";
-    console.log(`  ${icon} ${step.name} (${step.durationMs}ms)`);
+    const iterPrefix = metadata.totalIterations > 1 ? `[iter ${step.iteration}] ` : "";
+    console.log(`  ${icon} ${iterPrefix}${step.name} (${step.durationMs}ms)`);
   }
 }
 
@@ -69,12 +74,21 @@ export function createRunCommand(): Command {
     .description("Execute a workflow")
     .argument("<workflow>", "Workflow name")
     .argument("[input...]", "Input arguments")
-    .action(async (workflowName: string, inputParts: string[]) => {
+    .option("--loop <count>", "Override the workflow loop count", (v) => {
+      const n = Number(v);
+      if (!Number.isInteger(n) || n < 1) throw new Error("--loop must be a positive integer");
+      return n;
+    })
+    .action(async (workflowName: string, inputParts: string[], opts: { loop?: number }) => {
       const shakaHome = getShakaHome();
       const cwd = process.cwd();
       const input = inputParts.join(" ");
 
-      const workflow = await resolveWorkflow(shakaHome, workflowName);
+      let workflow = await resolveWorkflow(shakaHome, workflowName);
+
+      if (opts.loop != null) {
+        workflow = { ...workflow, loop: opts.loop };
+      }
 
       if (workflow.cwd && !isCwdAllowed(cwd, workflow.cwd)) {
         console.error(`Workflow "${workflowName}" is scoped to: ${workflow.cwd.join(", ")}`);
@@ -84,6 +98,7 @@ export function createRunCommand(): Command {
 
       console.log(`Running workflow: ${workflow.name}`);
       if (input) console.log(`Input: ${input}`);
+      if (workflow.loop > 1) console.log(`Loop: ${workflow.loop} iterations`);
       console.log("");
 
       const result = await runWorkflow({
@@ -91,8 +106,9 @@ export function createRunCommand(): Command {
         input,
         cwd,
         shakaHome,
-        onStepStart: (name, index, total) => {
-          console.log(`[${index + 1}/${total}] Running step: ${name}...`);
+        onStepStart: (name, index, total, loopIteration, loopTotal) => {
+          const iterPrefix = loopTotal > 1 ? `[iter ${loopIteration}/${loopTotal}] ` : "";
+          console.log(`${iterPrefix}[${index + 1}/${total}] Running step: ${name}...`);
         },
         onStepComplete: (name, exitCode, durationMs) => {
           const icon = exitCode === 0 ? "✓" : "✗";

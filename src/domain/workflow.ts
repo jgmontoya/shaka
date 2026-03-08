@@ -13,6 +13,7 @@ export interface Workflow {
   readonly description: string;
   readonly state: "git-branch" | "none";
   readonly steps: readonly WorkflowStep[];
+  readonly loop: number;
   readonly cwd?: readonly string[];
   readonly sourcePath: string;
 }
@@ -50,6 +51,7 @@ export interface StepResult {
   readonly exitCode: number;
   readonly output: string;
   readonly durationMs: number;
+  readonly iteration: number;
 }
 
 export interface RunMetadata {
@@ -58,6 +60,8 @@ export interface RunMetadata {
   readonly startedAt: string;
   readonly branch: string | null;
   readonly steps: StepResult[];
+  readonly totalIterations: number;
+  readonly completedIterations: number;
   readonly completedAt: string;
   readonly status: "completed" | "failed";
 }

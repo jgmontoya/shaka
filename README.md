@@ -94,9 +94,11 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 > # User Context Index
 >
 > ## reference/
+>
 > Detailed style guides and coding conventions. Read when making style or formatting decisions.
 >
 > ## api-docs/
+>
 > Internal API documentation. Read when integrating with or building against our services.
 > ```
 
@@ -259,15 +261,15 @@ $ARGUMENTS
 
 **Frontmatter fields:**
 
-| Field            | Required | Description                                                                 |
-| ---------------- | -------- | --------------------------------------------------------------------------- |
-| `description`    | Yes      | Short description shown in the slash menu                                   |
-| `argument-hint`  | No       | Hint shown after command name (e.g., `[branch\|#pr]`)                       |
-| `subtask`        | No       | Run as background subagent (`true`) or inline (`false`, default)            |
-| `model`          | No       | Override the default model                                                  |
-| `user-invocable` | No       | Show in slash menu (`true`, default) or hide for internal use (`false`)     |
-| `cwd`            | No       | Project paths for scoped installation. `["*"]` = global (same as omitting)  |
-| `providers`      | No       | Per-provider field overrides (e.g., different `model` for claude/opencode)  |
+| Field            | Required | Description                                                                |
+| ---------------- | -------- | -------------------------------------------------------------------------- |
+| `description`    | Yes      | Short description shown in the slash menu                                  |
+| `argument-hint`  | No       | Hint shown after command name (e.g., `[branch\|#pr]`)                      |
+| `subtask`        | No       | Run as background subagent (`true`) or inline (`false`, default)           |
+| `model`          | No       | Override the default model                                                 |
+| `user-invocable` | No       | Show in slash menu (`true`, default) or hide for internal use (`false`)    |
+| `cwd`            | No       | Project paths for scoped installation. `["*"]` = global (same as omitting) |
+| `providers`      | No       | Per-provider field overrides (e.g., different `model` for claude/opencode) |
 
 **Body substitutions:** `$ARGUMENTS` (all args), `$1`/`$2`/... (positional), `` !`cmd` `` (shell output).
 
@@ -275,9 +277,9 @@ Commands are the primary user interface. Type `/code-review` and it runs.
 
 **Shipped commands:**
 
-| Command       | Purpose                                             |
-| ------------- | --------------------------------------------------- |
-| `code-review` | Review local changes, a branch, or a PR             |
+| Command       | Purpose                                 |
+| ------------- | --------------------------------------- |
+| `code-review` | Review local changes, a branch, or a PR |
 
 Commands live in `system/commands/` (shipped) and `customizations/commands/` (user). Customizations override system commands by filename match.
 
@@ -307,21 +309,25 @@ steps:
 
 **Step types:**
 
-| Type      | Description                                      | Example                          |
-| --------- | ------------------------------------------------ | -------------------------------- |
-| `command` | Invoke a slash command (provider resolves it)    | `command: /code-review`          |
-| `prompt`  | Inline AI instruction with full tool access      | `prompt: Fix the failing tests`  |
-| `run`     | Shell script (no AI, zero tokens)                | `run: bun test`                  |
+| Type      | Description                                   | Example                         |
+| --------- | --------------------------------------------- | ------------------------------- |
+| `command` | Invoke a slash command (provider resolves it) | `command: /code-review`         |
+| `prompt`  | Inline AI instruction with full tool access   | `prompt: Fix the failing tests` |
+| `run`     | Shell script (no AI, zero tokens)             | `run: bun test`                 |
 
 **Template variables** for passing data between steps:
 
-| Variable                    | Description                                    |
-| --------------------------- | ---------------------------------------------- |
-| `{input}`                   | CLI input (`shaka run workflow "this text"`)   |
-| `{previous.output}`        | stdout of the previous step                    |
-| `{previous.exitCode}`      | Exit code of the previous step                 |
-| `{steps.<name>.output}`    | stdout of a named step                         |
-| `{steps.<name>.exitCode}`  | Exit code of a named step                      |
+| Variable                  | Description                                                |
+| ------------------------- | ---------------------------------------------------------- |
+| `{input}`                 | CLI input (`shaka run workflow "this text"`)               |
+| `{previous.output}`       | stdout of the previous step (carries across iterations)    |
+| `{previous.exitCode}`     | Exit code of the previous step (carries across iterations) |
+| `{steps.<name>.output}`   | stdout of a named step (current iteration)                 |
+| `{steps.<name>.exitCode}` | Exit code of a named step (current iteration)              |
+| `{loop.iteration}`        | Current loop iteration (1-based)                           |
+| `{loop.total}`            | Configured loop count                                      |
+
+**Looping:** Add `loop: N` to repeat all steps N times. Useful for iterative refinement patterns like test-fix cycles. Each iteration's artifacts are stored in `iter-N/` subdirectories. Use `--loop N` on the CLI to override.
 
 **Git state management:** By default (`state: "git-branch"`), the runner creates a branch, commits after each step that produces changes, and halts on failure — leaving a clean Git timeline. Use `state: "none"` for analysis-only workflows.
 
@@ -462,7 +468,7 @@ These are ideas for future development, not yet implemented:
 
 - **Interactive TUI** — `shaka` as a standalone terminal interface
 - **Session management** — Persistent sessions across CLI invocations (`shaka start`, `shaka resume`, `shaka sessions`)
-- **Workflow loops** — Conditional looping mechanics for workflows (file-based status contracts, max iterations)
+- **Workflow early exit** — `until` conditions for loops (stop on no changes, sentinel output, or verification command pass)
 - **Git worktrees** — `shaka run <workflow> --worktree` for isolated execution while you keep working
 - **Feature polyfills** — Subagent events and background subagents for opencode
 
