@@ -1,6 +1,6 @@
 ---
 description: Run an iterative coding loop — multiple rounds of focused improvements on a task
-argument-hint: <task> [--rounds N] [--verify "cmd"] [--scope file.md]
+argument-hint: <task> [--rounds N] [--verify "cmd"] [--scope file.md] [--continue]
 ---
 
 Run an automated coding loop using `shaka loop`. This spawns an external process that orchestrates multiple rounds of autonomous coding — each round gets its own agent session, with verification between rounds and persistent state tracking.
@@ -22,6 +22,7 @@ Parse the user's request and execute `shaka loop` with the right arguments.
 | Verification command (tests, build, lint) | `--verify "command"` or `-v "command"` |
 | Scope/workload file | `--scope file.md` or `-s file.md` |
 | Directory to run in | `--dir path` or `-d path` |
+| Keep context between rounds | `--continue` or `-c` |
 | The topic/task | First positional argument (quoted) |
 
 ### Examples
@@ -54,9 +55,12 @@ shaka loop --scope workloads/api.md "work through the scoped tasks"
 ### Defaults
 
 - Rounds: 10 (if not specified)
+- Mode: fresh context per round (use `--continue` for session continuity)
 - The loop creates `.loop-logs/` and `.loop-state-*.md` files in the current directory
-- Each round spawns a fresh agent session via the CLI
-- The outer process controls iteration, verification, and stopping
+- If `--verify` is set, runs a baseline check before round 1
+- Verification failure output is fed back into the next round's prompt
+- Stops automatically if the same verification failures repeat 3 rounds in a row
+- Writes `run.json` metadata to the log directory for programmatic consumption
 
 ### Before running
 
