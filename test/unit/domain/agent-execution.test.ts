@@ -15,6 +15,38 @@ describe("agent-execution", () => {
     expect(typeof mod.runAgentStep).toBe("function");
   });
 
+  test("buildAgentInvocation wires continue and cwd for claude", async () => {
+    const { buildAgentInvocation } = await import("../../../src/domain/agent-execution");
+    const invocation = buildAgentInvocation("claude", {
+      prompt: "fix tests",
+      cwd: "/tmp/project",
+      continueSession: true,
+    });
+
+    expect(invocation).toEqual({
+      command: "claude",
+      args: ["-p", "--continue"],
+      stdin: "fix tests",
+      cwd: "/tmp/project",
+    });
+  });
+
+  test("buildAgentInvocation wires continue and cwd for opencode", async () => {
+    const { buildAgentInvocation } = await import("../../../src/domain/agent-execution");
+    const invocation = buildAgentInvocation("opencode", {
+      prompt: "fix tests",
+      cwd: "/tmp/project",
+      continueSession: true,
+    });
+
+    expect(invocation).toEqual({
+      command: "opencode",
+      args: ["run", "--agent", "coder", "--continue", "fix tests"],
+      stdin: "",
+      cwd: "/tmp/project",
+    });
+  });
+
   test("returns error when no provider available", async () => {
     // Temporarily override Bun.which to return null for all providers
     const originalWhich = Bun.which;

@@ -58,8 +58,11 @@ shaka loop --scope workloads/api.md "work through the scoped tasks"
 - Mode: fresh context per round (use `--continue` for session continuity)
 - The loop creates `.loop-logs/` and `.loop-state-*.md` files in the current directory
 - If `--verify` is set, runs a baseline check before round 1
+- If baseline verification already passes, the loop exits cleanly and still writes metadata
 - Verification failure output is fed back into the next round's prompt
 - Stops automatically if the same verification failures repeat 3 rounds in a row
+- Stops early if consecutive rounds make no meaningful progress
+- The outer loop owns the state file and writes it from each round's structured report
 - Writes `run.json` metadata to the log directory for programmatic consumption
 
 ### Before running
@@ -73,5 +76,6 @@ shaka loop --scope workloads/api.md "work through the scoped tasks"
 
 - Run the command in the current working directory
 - Do NOT add `--dir` unless the user specifically asks to run in a different directory
+- If the user omits `--verify`, warn them that the loop can improve code but cannot prove convergence
 - The loop runs as a CLI process — just execute and let it go
 - If the user didn't specify a task, ask them what they want to loop on

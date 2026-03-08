@@ -38,6 +38,9 @@ interface RoundResult {
   readonly status: "done" | "blocked" | "failed";
   readonly summary: string;
   readonly filesChanged: string[];
+  readonly nextStep: string;
+  readonly rejectedDirections: string[];
+  readonly openRisks: string[];
   readonly durationMs: number;
 }
 
@@ -57,25 +60,48 @@ interface RunMetadata {
   readonly completedRounds: number;
   readonly blockedRounds: number;
   readonly verifyPassed: boolean;
+  readonly mode: "fresh" | "continue";
+  readonly stoppedBecause: string;
   readonly totalDurationMs: number;
 }
 
 // ── State file ───────────────────────────────────────────────────────────────
 
-function initialState(task: string, totalRounds: number): string {
+interface LoopDocumentState {
+  readonly task: string;
+  readonly totalRounds: number;
+  readonly roundsProcessed: number;
+  readonly startedAt: string;
+  readonly completed: string[];
+  readonly rejectedDirections: string[];
+  readonly openRisks: string[];
+  readonly nextBestStep: string;
+  readonly verificationStatus: string;
+  readonly stoppedBecause?: string;
+}
+
+function formatBulletSection(title: string, items: string[]): string[] {
+  if (items.length === 0) {
+    return [title, "- none", ""];
+  }
+
+  return [title, ...items.map((item) => `- ${item}`), ""];
+}
+
+function renderStateFile(state: LoopDocumentState): string {
   return [
     "# Loop State",
-    `Task: ${task}`,
-    `Rounds: 0 / ${totalRounds}`,
-    `Started: ${new Date().toISOString()}`,
+    `Task: ${state.task}`,
+    `Rounds: ${state.roundsProcessed} / ${state.totalRounds}`,
+    `Started: ${state.startedAt}`,
+    `Verification: ${state.verificationStatus}`,
+    `Stopped Because: ${state.stoppedBecause ?? "still running"}`,
     "",
-    "## Completed",
-    "",
-    "## Rejected Directions",
-    "",
-    "## Open Risks",
-    "",
+    ...formatBulletSection("## Completed", state.completed),
+    ...formatBulletSection("## Rejected Directions", state.rejectedDirections),
+    ...formatBulletSection("## Open Risks", state.openRisks),
     "## Next Best Step",
+    state.nextBestStep || "- none yet",
     "",
   ].join("\n");
 }
@@ -132,12 +158,13 @@ function buildRoundPrompt(ctx: PromptContext): string {
 
   lines.push(
     "## Persistent State",
-    `Read and update the loop state file: ${ctx.stateFileRel}`,
-    "After this round, update it with:",
-    "- What was completed this round",
-    "- Directions you considered but rejected (and why)",
-    "- Open risks remaining",
-    "- The next best step for the next round",
+    `Read the loop state file before starting: ${ctx.stateFileRel}`,
+    "The outer loop will update that file from your structured report at the end of the round.",
+    "",
+    "## Completion Contract",
+    "- Prefer moving the task toward a verifier-backed finish condition.",
+    "- If you cannot make safe progress, return blocked with the concrete reason.",
+    "- If you make no code changes, explain why and propose the next best step.",
     "",
     "## Rules",
     "- Make exactly one focused improvement per round.",
@@ -158,6 +185,8 @@ function buildRoundPrompt(ctx: PromptContext): string {
     "ROUND_STATUS: <done or blocked>",
     "SUMMARY: <one line of what you did>",
     "FILES: <comma-separated paths changed>",
+    "REJECTED: <semicolon-separated rejected directions or none>",
+    "RISKS: <semicolon-separated open risks or none>",
     "VERIFY: <commands run and results>",
     "NEXT: <one line — what the next round should focus on>",
   );
@@ -167,10 +196,27 @@ function buildRoundPrompt(ctx: PromptContext): string {
 
 // ── Output parser ────────────────────────────────────────────────────────────
 
+function parseListField(raw: string | undefined, separator: string): string[] {
+  if (!raw) return [];
+
+  const value = raw.trim();
+  if (!value || /^none$/i.test(value)) {
+    return [];
+  }
+
+  return value
+    .split(separator)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 function parseRoundOutput(output: string, round: number, durationMs: number): RoundResult {
   const statusMatch = output.match(/ROUND_STATUS:\s*(done|blocked)/i);
   const summaryMatch = output.match(/SUMMARY:\s*(.+)/i);
   const filesMatch = output.match(/FILES:\s*(.+)/i);
+  const rejectedMatch = output.match(/REJECTED:\s*(.+)/i);
+  const risksMatch = output.match(/RISKS:\s*(.+)/i);
+  const nextMatch = output.match(/NEXT:\s*(.+)/i);
 
   const status = statusMatch?.[1]?.toLowerCase();
   const files = filesMatch?.[1];
@@ -179,12 +225,10 @@ function parseRoundOutput(output: string, round: number, durationMs: number): Ro
     round,
     status: status === "done" || status === "blocked" ? status : "done",
     summary: summaryMatch?.[1]?.trim() ?? "(no summary provided)",
-    filesChanged: files
-      ? files
-          .split(",")
-          .map((f) => f.trim())
-          .filter(Boolean)
-      : [],
+    filesChanged: parseListField(files, ","),
+    nextStep: nextMatch?.[1]?.trim() ?? "(no next step provided)",
+    rejectedDirections: parseListField(rejectedMatch?.[1], ";"),
+    openRisks: parseListField(risksMatch?.[1], ";"),
     durationMs,
   };
 }
@@ -251,6 +295,18 @@ function isStuck(recentOutputs: string[]): boolean {
   return normalized.every((o) => o === normalized[0]);
 }
 
+const NO_PROGRESS_THRESHOLD = 2;
+
+function normalizeSummary(summary: string): string {
+  return summary.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function isNoProgress(recentSnapshots: string[]): boolean {
+  if (recentSnapshots.length < NO_PROGRESS_THRESHOLD) return false;
+  const last = recentSnapshots.slice(-NO_PROGRESS_THRESHOLD);
+  return last.every((snapshot) => snapshot === last[0]);
+}
+
 // ── Display helpers ──────────────────────────────────────────────────────────
 
 function printBanner(task: string, opts: LoopOptions, logDir: string): void {
@@ -308,6 +364,29 @@ interface LoopContext {
   readonly stateFileRel: string;
   readonly scopeFileRel?: string;
   readonly opts: LoopOptions;
+  readonly deps: LoopDependencies;
+}
+
+interface LoopDependencies {
+  readonly runAgentStep: typeof runAgentStep;
+}
+
+interface FinalizeOptions {
+  readonly task: string;
+  readonly loopStart: number;
+  readonly opts: LoopOptions;
+  readonly logDir: string;
+  readonly stateFile: string;
+  readonly stateFileRel: string;
+  readonly state: LoopState;
+  readonly loopDoc: LoopDocumentState;
+  readonly stoppedBecause: string;
+}
+
+interface RoundCycleResult {
+  readonly loopDoc: LoopDocumentState;
+  readonly stop: boolean;
+  readonly stoppedBecause?: string;
 }
 
 /** Execute a single round: spawn agent, log output, parse result. */
@@ -331,7 +410,11 @@ async function executeRound(
   });
 
   const startMs = Date.now();
-  const result = await runAgentStep({ prompt });
+  const result = await ctx.deps.runAgentStep({
+    prompt,
+    cwd: ctx.cwd,
+    continueSession: ctx.opts.continue,
+  });
   const durationMs = Date.now() - startMs;
 
   const logContent = [
@@ -355,6 +438,9 @@ async function executeRound(
       status: "failed",
       summary: "agent process failed",
       filesChanged: [],
+      nextStep: "(agent process failed)",
+      rejectedDirections: [],
+      openRisks: [],
       durationMs,
     };
   }
@@ -400,12 +486,86 @@ async function resolveScopeFile(cwd: string, scope: string): Promise<string> {
 /** Mutable state tracked across rounds. */
 interface LoopState {
   completed: number;
+  blocked: number;
   consecutiveBlocks: number;
   verifyPassed: boolean;
   lastVerifyOutput?: string;
   lastDiff?: string;
   readonly roundMetadata: RunMetadata["rounds"];
   readonly recentVerifyOutputs: string[];
+  readonly recentProgressSnapshots: string[];
+}
+
+function appendUnique(target: string[], values: string[]): void {
+  for (const value of values) {
+    if (!target.includes(value)) {
+      target.push(value);
+    }
+  }
+}
+
+function snapshotProgress(roundResult: RoundResult, diff: string | undefined): string {
+  return JSON.stringify({
+    summary: normalizeSummary(roundResult.summary),
+    files: roundResult.filesChanged.join(","),
+    diff: normalizeForComparison(diff ?? ""),
+  });
+}
+
+async function persistStateFile(stateFile: string, loopDoc: LoopDocumentState): Promise<void> {
+  await Bun.write(stateFile, renderStateFile(loopDoc));
+}
+
+function applyRoundToDocument(
+  loopDoc: LoopDocumentState,
+  roundResult: RoundResult,
+): LoopDocumentState {
+  return {
+    ...loopDoc,
+    roundsProcessed: loopDoc.roundsProcessed + 1,
+    completed:
+      roundResult.status === "done"
+        ? [...loopDoc.completed, `Round ${roundResult.round}: ${roundResult.summary}`]
+        : [...loopDoc.completed],
+    rejectedDirections: [...loopDoc.rejectedDirections],
+    openRisks: [...loopDoc.openRisks],
+    nextBestStep: roundResult.nextStep,
+  };
+}
+
+function finalizeLoopMetadata(options: FinalizeOptions): RunMetadata {
+  return {
+    task: options.task,
+    startedAt: new Date(options.loopStart).toISOString(),
+    completedAt: new Date().toISOString(),
+    rounds: options.state.roundMetadata,
+    totalRounds: options.opts.rounds,
+    completedRounds: options.state.completed,
+    blockedRounds: options.state.blocked,
+    verifyPassed: options.state.verifyPassed,
+    mode: options.opts.continue ? "continue" : "fresh",
+    stoppedBecause: options.stoppedBecause,
+    totalDurationMs: Date.now() - options.loopStart,
+  };
+}
+
+async function finalizeLoop(options: FinalizeOptions): Promise<void> {
+  const finalLoopDoc: LoopDocumentState = {
+    ...options.loopDoc,
+    verificationStatus: options.state.verifyPassed ? "passed" : options.loopDoc.verificationStatus,
+    stoppedBecause: options.stoppedBecause,
+  };
+  await persistStateFile(options.stateFile, finalLoopDoc);
+
+  const metadata = finalizeLoopMetadata(options);
+  await Bun.write(join(options.logDir, "run.json"), JSON.stringify(metadata, null, 2));
+
+  printCompletionSummary(metadata, options.logDir, options.stateFileRel);
+
+  const finalState = await Bun.file(options.stateFile).text();
+  console.log("");
+  console.log("━━━ Final Loop State ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  console.log(finalState);
 }
 
 /** Run baseline verification. Returns undefined if no verify command, or the output. */
@@ -429,6 +589,7 @@ async function runBaseline(
 /** Process the result of a single round. Returns "break" if the loop should stop. */
 function processRoundResult(roundResult: RoundResult, state: LoopState): "break" | "continue" {
   if (roundResult.status === "blocked") {
+    state.blocked++;
     state.consecutiveBlocks++;
     console.log(`  ⚠ Round ${roundResult.round}: blocked — ${roundResult.summary}`);
     console.log(`  (${formatDuration(roundResult.durationMs)})`);
@@ -444,6 +605,81 @@ function processRoundResult(roundResult: RoundResult, state: LoopState): "break"
     console.log(`  (${formatDuration(roundResult.durationMs)})`);
   }
   return "continue";
+}
+
+async function handleCompletedRound(
+  roundResult: RoundResult,
+  state: LoopState,
+  opts: LoopOptions,
+  cwd: string,
+  logDir: string,
+  stateFile: string,
+  loopDoc: LoopDocumentState,
+): Promise<RoundCycleResult> {
+  state.lastDiff = await captureGitDiff(cwd);
+  state.recentProgressSnapshots.push(snapshotProgress(roundResult, state.lastDiff));
+
+  const nextLoopDoc = applyRoundToDocument(loopDoc, roundResult);
+  appendUnique(nextLoopDoc.rejectedDirections, roundResult.rejectedDirections);
+  appendUnique(nextLoopDoc.openRisks, roundResult.openRisks);
+  await persistStateFile(stateFile, nextLoopDoc);
+
+  if (processRoundResult(roundResult, state) === "break") {
+    return {
+      loopDoc: nextLoopDoc,
+      stop: true,
+      stoppedBecause: "consecutive blocked rounds",
+    };
+  }
+
+  if ((await processVerification(roundResult, state, opts, cwd, logDir)) === "break") {
+    const verifiedLoopDoc = {
+      ...nextLoopDoc,
+      verificationStatus: state.verifyPassed ? "passed" : "failing",
+    };
+    await persistStateFile(stateFile, verifiedLoopDoc);
+    return {
+      loopDoc: verifiedLoopDoc,
+      stop: true,
+      stoppedBecause: state.verifyPassed
+        ? "verification passed"
+        : `same verification failures repeated ${STUCK_THRESHOLD} times`,
+    };
+  }
+
+  if (isNoProgress(state.recentProgressSnapshots)) {
+    console.log("\nNo meaningful progress across consecutive rounds. Stopping.");
+    return {
+      loopDoc: nextLoopDoc,
+      stop: true,
+      stoppedBecause: "no meaningful progress detected",
+    };
+  }
+
+  return { loopDoc: nextLoopDoc, stop: false };
+}
+
+async function handleBaselineSkip(
+  task: string,
+  opts: LoopOptions,
+  logDir: string,
+  stateFile: string,
+  stateFileRel: string,
+  loopStart: number,
+  state: LoopState,
+  loopDoc: LoopDocumentState,
+): Promise<void> {
+  await finalizeLoop({
+    task,
+    loopStart,
+    opts,
+    logDir,
+    stateFile,
+    stateFileRel,
+    state,
+    loopDoc,
+    stoppedBecause: "baseline verification already passed",
+  });
 }
 
 /** Run post-round verification. Returns "break" if the loop should stop. */
@@ -479,33 +715,76 @@ async function processVerification(
   return "continue";
 }
 
-async function executeLoop(task: string, opts: LoopOptions): Promise<void> {
+async function executeLoop(
+  task: string,
+  opts: LoopOptions,
+  deps: LoopDependencies = { runAgentStep },
+): Promise<void> {
   const cwd = opts.dir ?? process.cwd();
   const runId = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const logDir = join(cwd, ".loop-logs", runId);
   const stateFile = join(cwd, `.loop-state-${runId}.md`);
   const stateFileRel = `.loop-state-${runId}.md`;
   const loopStart = Date.now();
+  let stoppedBecause = "max rounds reached";
 
   await mkdir(logDir, { recursive: true });
-  await Bun.write(stateFile, initialState(task, opts.rounds));
+  let loopDoc: LoopDocumentState = {
+    task,
+    totalRounds: opts.rounds,
+    roundsProcessed: 0,
+    startedAt: new Date(loopStart).toISOString(),
+    completed: [],
+    rejectedDirections: [],
+    openRisks: [],
+    nextBestStep: "- none yet",
+    verificationStatus: opts.verify ? "pending" : "not configured",
+  };
+  await persistStateFile(stateFile, loopDoc);
 
   const scopeFileRel = opts.scope ? await resolveScopeFile(cwd, opts.scope) : undefined;
-  const ctx: LoopContext = { task, cwd, logDir, stateFileRel, scopeFileRel, opts };
+  const ctx: LoopContext = { task, cwd, logDir, stateFileRel, scopeFileRel, opts, deps };
 
   printBanner(task, opts, logDir);
+  if (!opts.verify) {
+    console.log(
+      "Warning: no --verify command set; the loop can improve code, but it cannot prove convergence.",
+    );
+    console.log("");
+  }
 
   const baseline = await runBaseline(opts, cwd, logDir);
-  if (baseline.skip) return;
 
   const state: LoopState = {
     completed: 0,
+    blocked: 0,
     consecutiveBlocks: 0,
-    verifyPassed: false,
+    verifyPassed: baseline.skip,
     lastVerifyOutput: baseline.output,
     roundMetadata: [],
     recentVerifyOutputs: [],
+    recentProgressSnapshots: [],
   };
+
+  if (baseline.skip) {
+    loopDoc = {
+      ...loopDoc,
+      completed: ["Baseline verification already passed; no coding rounds were needed."],
+      nextBestStep: "No next step required.",
+      verificationStatus: "passed",
+    };
+    await handleBaselineSkip(
+      task,
+      opts,
+      logDir,
+      stateFile,
+      stateFileRel,
+      loopStart,
+      state,
+      loopDoc,
+    );
+    return;
+  }
 
   for (let round = 1; round <= opts.rounds; round++) {
     console.log(`━━━ Round ${round}/${opts.rounds} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
@@ -514,37 +793,49 @@ async function executeLoop(task: string, opts: LoopOptions): Promise<void> {
 
     if (roundResult.status === "failed") {
       state.roundMetadata.push({ ...roundResult, verifyPassed: false });
+      stoppedBecause = "agent process failed";
       break;
     }
 
-    state.lastDiff = await captureGitDiff(cwd);
+    const cycle = await handleCompletedRound(
+      roundResult,
+      state,
+      opts,
+      cwd,
+      logDir,
+      stateFile,
+      loopDoc,
+    );
+    loopDoc = cycle.loopDoc;
 
-    if (processRoundResult(roundResult, state) === "break") break;
-    if ((await processVerification(roundResult, state, opts, cwd, logDir)) === "break") break;
+    if (cycle.stop) {
+      stoppedBecause = cycle.stoppedBecause ?? stoppedBecause;
+      break;
+    }
 
     console.log("");
   }
 
-  const metadata: RunMetadata = {
+  await finalizeLoop({
     task,
-    startedAt: new Date(loopStart).toISOString(),
-    completedAt: new Date().toISOString(),
-    rounds: state.roundMetadata,
-    totalRounds: opts.rounds,
-    completedRounds: state.completed,
-    blockedRounds: state.consecutiveBlocks,
-    verifyPassed: state.verifyPassed,
-    totalDurationMs: Date.now() - loopStart,
-  };
-  await Bun.write(join(logDir, "run.json"), JSON.stringify(metadata, null, 2));
-
-  printCompletionSummary(metadata, logDir, stateFileRel);
-
-  const finalState = await Bun.file(stateFile).text();
-  console.log("");
-  console.log("━━━ Final Loop State ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log(finalState);
+    loopStart,
+    opts,
+    logDir,
+    stateFile,
+    stateFileRel,
+    state,
+    loopDoc,
+    stoppedBecause,
+  });
 }
+
+export const __testables = {
+  renderStateFile,
+  parseRoundOutput,
+  isNoProgress,
+  normalizeForComparison,
+  finalizeLoopMetadata,
+};
 
 // ── CLI command ──────────────────────────────────────────────────────────────
 
