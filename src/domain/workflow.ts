@@ -39,7 +39,15 @@ export interface RunStep {
   readonly allowFailure?: boolean;
 }
 
-export type WorkflowStep = CommandStep | PromptStep | RunStep;
+export interface GroupStep {
+  readonly type: "group";
+  readonly name: string;
+  readonly steps: readonly WorkflowStep[];
+  readonly loop: number;
+  readonly allowFailure?: boolean;
+}
+
+export type WorkflowStep = CommandStep | PromptStep | RunStep | GroupStep;
 
 // ---------------------------------------------------------------------------
 // Execution results

@@ -8,7 +8,13 @@ import { mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runAgentStep } from "../domain/agent-execution";
-import type { RunMetadata, StepResult, Workflow, WorkflowStep } from "../domain/workflow";
+import type {
+  GroupStep,
+  RunMetadata,
+  StepResult,
+  Workflow,
+  WorkflowStep,
+} from "../domain/workflow";
 import {
   addWorktree,
   commitAll,
@@ -96,9 +102,9 @@ export function resolveTemplates(
   return result;
 }
 
-/** Execute a single workflow step. */
-async function executeStep(
-  step: WorkflowStep,
+/** Execute a single leaf workflow step (not a group). */
+async function executeLeafStep(
+  step: Exclude<WorkflowStep, GroupStep>,
   resolvedValue: string,
   cwd: string,
 ): Promise<{ exitCode: number; stdout: string }> {
@@ -128,8 +134,8 @@ async function executeStep(
   }
 }
 
-/** Get the resolved value string from a step (the command/prompt/run content). */
-function getStepValue(step: WorkflowStep): string {
+/** Get the resolved value string from a leaf step (the command/prompt/run content). */
+function getStepValue(step: Exclude<WorkflowStep, GroupStep>): string {
   switch (step.type) {
     case "command":
       return step.command;
@@ -217,13 +223,15 @@ async function failEarly(
 interface StepContext {
   readonly input: string;
   readonly cwd: string;
-  readonly artifactDir: string;
+  /** Current artifact directory — groups temporarily override this for their subdirectory. */
+  artifactDir: string;
   readonly workflowName: string;
   readonly useGit: boolean;
-  readonly totalSteps: number;
-  /** Accumulates across all iterations — written to run.json at the end. */
+  /** Total steps at the current nesting level. Groups temporarily override this. */
+  totalSteps: number;
+  /** Accumulates across all iterations and groups — written to run.json at the end. */
   stepResults: StepResult[];
-  /** Reset per iteration — used only for {steps.<name>} template resolution. */
+  /** Reset per iteration — used only for {steps.<name>} template resolution. Groups isolate this. */
   stepMap: Map<string, StepResult>;
   readonly onStepStart?: (
     stepName: string,
@@ -250,9 +258,19 @@ function commitMessage(stepName: string, workflowName: string, loop: LoopContext
   return `shaka(${stepName})[${loop.iteration}/${loop.total}]: ${workflowName}`;
 }
 
-/** Execute one step, record its result, and optionally git-commit. Returns "halt" if the pipeline should stop. */
+/** Execute one step (leaf or group). Returns "halt" if the pipeline should stop. */
 async function runStep(
   step: WorkflowStep,
+  ctx: StepContext,
+  stepIndex: number,
+): Promise<"continue" | "halt"> {
+  if (step.type === "group") return runGroup(step, ctx);
+  return runLeafStep(step, ctx, stepIndex);
+}
+
+/** Execute a leaf step, record its result, and optionally git-commit. */
+async function runLeafStep(
+  step: Exclude<WorkflowStep, GroupStep>,
   ctx: StepContext,
   stepIndex: number,
 ): Promise<"continue" | "halt"> {
@@ -268,7 +286,7 @@ async function runStep(
   ctx.onStepStart?.(step.name, stepIndex, ctx.totalSteps, ctx.loop.iteration, ctx.loop.total);
 
   const startMs = Date.now();
-  const { exitCode, stdout } = await executeStep(step, resolvedValue, ctx.cwd);
+  const { exitCode, stdout } = await executeLeafStep(step, resolvedValue, ctx.cwd);
   const durationMs = Date.now() - startMs;
 
   ctx.onStepComplete?.(step.name, exitCode, durationMs);
@@ -306,6 +324,53 @@ async function runStep(
     return "halt";
   }
 
+  return "continue";
+}
+
+/** Execute a group step — runs inner steps with isolated stepMap and its own loop context. */
+async function runGroup(group: GroupStep, ctx: StepContext): Promise<"continue" | "halt"> {
+  const outerLoop = ctx.loop;
+  const outerStepMap = ctx.stepMap;
+  const outerArtifactDir = ctx.artifactDir;
+  const outerTotalSteps = ctx.totalSteps;
+
+  // Groups get their own artifact subdirectory
+  const groupArtifactDir = join(ctx.artifactDir, group.name);
+
+  ctx.stepMap = new Map();
+  ctx.artifactDir = groupArtifactDir;
+  ctx.totalSteps = group.steps.length;
+
+  let halted = false;
+  for (let iteration = 1; iteration <= group.loop; iteration++) {
+    ctx.loop = { iteration, total: group.loop };
+
+    if (group.loop > 1) {
+      await mkdir(join(groupArtifactDir, `iter-${iteration}`), { recursive: true });
+    }
+
+    ctx.stepMap.clear();
+    for (const [i, step] of group.steps.entries()) {
+      if ((await runStep(step, ctx, i)) === "halt") {
+        halted = true;
+        break;
+      }
+    }
+    if (halted) break;
+  }
+
+  // Project the group result into the outer context
+  if (ctx.previousResult) {
+    outerStepMap.set(group.name, ctx.previousResult);
+  }
+
+  // Restore outer context
+  ctx.stepMap = outerStepMap;
+  ctx.loop = outerLoop;
+  ctx.artifactDir = outerArtifactDir;
+  ctx.totalSteps = outerTotalSteps;
+
+  if (halted && !group.allowFailure) return "halt";
   return "continue";
 }
 

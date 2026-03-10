@@ -165,6 +165,7 @@ export type {
   CommandStep,
   PromptStep,
   RunStep,
+  GroupStep,
   StepResult,
   RunMetadata,
 } from "./domain/workflow";

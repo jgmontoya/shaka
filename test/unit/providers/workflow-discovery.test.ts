@@ -395,4 +395,426 @@ steps:
     expect(errors).toHaveLength(1);
     expect(errors[0]?.name).toBe("bad");
   });
+
+  // -------------------------------------------------------------------------
+  // Inline group steps
+  // -------------------------------------------------------------------------
+
+  test("parses inline group step with loop", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "grouped.yaml"),
+      `description: Grouped workflow
+steps:
+  - name: setup
+    run: echo setup
+  - name: review-fix
+    loop: 3
+    steps:
+      - name: review
+        run: echo review
+      - name: fix
+        run: echo fix
+  - name: deploy
+    run: echo deploy`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows).toHaveLength(1);
+    const steps = workflows[0]!.steps;
+    expect(steps).toHaveLength(3);
+    expect(steps[0]?.type).toBe("run");
+    expect(steps[1]?.type).toBe("group");
+    if (steps[1]?.type === "group") {
+      expect(steps[1].loop).toBe(3);
+      expect(steps[1].steps).toHaveLength(2);
+      expect(steps[1].steps[0]?.name).toBe("review");
+      expect(steps[1].steps[1]?.name).toBe("fix");
+    }
+    expect(steps[2]?.type).toBe("run");
+  });
+
+  test("inline group defaults loop to 1", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "group-no-loop.yaml"),
+      `description: Group without loop
+steps:
+  - name: batch
+    steps:
+      - name: a
+        run: echo a
+      - name: b
+        run: echo b`,
+    );
+
+    const { workflows } = await discoverWorkflows(testHome);
+
+    expect(workflows).toHaveLength(1);
+    const group = workflows[0]!.steps[0]!;
+    expect(group.type).toBe("group");
+    if (group.type === "group") {
+      expect(group.loop).toBe(1);
+    }
+  });
+
+  test("rejects inline group with empty steps", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad group
+steps:
+  - name: empty-group
+    steps: []`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("non-empty array");
+  });
+
+  // -------------------------------------------------------------------------
+  // Leaf step with loop (normalized to single-step group)
+  // -------------------------------------------------------------------------
+
+  test("leaf step with loop normalizes to group", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "retry.yaml"),
+      `description: Retry workflow
+steps:
+  - name: test
+    run: bun test
+    loop: 3
+    allow-failure: true`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows).toHaveLength(1);
+    const step = workflows[0]!.steps[0]!;
+    expect(step.type).toBe("group");
+    if (step.type === "group") {
+      expect(step.name).toBe("test");
+      expect(step.loop).toBe(3);
+      expect(step.allowFailure).toBe(true);
+      expect(step.steps).toHaveLength(1);
+      expect(step.steps[0]?.type).toBe("run");
+    }
+  });
+
+  test("leaf step with loop: 1 stays as leaf", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "no-retry.yaml"),
+      `description: No retry
+steps:
+  - name: test
+    run: bun test`,
+    );
+
+    const { workflows } = await discoverWorkflows(testHome);
+
+    expect(workflows[0]!.steps[0]!.type).toBe("run");
+  });
+
+  test("rejects leaf step with invalid loop", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Bad leaf loop
+steps:
+  - name: test
+    run: bun test
+    loop: 0`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
+  // -------------------------------------------------------------------------
+  // Workflow references
+  // -------------------------------------------------------------------------
+
+  test("resolves workflow reference to group step", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "review-and-fix.yaml"),
+      `description: Review and fix
+loop: 3
+steps:
+  - name: review
+    run: echo review
+  - name: fix
+    run: echo fix`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "full-pipeline.yaml"),
+      `description: Full pipeline
+steps:
+  - name: setup
+    run: echo setup
+  - name: review-cycle
+    workflow: review-and-fix
+  - name: deploy
+    run: echo deploy`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows).toHaveLength(2);
+
+    const pipeline = workflows.find((w) => w.name === "full-pipeline")!;
+    expect(pipeline.steps).toHaveLength(3);
+    expect(pipeline.steps[0]?.type).toBe("run");
+    expect(pipeline.steps[1]?.type).toBe("group");
+    if (pipeline.steps[1]?.type === "group") {
+      expect(pipeline.steps[1].name).toBe("review-cycle");
+      expect(pipeline.steps[1].loop).toBe(3);
+      expect(pipeline.steps[1].steps).toHaveLength(2);
+      expect(pipeline.steps[1].steps[0]?.name).toBe("review");
+    }
+    expect(pipeline.steps[2]?.type).toBe("run");
+  });
+
+  test("rejects empty workflow reference value", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-ref.yaml"),
+      `description: Bad ref
+steps:
+  - name: empty
+    workflow: ""`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("non-empty string");
+  });
+
+  test("rejects invalid loop on inline group", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-group-loop.yaml"),
+      `description: Bad group loop
+steps:
+  - name: bad
+    loop: 0
+    steps:
+      - name: a
+        run: echo a`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("positive integer");
+  });
+
+  test("valid workflows still resolve when sibling has ref errors", async () => {
+    await Bun.write(join(testHome, "system", "workflows", "good.yaml"), minimalWorkflow);
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-ref.yaml"),
+      `description: Broken ref
+steps:
+  - name: missing
+    workflow: does-not-exist`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0]?.name).toBe("good");
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
+  test("rejects reference to non-existent workflow", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-ref.yaml"),
+      `description: Bad reference
+steps:
+  - name: missing
+    workflow: does-not-exist`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("not found");
+  });
+
+  test("rejects circular workflow reference (A → B → A)", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "a.yaml"),
+      `description: Workflow A
+steps:
+  - name: use-b
+    workflow: b`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "b.yaml"),
+      `description: Workflow B
+steps:
+  - name: use-a
+    workflow: a`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors.length).toBeGreaterThan(0);
+    const refError = errors.find((e) => e.error.includes("circular reference"));
+    expect(refError).toBeDefined();
+  });
+
+  test("rejects self-referencing workflow", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "self.yaml"),
+      `description: Self-referencing
+steps:
+  - name: recurse
+    workflow: self`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("circular reference");
+  });
+
+  test("resolves transitive workflow references (A → B → C)", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "leaf.yaml"),
+      `description: Leaf
+steps:
+  - name: step1
+    run: echo leaf`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "middle.yaml"),
+      `description: Middle
+loop: 2
+steps:
+  - name: use-leaf
+    workflow: leaf`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "outer.yaml"),
+      `description: Outer
+steps:
+  - name: setup
+    run: echo setup
+  - name: use-middle
+    workflow: middle
+  - name: teardown
+    run: echo teardown`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows).toHaveLength(3);
+
+    const outer = workflows.find((w) => w.name === "outer")!;
+    expect(outer.steps).toHaveLength(3);
+    expect(outer.steps[0]?.type).toBe("run");
+
+    // Middle is embedded as a group with loop: 2
+    const middleGroup = outer.steps[1]!;
+    expect(middleGroup.type).toBe("group");
+    if (middleGroup.type === "group") {
+      expect(middleGroup.loop).toBe(2);
+      // Middle's step is itself a group (resolved from leaf)
+      expect(middleGroup.steps).toHaveLength(1);
+      expect(middleGroup.steps[0]?.type).toBe("group");
+      if (middleGroup.steps[0]?.type === "group") {
+        expect(middleGroup.steps[0].steps[0]?.type).toBe("run");
+      }
+    }
+
+    expect(outer.steps[2]?.type).toBe("run");
+  });
+
+  test("rejects circular reference in transitive chain (A → B → C → A)", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "a.yaml"),
+      `description: A
+steps:
+  - name: use-b
+    workflow: b`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "b.yaml"),
+      `description: B
+steps:
+  - name: use-c
+    workflow: c`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "c.yaml"),
+      `description: C
+steps:
+  - name: use-a
+    workflow: a`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors.length).toBeGreaterThan(0);
+    const cycleError = errors.find((e) => e.error.includes("circular reference"));
+    expect(cycleError).toBeDefined();
+  });
+
+  test("rejects inline group containing workflow reference", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "leaf.yaml"),
+      `description: Leaf
+steps:
+  - name: step1
+    run: echo hello`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-group.yaml"),
+      `description: Bad nested group
+steps:
+  - name: outer-group
+    steps:
+      - name: nested-ref
+        workflow: leaf`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    const groupError = errors.find((e) => e.name === "bad-group");
+    expect(groupError).toBeDefined();
+    expect(groupError?.error).toContain("inline groups cannot contain workflow references");
+  });
+
+  test("workflow reference inherits allow-failure", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "fragile.yaml"),
+      `description: Fragile
+steps:
+  - name: step1
+    run: exit 1`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "tolerant.yaml"),
+      `description: Tolerant
+steps:
+  - name: maybe-fail
+    workflow: fragile
+    allow-failure: true
+  - name: after
+    run: echo ok`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    const tolerant = workflows.find((w) => w.name === "tolerant")!;
+    expect(tolerant.steps[0]?.type).toBe("group");
+    if (tolerant.steps[0]?.type === "group") {
+      expect(tolerant.steps[0].allowFailure).toBe(true);
+    }
+  });
 });
