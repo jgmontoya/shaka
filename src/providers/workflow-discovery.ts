@@ -354,11 +354,13 @@ function parseLeafStep(
 
   const leaf = buildLeafStep(typeKey, name, typeValue, allowFailure);
 
-  // Leaf with loop → normalize to single-step GroupStep
+  // Leaf with loop > 1 → normalize to single-step GroupStep
   if ("loop" in step && step.loop != null) {
     const loopErr = validateLoop(step.loop);
     if (loopErr) return `Step "${name}": ${loopErr}`;
-    return { type: "group", name, steps: [leaf], loop: step.loop as number, allowFailure };
+    if ((step.loop as number) > 1) {
+      return { type: "group", name, steps: [leaf], loop: step.loop as number, allowFailure };
+    }
   }
 
   return leaf;
@@ -375,6 +377,13 @@ function validateSingleStep(
 
   const { step, name } = identity;
   const allowFailure = step["allow-failure"] === true ? true : undefined;
+
+  const leafKeys = LEAF_TYPE_KEYS.filter((k) => k in step);
+  const formCount =
+    Number("workflow" in step) + Number("steps" in step) + Number(leafKeys.length > 0);
+  if (formCount !== 1) {
+    return `Step "${name}": must have exactly one of: workflow, steps, command, prompt, run`;
+  }
 
   if ("workflow" in step) return parseWorkflowRef(step, name, allowFailure);
   if ("steps" in step) return parseInlineGroup(step, name, allowFailure);

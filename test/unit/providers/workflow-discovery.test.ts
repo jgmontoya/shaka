@@ -509,12 +509,47 @@ steps:
       `description: No retry
 steps:
   - name: test
-    run: bun test`,
+    run: bun test
+    loop: 1`,
     );
 
     const { workflows } = await discoverWorkflows(testHome);
 
     expect(workflows[0]!.steps[0]!.type).toBe("run");
+  });
+
+  test("rejects step with both workflow and run keys", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Ambiguous
+steps:
+  - name: test
+    workflow: other
+    run: echo hi`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("exactly one of");
+  });
+
+  test("rejects step with both steps and prompt keys", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad.yaml"),
+      `description: Ambiguous
+steps:
+  - name: test
+    steps:
+      - name: inner
+        run: echo hi
+    prompt: do something`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("exactly one of");
   });
 
   test("rejects leaf step with invalid loop", async () => {

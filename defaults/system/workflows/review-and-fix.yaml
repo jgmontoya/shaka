@@ -1,7 +1,6 @@
 description: Review code changes and fix issues found
-# Loops run unconditionally — no early exit when issues are already resolved.
-# Reduce to loop: 1 for a single pass, or increase for deeper refinement cycles.
-loop: 3
+# Override with --loop N for deeper refinement cycles.
+loop: 1
 steps:
   - name: review
     command: /code-review

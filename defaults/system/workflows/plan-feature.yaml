@@ -1,0 +1,115 @@
+description: Plan a feature with implementation strategy — produces plan.md and implementation-strategy.md
+state: none
+steps:
+  - name: plan
+    prompt: |
+      You are planning a feature. The request:
+
+      {input}
+
+      Think critically and objectively. Follow clean code and clean architecture best practices as well as idiomatic language standards and conventions. Follow existing patterns from the project. Be careful not to introduce complexity unless it provides clear value. Our goal is to write good, correct software and solve problems.
+
+      Research the codebase thoroughly before planning. Understand the existing architecture, patterns, and conventions. Read the files that are relevant to this feature.
+
+      Write a detailed feature plan to `plan.md` in the project root. The plan should include:
+
+      1. **Goal** — What we're building and why, in 2-3 sentences.
+      2. **Background** — Relevant existing code, patterns, and architectural context you discovered.
+      3. **Design** — The technical approach. Include key decisions and trade-offs considered. Explain what changes where, and why.
+      4. **Scope** — What's in scope and what's explicitly out of scope.
+      5. **Open questions** — Anything that needs clarification or a decision before implementation.
+
+      Validate any and all assumptions and claims.
+      Suggest solutions the requester didn't think about. Anticipate needs. Challenge assumptions when they lead to worse outcomes.
+
+      We aim to write code that is a pleasure to read, and we have a lot of opinions about how to do it well. Writing great code is an essential part of our programming culture, and we deliberately set a high bar for every code change anyone contributes. We care about how code reads, how code looks, and how code makes you feel when you read it. We value simplicity.
+
+  - name: refine-plan
+    loop: 2
+    steps:
+      - name: critique
+        prompt: |
+          Read `plan.md`. You are a skeptical senior engineer reviewing this plan before it goes to implementation.
+
+          Evaluate it against these criteria:
+          - Is the design actually simpler than alternatives, or does it smuggle in hidden complexity?
+          - Are there edge cases or failure modes not addressed?
+          - Does it follow the project's existing patterns, or does it introduce unnecessary novelty?
+          - Are the scope boundaries clear and honest?
+          - Would you be confident handing this plan to an engineer to implement?
+
+          Write your critique directly into `plan.md` as a "Review Notes" section at the bottom. Be specific — cite sections, name concerns, suggest concrete alternatives. Don't be nice for the sake of being nice.
+
+      - name: revise
+        prompt: |
+          Read `plan.md`, including the "Review Notes" section at the bottom.
+
+          For each critique:
+          1. Assess whether the concern is valid. Don't blindly accept feedback — think critically.
+          2. If it identifies a real gap or a better approach, revise the relevant section of the plan.
+          3. If it's wrong or would add unnecessary complexity, leave the plan as-is.
+
+          After incorporating valid feedback, remove the "Review Notes" section entirely. The plan should read as a clean, final document — not a conversation.
+
+          Validate any and all assumptions and claims.
+          Our goal is to write good, correct software. We value simplicity. We deliberately set a high bar.
+
+  - name: write-strategy
+    prompt: |
+      Read `plan.md`. Based on this plan, write an implementation strategy to `implementation-strategy.md` in the project root.
+
+      The implementation strategy describes **how** to build the plan, commit by commit. Each commit should:
+      - Include a commit message that describes the changes in a way that is easy to understand and follow. Follow the project's commit conventions.
+      - Build upon previous commits, leaving the repository in a buildable state with all checks passing.
+      - Include tests in the same commit as the code they test.
+      - Be focused, one logical change per commit.
+
+      Follow TDD where possible: implement in a loop of adding/updating tests, seeing tests fail, adding/updating code, seeing tests pass. The strategy document should make this rhythm explicit.
+
+      Structure the document as:
+
+      1. **Prerequisites** — Any setup, dependencies, or configuration needed before starting.
+      2. **Commit sequence** — An ordered list of commits. For each commit:
+         - A descriptive commit message (following the project's commit conventions).
+         - What files are created or modified.
+         - What tests are added or updated.
+         - What the commit accomplishes and why it comes at this point in the sequence.
+      3. **Verification** — How to confirm the full implementation is correct after all commits land.
+
+      Think critically about ordering. Dependencies between changes determine commit order. Earlier commits should establish foundations that later commits build on. If a commit would leave tests failing or the build broken, reorder.
+      Validate any and all assumptions and claims.
+
+      We aim to write code that is a pleasure to read. We value simplicity. We deliberately set a high bar for every code change.
+
+  - name: refine-docs
+    loop: 2
+    steps:
+      - name: critique
+        prompt: |
+          Read both `plan.md` and `implementation-strategy.md` together. You are reviewing these as a pair — the strategy must faithfully implement the plan, and the plan must be implementable by the strategy.
+
+          Evaluate:
+          - Does the commit sequence actually implement everything in the plan? Are any plan sections missing from the strategy?
+          - Does the strategy introduce scope that isn't in the plan? If so, should the plan be updated or the strategy trimmed?
+          - Is the commit ordering correct? Would any commit leave the repo in a broken state?
+          - Are tests placed in the right commits?
+          - Is the TDD rhythm clear and practical?
+          - Are there simpler ways to sequence the work?
+
+          Validate any and all assumptions and claims.
+
+          Write your critique as a "Review Notes" section at the bottom of `implementation-strategy.md`. Reference specific commits and plan sections by name.
+
+      - name: revise
+        prompt: |
+          Read `plan.md` and `implementation-strategy.md`, including the "Review Notes" at the bottom of the strategy document.
+
+          For each critique:
+          1. Assess whether it's valid. Think critically — don't accept feedback that adds complexity without clear value.
+          2. If it identifies a real gap, revise the affected sections in either or both documents.
+          3. If it's wrong, leave things as-is.
+
+          After incorporating valid feedback, remove the "Review Notes" section. Both documents should read as clean, final artifacts.
+
+          Validate any and all assumptions and claims.
+          We aim to write good, correct software. We value simplicity.

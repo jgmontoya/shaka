@@ -984,14 +984,7 @@ describe("runWorkflow", () => {
     expect(deepSteps[2]?.output).toContain("deep-1-of-2");
     expect(deepSteps[3]?.output).toContain("deep-2-of-2");
 
-    // Nested artifacts should be in nested subdirectories
-    const innerGroupDir = join(metadata.steps[0]?.name ? artifactHome : "", "runs");
-    // Verify artifact files exist in nested structure
-    const artDir = join(artifactHome, "runs", `nested-groups-${metadata.workflow}`).replace(
-      metadata.workflow,
-      "",
-    );
-    // The step results themselves confirm execution happened correctly
+    // Execution correctness verified through deepSteps assertions above
   });
 
   test("group stepMap clears between inner iterations, previousResult carries", async () => {
