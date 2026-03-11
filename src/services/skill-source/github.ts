@@ -84,6 +84,9 @@ export function createGitHubProvider(options: GitHubProviderOptions = {}): Skill
       if (discovered) return discovered;
 
       await cleanupTempDir(tempDir);
+      if (subdirectory) {
+        return err(new Error(`SKILL.md not found in specified subdirectory: ${subdirectory}`));
+      }
       return err(new Error("No SKILL.md or .claude-plugin/marketplace.json found in repository."));
     },
   };

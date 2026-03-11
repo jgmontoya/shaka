@@ -130,6 +130,20 @@ describe("SkillUpdateService", () => {
       }
     });
 
+    test("preserves original installedAt timestamp after update", async () => {
+      await installFakeSkill("TestSkill");
+
+      await updateSkill(tempDir, "TestSkill", {
+        provider: testProvider(UPDATED_SHA),
+      });
+
+      const manifest = await loadManifest(tempDir);
+      expect(manifest.ok).toBe(true);
+      if (manifest.ok) {
+        expect(manifest.value.skills.TestSkill?.installedAt).toBe(TEST_SKILL.installedAt);
+      }
+    });
+
     test("does not update manifest when up-to-date", async () => {
       await installFakeSkill("TestSkill");
 

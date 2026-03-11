@@ -3,7 +3,7 @@
  * Checks system health, installation status, and config-vs-reality alignment.
  */
 
-import { readdir } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
 import {
@@ -248,8 +248,7 @@ async function checkInstalledSkills(shakaHome: string): Promise<boolean> {
 
 async function dirExistsOnDisk(path: string): Promise<boolean> {
   try {
-    const entries = await readdir(path);
-    return entries.length >= 0;
+    return (await stat(path)).isDirectory();
   } catch {
     return false;
   }

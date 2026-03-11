@@ -50,8 +50,9 @@ export async function linkSkillToProviders(shakaHome: string, skillName: string)
 }
 
 /**
- * Remove the per-skill symlink from each enabled provider's skills directory.
- * Called after `shaka skill remove` so the skill disappears from providers.
+ * Remove the per-skill symlink from all provider skill directories.
+ * Sweeps all providers (not just enabled) to clean up stale symlinks
+ * from providers that may have been disabled after the skill was installed.
  */
 export async function unlinkSkillFromProviders(
   shakaHome: string,

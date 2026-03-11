@@ -377,6 +377,9 @@ describe("GitHubSourceProvider", () => {
       });
 
       expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("skills/missing-skill");
+      }
     });
 
     test("rejects explicit subdirectory path traversal", async () => {

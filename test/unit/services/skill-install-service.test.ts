@@ -694,6 +694,23 @@ describe("SkillInstallService", () => {
       }
     });
 
+    test("rejects Windows reserved device names", async () => {
+      for (const reserved of ["CON", "prn", "aux", "NUL", "com1", "LPT3"]) {
+        const dir = join(tempDir, `reserved-${reserved}`);
+        await mkdir(dir, { recursive: true });
+        await writeFile(
+          join(dir, "SKILL.md"),
+          `---\nname: ${reserved}\ndescription: bad\n---\n\n# Reserved\n`,
+        );
+
+        const result = await validateSkillStructure(dir);
+        expect(result.ok).toBe(false);
+        if (!result.ok) {
+          expect(result.error.message).toContain("safe directory name");
+        }
+      }
+    });
+
     test("parses YAML frontmatter with colon-containing values", async () => {
       const dir = join(tempDir, "yaml-skill");
       await mkdir(dir, { recursive: true });

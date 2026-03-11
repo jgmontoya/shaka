@@ -135,12 +135,15 @@ async function copySkillFiles(source: string, target: string): Promise<void> {
   }
 }
 
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
 function isSafeSkillName(name: string): boolean {
   if (!name || name === "." || name === "..") return false;
   if (name.includes("/") || name.includes("\\")) return false;
   if (name.includes("\0")) return false;
   if (isAbsolute(name)) return false;
   if (/^[A-Za-z]:/.test(name)) return false;
+  if (WINDOWS_RESERVED_NAME.test(name)) return false;
   return true;
 }
 

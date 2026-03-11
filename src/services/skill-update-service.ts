@@ -158,7 +158,6 @@ async function deployAndPersistUpdate(
   const persistResult = await persistToManifest(shakaHome, name, {
     ...skill,
     version,
-    installedAt: new Date().toISOString(),
   });
   if (!persistResult.ok) {
     await restoreBackupSkill(shakaHome, name, backupResult.value);
