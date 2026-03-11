@@ -329,6 +329,35 @@ steps:
 
 **Looping:** Add `loop: N` to repeat all steps N times. Useful for iterative refinement patterns like test-fix cycles. Each iteration's artifacts are stored in `iter-N/` subdirectories. Use `--loop N` on the CLI to override.
 
+**Group steps:** Inline groups compose multiple steps under a single name with optional looping:
+
+```yaml
+steps:
+  - name: refine
+    loop: 3
+    steps:
+      - name: critique
+        prompt: Review the plan critically
+      - name: revise
+        prompt: Address valid feedback
+```
+
+Groups isolate their `{steps.<name>}` scope — inner steps can't see outer variables, and the outer workflow sees the group's last result via `{steps.refine.output}`.
+
+**Workflow references:** Reuse an entire workflow as a step. The referenced workflow's steps are inlined as a group, inheriting its loop count:
+
+```yaml
+steps:
+  - name: setup
+    run: echo "preparing"
+  - name: review-cycle
+    workflow: review-and-fix
+  - name: deploy
+    run: echo "deploying"
+```
+
+References are resolved transitively with cycle detection.
+
 **Git state management:** By default (`state: "git-branch"`), the runner creates a branch, commits after each step that produces changes, and halts on failure — leaving a clean Git timeline. Use `state: "none"` for analysis-only workflows.
 
 **Error handling:** Steps fail on non-zero exit by default (fail-fast). Mark a step with `allow-failure: true` to continue regardless — useful for test steps whose output feeds the next AI step.
@@ -337,9 +366,10 @@ Workflows live in `system/workflows/` (shipped) and `customizations/workflows/` 
 
 **Shipped workflows:**
 
-| Workflow         | Purpose                                            |
-| ---------------- | -------------------------------------------------- |
-| `review-and-fix` | Run a code review then assess and fix valid issues |
+| Workflow         | Purpose                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| `review-and-fix` | Run a code review then assess and fix valid issues            |
+| `plan-feature`   | Plan a feature with iterative critique and revision cycles    |
 
 ```bash
 shaka run review-and-fix     # Run the shipped review-and-fix workflow

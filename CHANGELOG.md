@@ -4,6 +4,16 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.1] — 2026-03-11
+
+### Added
+
+- **Workflow looping** — Add `loop: N` to workflow frontmatter to repeat all steps N times. Useful for iterative refinement patterns like review-fix cycles. Override from the CLI with `--loop N`
+- **Group steps** — Compose steps within a workflow using inline groups with `steps: [...]` and optional `loop: N` for group-level iteration
+- **Workflow references** — Reference other workflows as steps with `workflow: "other-name"`. References are resolved transitively with cycle detection, and the referenced workflow's steps are inlined as a group
+- **Loop template variables** — `{loop.iteration}` and `{loop.total}` for iteration-aware commands, commit messages, and artifact paths
+- **Shipped workflow: `plan-feature`** — Multi-step planning pipeline that produces `plan.md` and `implementation-strategy.md` with iterative critique and revision cycles
+
 ## [0.6.0] — 2026-03-07
 
 ### Added
@@ -264,6 +274,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.6.1]: https://github.com/jgmontoya/shaka/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jgmontoya/shaka/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jgmontoya/shaka/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/jgmontoya/shaka/compare/v0.4.1...v0.4.2
