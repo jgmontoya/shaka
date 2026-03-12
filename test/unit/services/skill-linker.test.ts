@@ -35,10 +35,7 @@ describe("skill-linker", () => {
 
     // Create shaka home with config and a skill
     await mkdir(join(testShakaHome, "skills", "trello"), { recursive: true });
-    await Bun.write(
-      join(testShakaHome, "skills", "trello", "SKILL.md"),
-      "# Trello",
-    );
+    await Bun.write(join(testShakaHome, "skills", "trello", "SKILL.md"), "# Trello");
   });
 
   afterEach(async () => {

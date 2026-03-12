@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ok } from "../../../src/domain/result";
@@ -131,14 +131,22 @@ describe("SkillInstallService", () => {
         ),
       });
 
-      expect(await Bun.file(join(tempDir, "skills", "TestSkill", "nested", ".git", "config")).exists()).toBe(false);
-      expect(await Bun.file(join(tempDir, "skills", "TestSkill", "nested", "notes.md")).exists()).toBe(true);
+      expect(
+        await Bun.file(join(tempDir, "skills", "TestSkill", "nested", ".git", "config")).exists(),
+      ).toBe(false);
+      expect(
+        await Bun.file(join(tempDir, "skills", "TestSkill", "nested", "notes.md")).exists(),
+      ).toBe(true);
     });
 
     test("handles subdirectory in URL", async () => {
-      const result = await installSkill(tempDir, "https://github.com/user/repo/tree/main/skills/my-skill", {
-        provider: testProvider(fakeGitCloneWithSubdir("skills/my-skill")),
-      });
+      const result = await installSkill(
+        tempDir,
+        "https://github.com/user/repo/tree/main/skills/my-skill",
+        {
+          provider: testProvider(fakeGitCloneWithSubdir("skills/my-skill")),
+        },
+      );
 
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -226,19 +234,21 @@ describe("SkillInstallService", () => {
 
       // Temp dir is in OS tmpdir, not in shakaHome
       const tmpDir = join(tempDir, ".tmp");
-      const file = Bun.file(tmpDir);
-      expect(await file.exists()).toBe(false);
+      const exists = await stat(tmpDir).then(() => true, () => false);
+      expect(exists).toBe(false);
     });
   });
 
   describe("security checks", () => {
     test("allows text-only skills without callback", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "notes.txt": "notes",
-          "config.yaml": "key: value",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "notes.txt": "notes",
+            "config.yaml": "key: value",
+          }),
+        ),
       });
 
       expect(result.ok).toBe(true);
@@ -246,10 +256,12 @@ describe("SkillInstallService", () => {
 
     test("rejects executable files by default (no callback)", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "setup.sh": "#!/bin/bash\necho hi",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "setup.sh": "#!/bin/bash\necho hi",
+          }),
+        ),
       });
 
       expect(result.ok).toBe(false);
@@ -260,10 +272,12 @@ describe("SkillInstallService", () => {
 
     test("rejects HTML comments in markdown by default", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "notes.md": "Some text\n<!-- hidden instructions -->",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "notes.md": "Some text\n<!-- hidden instructions -->",
+          }),
+        ),
       });
 
       expect(result.ok).toBe(false);
@@ -274,10 +288,12 @@ describe("SkillInstallService", () => {
 
     test("rejects URLs in markdown by default", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "guide.md": "Visit https://evil.com for more info",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "guide.md": "Visit https://evil.com for more info",
+          }),
+        ),
       });
 
       expect(result.ok).toBe(false);
@@ -288,10 +304,12 @@ describe("SkillInstallService", () => {
 
     test("rejects invisible unicode characters in markdown by default", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "notes.md": "Normal text\u200Bhidden instructions",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "notes.md": "Normal text\u200Bhidden instructions",
+          }),
+        ),
       });
 
       expect(result.ok).toBe(false);
@@ -302,11 +320,13 @@ describe("SkillInstallService", () => {
 
     test("installs with --yolo despite failed checks", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "hook.ts": "console.log('hi')",
-          "notes.md": "<!-- hidden -->\u200Bhttps://evil.com",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "hook.ts": "console.log('hi')",
+            "notes.md": "<!-- hidden -->\u200Bhttps://evil.com",
+          }),
+        ),
         yolo: true,
       });
 
@@ -318,10 +338,12 @@ describe("SkillInstallService", () => {
       let nameArg: string | undefined;
 
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "notes.txt": "safe content",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "notes.txt": "safe content",
+          }),
+        ),
         onSecurityCheck: async (report, name) => {
           reportArg = report;
           nameArg = name;
@@ -340,10 +362,12 @@ describe("SkillInstallService", () => {
       let reportArg: SecurityReport | undefined;
 
       await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "evil.sh": "rm -rf /",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "evil.sh": "rm -rf /",
+          }),
+        ),
         onSecurityCheck: async (report) => {
           reportArg = report;
           return false;
@@ -352,17 +376,21 @@ describe("SkillInstallService", () => {
 
       expect(reportArg).toBeDefined();
       expect((reportArg as SecurityReport).allPassed).toBe(false);
-      const execCheck = (reportArg as SecurityReport).checks.find((c) => c.label === "No executables");
+      const execCheck = (reportArg as SecurityReport).checks.find(
+        (c) => c.label === "No executables",
+      );
       expect(execCheck?.passed).toBe(false);
       expect(execCheck?.details).toContain("evil.sh");
     });
 
     test("aborts when onSecurityCheck returns false", async () => {
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "notes.txt": "safe",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "notes.txt": "safe",
+          }),
+        ),
         onSecurityCheck: async () => false,
       });
 
@@ -376,11 +404,13 @@ describe("SkillInstallService", () => {
       let callbackCalled = false;
 
       const result = await installSkill(tempDir, "user/repo", {
-        provider: testProvider(fakeGitCloneWithFiles({
-          "SKILL.md": VALID_SKILL_MD,
-          "evil.sh": "rm -rf /",
-          "guide.md": "<!-- hidden -->\u200Bhttps://bad.com",
-        })),
+        provider: testProvider(
+          fakeGitCloneWithFiles({
+            "SKILL.md": VALID_SKILL_MD,
+            "evil.sh": "rm -rf /",
+            "guide.md": "<!-- hidden -->\u200Bhttps://bad.com",
+          }),
+        ),
         yolo: true,
         onSecurityCheck: async () => {
           callbackCalled = true;
@@ -717,6 +747,21 @@ describe("SkillInstallService", () => {
       await writeFile(
         join(dir, "SKILL.md"),
         `---\nname: TestSkill\ndescription: "A skill: with colon"\n---\n\n# TestSkill\n`,
+      );
+
+      const result = await validateSkillStructure(dir);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.name).toBe("TestSkill");
+      }
+    });
+
+    test("parses frontmatter without trailing newline after closing ---", async () => {
+      const dir = join(tempDir, "no-trailing-newline");
+      await mkdir(dir, { recursive: true });
+      await writeFile(
+        join(dir, "SKILL.md"),
+        `---\nname: TestSkill\ndescription: A test skill\n---`,
       );
 
       const result = await validateSkillStructure(dir);

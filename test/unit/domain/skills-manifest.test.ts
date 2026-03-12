@@ -55,10 +55,7 @@ describe("SkillsManifest", () => {
         version: 1,
         skills: { "my-skill": TEST_SKILL },
       };
-      await Bun.write(
-        join(tempDir, "skills.json"),
-        JSON.stringify(manifest),
-      );
+      await Bun.write(join(tempDir, "skills.json"), JSON.stringify(manifest));
 
       const result = await loadManifest(tempDir);
       expect(result.ok).toBe(true);
@@ -68,10 +65,7 @@ describe("SkillsManifest", () => {
     });
 
     test("returns error for unsupported version", async () => {
-      await Bun.write(
-        join(tempDir, "skills.json"),
-        JSON.stringify({ version: 99, skills: {} }),
-      );
+      await Bun.write(join(tempDir, "skills.json"), JSON.stringify({ version: 99, skills: {} }));
 
       const result = await loadManifest(tempDir);
       expect(result.ok).toBe(false);
@@ -81,10 +75,7 @@ describe("SkillsManifest", () => {
     });
 
     test("returns error for invalid JSON", async () => {
-      await Bun.write(
-        join(tempDir, "skills.json"),
-        "not json",
-      );
+      await Bun.write(join(tempDir, "skills.json"), "not json");
 
       const result = await loadManifest(tempDir);
       expect(result.ok).toBe(false);
@@ -94,10 +85,7 @@ describe("SkillsManifest", () => {
     });
 
     test("returns error for non-object content", async () => {
-      await Bun.write(
-        join(tempDir, "skills.json"),
-        JSON.stringify("a string"),
-      );
+      await Bun.write(join(tempDir, "skills.json"), JSON.stringify("a string"));
 
       const result = await loadManifest(tempDir);
       expect(result.ok).toBe(false);
@@ -107,10 +95,7 @@ describe("SkillsManifest", () => {
     });
 
     test("returns error when skills field has invalid shape", async () => {
-      await Bun.write(
-        join(tempDir, "skills.json"),
-        JSON.stringify({ version: 1, skills: [] }),
-      );
+      await Bun.write(join(tempDir, "skills.json"), JSON.stringify({ version: 1, skills: [] }));
 
       const result = await loadManifest(tempDir);
       expect(result.ok).toBe(false);

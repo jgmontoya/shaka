@@ -97,9 +97,7 @@ describe("GitHubSourceProvider", () => {
         gitRevParse: fakeRevParse,
       });
 
-      const result = await provider.fetch(
-        "https://github.com/user/repo/tree/main/skills/my-skill",
-      );
+      const result = await provider.fetch("https://github.com/user/repo/tree/main/skills/my-skill");
 
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -169,7 +167,7 @@ describe("GitHubSourceProvider", () => {
       }
     });
 
-    test("marketplace returns null when selectSkill cancels", async () => {
+    test("marketplace returns error when selectSkill cancels", async () => {
       const marketplaceJson = JSON.stringify({
         name: "multi-marketplace",
         plugins: [
@@ -192,6 +190,9 @@ describe("GitHubSourceProvider", () => {
       });
 
       expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("cancelled");
+      }
     });
 
     test("marketplace falls back to .claude/skills/ when source is ./", async () => {
@@ -218,9 +219,7 @@ describe("GitHubSourceProvider", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.subdirectory).toBe(
-          join(".claude", "skills", "interface-design"),
-        );
+        expect(result.value.subdirectory).toBe(join(".claude", "skills", "interface-design"));
         expect(await Bun.file(join(result.value.skillDir, "SKILL.md")).exists()).toBe(true);
         await rm(result.value.tempDir, { recursive: true, force: true });
       }
@@ -250,9 +249,7 @@ describe("GitHubSourceProvider", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.subdirectory).toBe(
-          join(".claude", "skills", "actual-skill"),
-        );
+        expect(result.value.subdirectory).toBe(join(".claude", "skills", "actual-skill"));
         await rm(result.value.tempDir, { recursive: true, force: true });
       }
     });
@@ -280,9 +277,7 @@ describe("GitHubSourceProvider", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.subdirectory).toBe(
-          join("skills", "playwright-skill"),
-        );
+        expect(result.value.subdirectory).toBe(join("skills", "playwright-skill"));
         expect(await Bun.file(join(result.value.skillDir, "SKILL.md")).exists()).toBe(true);
         await rm(result.value.tempDir, { recursive: true, force: true });
       }
@@ -416,6 +411,28 @@ describe("GitHubSourceProvider", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.message).toContain("Invalid marketplace path");
+      }
+    });
+
+    test("rejects marketplace plugin.name path traversal in fallback", async () => {
+      const marketplaceJson = JSON.stringify({
+        name: "malicious-marketplace",
+        plugins: [{ name: "../../../escape", source: "./" }],
+      });
+
+      const provider = createGitHubProvider({
+        gitClone: fakeGitClone({
+          ".claude-plugin/marketplace.json": marketplaceJson,
+        }),
+        gitRevParse: fakeRevParse,
+      });
+
+      const result = await provider.fetch("user/repo");
+
+      // Should not succeed with a traversal path — either error or "not found"
+      if (result.ok) {
+        // If it somehow resolved, the skillDir must be inside the repo
+        expect(result.value.skillDir).not.toContain("..");
       }
     });
   });

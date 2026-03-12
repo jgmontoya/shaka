@@ -151,7 +151,7 @@ function createDefaultFetchSkill(registryUrl: string): ClawhubFetchFn {
 
 async function safeFetch(url: string): Promise<Result<Response, Error>> {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
     if (!res.ok) {
       return err(new Error(`HTTP ${res.status}: ${res.statusText} (${url})`));
     }

@@ -44,7 +44,7 @@ export function createGitHubProvider(options: GitHubProviderOptions = {}): Skill
     name: "github",
 
     canHandle(input: string): boolean {
-      return input.includes("/") || input.startsWith("https://") || input.startsWith("git@");
+      return parseGitHubUrl(input).ok;
     },
 
     async fetch(input: string, fetchOptions?: FetchOptions): Promise<Result<FetchResult, Error>> {
@@ -73,23 +73,35 @@ export function createGitHubProvider(options: GitHubProviderOptions = {}): Skill
 
       const version = commitResult.value;
       const subdirectory = fetchOptions?.subdirectory ?? parsed.value.subdirectory;
-
-      const discovered = await discoverSkillDir(
-        tempDir,
-        subdirectory,
-        version,
-        input,
-        fetchOptions,
-      );
-      if (discovered) return discovered;
-
-      await cleanupTempDir(tempDir);
-      if (subdirectory) {
-        return err(new Error(`SKILL.md not found in specified subdirectory: ${subdirectory}`));
-      }
-      return err(new Error("No SKILL.md or .claude-plugin/marketplace.json found in repository."));
+      return resolveAfterClone(tempDir, subdirectory, version, input, fetchOptions);
     },
   };
+}
+
+/** Discover and resolve the skill directory after a successful clone. Owns tempDir cleanup on failure. */
+async function resolveAfterClone(
+  tempDir: string,
+  subdirectory: string | null,
+  version: string,
+  source: string,
+  fetchOptions?: FetchOptions,
+): Promise<Result<FetchResult, Error>> {
+  let discovered: Result<FetchResult, Error> | null;
+  try {
+    discovered = await discoverSkillDir(tempDir, subdirectory, version, source, fetchOptions);
+  } catch (e) {
+    await cleanupTempDir(tempDir);
+    return err(e instanceof Error ? e : new Error(String(e)));
+  }
+
+  if (discovered?.ok) return discovered;
+
+  await cleanupTempDir(tempDir);
+  if (discovered) return discovered;
+  if (subdirectory) {
+    return err(new Error(`SKILL.md not found in specified subdirectory: ${subdirectory}`));
+  }
+  return err(new Error("No SKILL.md or .claude-plugin/marketplace.json found in repository."));
 }
 
 // --- Skill discovery chain ---
@@ -175,7 +187,7 @@ async function tryMarketplace(
   }));
 
   const selected = await options.selectSkill(choices);
-  if (!selected) return null;
+  if (!selected) return err(new Error("Skill selection cancelled."));
 
   const plugin = manifest.plugins.find((p) => p.name === selected);
   if (!plugin) return null;
@@ -206,8 +218,8 @@ async function resolvePluginSkillDir(
   }
 
   // Fallback: .claude/skills/<plugin-name>/ (Claude Code convention)
-  const claudeSkillDir = join(tempDir, ".claude", "skills", plugin.name);
-  if (await Bun.file(join(claudeSkillDir, "SKILL.md")).exists()) {
+  const claudeSkillDir = resolveInsideRepo(tempDir, join(".claude", "skills", plugin.name));
+  if (claudeSkillDir && (await Bun.file(join(claudeSkillDir, "SKILL.md")).exists())) {
     const subdir = join(".claude", "skills", plugin.name);
     return ok({ skillDir: claudeSkillDir, tempDir, version, source, subdirectory: subdir });
   }
@@ -320,7 +332,7 @@ async function trySkillsDirectory(
 
     const choices = skillDirs.map((s) => ({ name: s.name }));
     const selected = await options.selectSkill(choices);
-    if (!selected) return null;
+    if (!selected) return err(new Error("Skill selection cancelled."));
 
     const chosen = skillDirs.find((s) => s.name === selected);
     if (!chosen) return null;

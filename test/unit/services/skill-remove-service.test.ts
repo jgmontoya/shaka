@@ -3,7 +3,12 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InstalledSkill } from "../../../src/domain/skills-manifest";
-import { addSkill, emptyManifest, loadManifest, saveManifest } from "../../../src/domain/skills-manifest";
+import {
+  addSkill,
+  emptyManifest,
+  loadManifest,
+  saveManifest,
+} from "../../../src/domain/skills-manifest";
 import { linkSkillToProviders } from "../../../src/services/skill-linker";
 import { removeSkill } from "../../../src/services/skill-remove-service";
 
@@ -98,7 +103,10 @@ describe("SkillRemoveService", () => {
   test("fails on system skill", async () => {
     // Create a system skill
     await mkdir(join(tempDir, "system", "skills", "Council"), { recursive: true });
-    await writeFile(join(tempDir, "system", "skills", "Council", "SKILL.md"), "---\nname: Council\n---");
+    await writeFile(
+      join(tempDir, "system", "skills", "Council", "SKILL.md"),
+      "---\nname: Council\n---",
+    );
 
     const result = await removeSkill(tempDir, "Council");
     expect(result.ok).toBe(false);

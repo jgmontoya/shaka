@@ -122,6 +122,7 @@ async function copySkillFiles(source: string, target: string): Promise<void> {
   const entries = await readdir(source, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.name === ".git" || entry.name === "_backup") continue;
+    if (entry.isSymbolicLink()) continue;
 
     const sourcePath = join(source, entry.name);
     const targetPath = join(target, entry.name);
@@ -148,7 +149,7 @@ function isSafeSkillName(name: string): boolean {
 }
 
 function parseFrontmatter(content: string): Record<string, unknown> | null {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return null;
 
   try {

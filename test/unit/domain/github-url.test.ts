@@ -74,9 +74,7 @@ describe("parseGitHubUrl", () => {
     });
 
     test("parses /tree/branch URL", () => {
-      const result = parseGitHubUrl(
-        "https://github.com/user/repo/tree/main",
-      );
+      const result = parseGitHubUrl("https://github.com/user/repo/tree/main");
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.ref).toBe("main");
@@ -85,9 +83,7 @@ describe("parseGitHubUrl", () => {
     });
 
     test("parses /tree/branch/path URL", () => {
-      const result = parseGitHubUrl(
-        "https://github.com/user/repo/tree/main/skills/my-skill",
-      );
+      const result = parseGitHubUrl("https://github.com/user/repo/tree/main/skills/my-skill");
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.ref).toBe("main");
@@ -96,9 +92,7 @@ describe("parseGitHubUrl", () => {
     });
 
     test("parses /tree/branch/deep/path URL", () => {
-      const result = parseGitHubUrl(
-        "https://github.com/user/repo/tree/v2/a/b/c",
-      );
+      const result = parseGitHubUrl("https://github.com/user/repo/tree/v2/a/b/c");
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.ref).toBe("v2");
@@ -120,6 +114,22 @@ describe("parseGitHubUrl", () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.message).toContain("Expected at least user/repo");
+      }
+    });
+
+    test("rejects /blob/ URL path", () => {
+      const result = parseGitHubUrl("https://github.com/user/repo/blob/main/SKILL.md");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("Unsupported GitHub URL path");
+      }
+    });
+
+    test("rejects /releases/ URL path", () => {
+      const result = parseGitHubUrl("https://github.com/user/repo/releases/tag/v1.0");
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("Unsupported GitHub URL path");
       }
     });
   });

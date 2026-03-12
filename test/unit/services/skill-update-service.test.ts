@@ -10,10 +10,7 @@ import {
   loadManifest,
   saveManifest,
 } from "../../../src/domain/skills-manifest";
-import {
-  updateAllSkills,
-  updateSkill,
-} from "../../../src/services/skill-update-service";
+import { updateAllSkills, updateSkill } from "../../../src/services/skill-update-service";
 import { createGitHubProvider } from "../../../src/services/skill-source/github";
 
 const VALID_SKILL_MD = `---
@@ -169,6 +166,21 @@ describe("SkillUpdateService", () => {
       }
     });
 
+    test("rejects update when upstream skill was renamed", async () => {
+      await installFakeSkill("TestSkill");
+
+      const renamedMd = `---\nname: RenamedSkill\ndescription: A renamed skill\n---\n\n# RenamedSkill\n`;
+      const result = await updateSkill(tempDir, "TestSkill", {
+        provider: testProvider(UPDATED_SHA, fakeGitClone(renamedMd)),
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("renamed upstream");
+        expect(result.error.message).toContain("RenamedSkill");
+      }
+    });
+
     test("replaces skill files on disk", async () => {
       await installFakeSkill("TestSkill");
 
@@ -177,9 +189,7 @@ describe("SkillUpdateService", () => {
         provider: testProvider(UPDATED_SHA, fakeGitClone(updatedMd)),
       });
 
-      const content = await Bun.file(
-        join(tempDir, "skills", "TestSkill", "SKILL.md"),
-      ).text();
+      const content = await Bun.file(join(tempDir, "skills", "TestSkill", "SKILL.md")).text();
       expect(content).toContain("Updated");
     });
 
@@ -256,21 +266,32 @@ describe("SkillUpdateService", () => {
 
   describe("updateAllSkills", () => {
     test("updates all installed skills", async () => {
-      // Install two skills
-      const skillDirA = join(tempDir, "skills", "SkillA");
-      const skillDirB = join(tempDir, "skills", "SkillB");
+      const SECOND_SKILL_MD = `---\nname: SecondSkill\ndescription: A second skill\n---\n\n# SecondSkill\n`;
+
+      const skillDirA = join(tempDir, "skills", "TestSkill");
+      const skillDirB = join(tempDir, "skills", "SecondSkill");
       await mkdir(skillDirA, { recursive: true });
       await mkdir(skillDirB, { recursive: true });
-      await writeFile(join(skillDirA, "SKILL.md"), `---\nname: SkillA\n---`);
-      await writeFile(join(skillDirB, "SKILL.md"), `---\nname: SkillB\n---`);
+      await writeFile(join(skillDirA, "SKILL.md"), VALID_SKILL_MD);
+      await writeFile(join(skillDirB, "SKILL.md"), SECOND_SKILL_MD);
 
-      let manifest = addSkill(emptyManifest(), "SkillA", TEST_SKILL);
-      manifest = addSkill(manifest, "SkillB", { ...TEST_SKILL, source: "other/repo" });
+      let manifest = addSkill(emptyManifest(), "TestSkill", TEST_SKILL);
+      manifest = addSkill(manifest, "SecondSkill", { ...TEST_SKILL, source: "other/repo" });
       await saveManifest(tempDir, manifest);
 
-      const result = await updateAllSkills(tempDir, {
-        provider: testProvider(UPDATED_SHA),
+      // Provider returns correct name per call (insertion order: TestSkill, SecondSkill)
+      let callIdx = 0;
+      const mds = [VALID_SKILL_MD, SECOND_SKILL_MD];
+      const multiProvider = createGitHubProvider({
+        gitClone: async (_url: string, dest: string, _ref: string | null) => {
+          await mkdir(dest, { recursive: true });
+          await writeFile(join(dest, "SKILL.md"), mds[callIdx++] ?? VALID_SKILL_MD);
+          return ok(undefined);
+        },
+        gitRevParse: async () => ok(UPDATED_SHA),
       });
+
+      const result = await updateAllSkills(tempDir, { provider: multiProvider });
 
       expect(result.ok).toBe(true);
       if (result.ok) {
@@ -293,19 +314,19 @@ describe("SkillUpdateService", () => {
     });
 
     test("collects failures without losing successful results", async () => {
-      // Install two skills
-      const skillDirA = join(tempDir, "skills", "SkillA");
-      const skillDirB = join(tempDir, "skills", "SkillB");
+      // Install two skills: TestSkill (will succeed) and FailSkill (will fail)
+      const skillDirA = join(tempDir, "skills", "TestSkill");
+      const skillDirB = join(tempDir, "skills", "FailSkill");
       await mkdir(skillDirA, { recursive: true });
       await mkdir(skillDirB, { recursive: true });
-      await writeFile(join(skillDirA, "SKILL.md"), `---\nname: SkillA\n---`);
-      await writeFile(join(skillDirB, "SKILL.md"), `---\nname: SkillB\n---`);
+      await writeFile(join(skillDirA, "SKILL.md"), VALID_SKILL_MD);
+      await writeFile(join(skillDirB, "SKILL.md"), `---\nname: FailSkill\n---`);
 
-      let manifest = addSkill(emptyManifest(), "SkillA", TEST_SKILL);
-      manifest = addSkill(manifest, "SkillB", { ...TEST_SKILL, source: "other/repo" });
+      let manifest = addSkill(emptyManifest(), "TestSkill", TEST_SKILL);
+      manifest = addSkill(manifest, "FailSkill", { ...TEST_SKILL, source: "other/repo" });
       await saveManifest(tempDir, manifest);
 
-      // Provider that succeeds for SkillA but returns invalid SKILL.md for SkillB
+      // Provider that succeeds for TestSkill but returns no SKILL.md for FailSkill
       let callCount = 0;
       const mixedProvider = createGitHubProvider({
         gitClone: async (_url: string, dest: string, _ref: string | null) => {
@@ -325,9 +346,9 @@ describe("SkillUpdateService", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         expect(result.value.results).toHaveLength(1);
-        expect(result.value.results[0]?.name).toBe("SkillA");
+        expect(result.value.results[0]?.name).toBe("TestSkill");
         expect(result.value.failures).toHaveLength(1);
-        expect(result.value.failures[0]?.name).toBe("SkillB");
+        expect(result.value.failures[0]?.name).toBe("FailSkill");
       }
     });
   });

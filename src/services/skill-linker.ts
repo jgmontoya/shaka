@@ -58,9 +58,6 @@ export async function unlinkSkillFromProviders(
   shakaHome: string,
   skillName: string,
 ): Promise<void> {
-  const config = await loadConfig(shakaHome);
-  if (!config) return;
-
   const sourceDir = join(shakaHome, "skills", skillName);
   for (const { skillsDir } of getAllProviderSkillDirs()) {
     await uninstallAssetSymlink(sourceDir, skillsDir, skillName);

@@ -69,6 +69,14 @@ export async function updateSkill(
     const validation = await validateSkillStructure(fetchResult.value.skillDir);
     if (!validation.ok) return validation;
 
+    if (validation.value.name !== name) {
+      return err(
+        new Error(
+          `Skill was renamed upstream from "${name}" to "${validation.value.name}". Remove and reinstall to use the new name.`,
+        ),
+      );
+    }
+
     const warnings = await collectUpdateWarnings(fetchResult.value.skillDir);
 
     const applyResult = await deployAndPersistUpdate(

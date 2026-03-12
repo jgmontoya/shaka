@@ -177,6 +177,9 @@ async function handleList(): Promise<void> {
 
   const systemSkills = await listSkillDirs(join(shakaHome, "system", "skills"));
   const manifest = await loadManifest(shakaHome);
+  if (!manifest.ok) {
+    console.error(`✗ ${manifest.error.message}`);
+  }
   const installedSkills = manifest.ok ? Object.entries(manifest.value.skills) : [];
 
   if (systemSkills.length === 0 && installedSkills.length === 0) {
@@ -251,14 +254,16 @@ async function readLine(): Promise<string> {
   return new Promise((resolve) => {
     process.stdin.setEncoding("utf-8");
     process.stdin.resume();
-    const timeout = setTimeout(() => {
-      process.stdin.pause();
-      resolve("n");
-    }, 30000);
-    process.stdin.once("data", (chunk) => {
+    const onData = (chunk: string | Buffer) => {
       clearTimeout(timeout);
       process.stdin.pause();
       resolve(chunk.toString().trim());
-    });
+    };
+    const timeout = setTimeout(() => {
+      process.stdin.off("data", onData);
+      process.stdin.pause();
+      resolve("n");
+    }, 30000);
+    process.stdin.once("data", onData);
   });
 }

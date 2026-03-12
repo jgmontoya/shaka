@@ -12,7 +12,7 @@ export interface ParsedGitHubUrl {
   readonly owner: string;
   /** Repository name (without .git suffix). */
   readonly repo: string;
-  /** Git ref (branch, tag, or commit). Null if default branch. */
+  /** Git ref (branch or tag). Null if default branch. */
   readonly ref: string | null;
   /** Subdirectory within the repo. Null if root. */
   readonly subdirectory: string | null;
@@ -111,6 +111,12 @@ function parseHttpsUrl(input: string): Result<ParsedGitHubUrl, Error> {
     if (parts.length > 4) {
       subdirectory = parts.slice(4).join("/");
     }
+  } else if (parts.length > 2) {
+    return err(
+      new Error(
+        `Unsupported GitHub URL path: "${input}". Only /tree/<ref>/... URLs with subdirectories are supported.`,
+      ),
+    );
   }
 
   return ok({

@@ -91,10 +91,7 @@ function parseFrontmatter(content: string): Record<string, unknown> | null {
  * Scan a single agents directory and merge results into the capabilities map.
  * Later calls override earlier entries with the same capability key.
  */
-async function scanAgentsDir(
-  dir: string,
-  capabilities: Map<string, Capability>,
-): Promise<void> {
+async function scanAgentsDir(dir: string, capabilities: Map<string, Capability>): Promise<void> {
   try {
     const glob = new Bun.Glob("*.md");
     for await (const file of glob.scan({ cwd: dir })) {
@@ -143,10 +140,7 @@ async function discoverCapabilities(): Promise<Capability[]> {
  * Scan a single skills directory for SKILL.md files with thinking tool metadata.
  * Later calls override earlier entries with the same key.
  */
-async function scanSkillsDir(
-  dir: string,
-  toolsMap: Map<string, ThinkingTool>,
-): Promise<void> {
+async function scanSkillsDir(dir: string, toolsMap: Map<string, ThinkingTool>): Promise<void> {
   try {
     const glob = new Bun.Glob("*/SKILL.md");
     for await (const file of glob.scan({ cwd: dir })) {

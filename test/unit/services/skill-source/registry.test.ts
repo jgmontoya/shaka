@@ -9,14 +9,12 @@ import {
 } from "../../../../src/services/skill-source/registry";
 import type { SkillSourceProvider } from "../../../../src/services/skill-source/types";
 
-function makeProvider(
-  name: string,
-  canHandle: (input: string) => boolean,
-): SkillSourceProvider {
+function makeProvider(name: string, canHandle: (input: string) => boolean): SkillSourceProvider {
   return {
     name,
     canHandle,
-    fetch: async () => ok({ skillDir: "", tempDir: "", version: "", source: "", subdirectory: null }),
+    fetch: async () =>
+      ok({ skillDir: "", tempDir: "", version: "", source: "", subdirectory: null }),
   };
 }
 

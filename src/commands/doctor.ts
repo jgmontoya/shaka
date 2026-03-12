@@ -55,13 +55,7 @@ function logProviderStatus(
     );
     console.log(`    Commands:      ${formatStatus(status.commands.ok, status.commands.issue)}`);
 
-    if (
-      !status.hooks.ok ||
-      !status.agents.ok ||
-      !status.skills.ok ||
-      !status.installedSkills.ok ||
-      !status.commands.ok
-    ) {
+    if (!isFullyInstalled(status)) {
       hasIssues = true;
     }
   } else if (cliInstalled && !enabled) {
@@ -219,7 +213,7 @@ async function checkInstalledSkills(shakaHome: string): Promise<boolean> {
 
   const manifest = await loadManifest(shakaHome);
   if (!manifest.ok) {
-    console.log("  ✗ Failed to load skills.json");
+    console.log(`  ✗ ${manifest.error.message}`);
     return true;
   }
 
@@ -235,8 +229,9 @@ async function checkInstalledSkills(shakaHome: string): Promise<boolean> {
   for (const name of names) {
     const dirExists = await dirExistsOnDisk(join(skillsDir, name));
     if (dirExists) {
-      const sha = manifest.value.skills[name]?.version.slice(0, 7) ?? "unknown";
-      console.log(`  ✓ ${name} (${sha})`);
+      const version = manifest.value.skills[name]?.version ?? "unknown";
+      const display = version.length > 12 ? version.slice(0, 7) : version;
+      console.log(`  ✓ ${name} (${display})`);
     } else {
       console.log(`  ✗ ${name} — missing from disk (orphaned manifest entry)`);
       hasIssues = true;
