@@ -4,6 +4,23 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] — 2026-03-12
+
+### Added
+
+- **Skill management** — Install, update, and remove third-party skills from GitHub or the Clawhub registry
+  - `shaka skill install user/repo` — install from GitHub (shorthand, full URL, or with `#ref`)
+  - `shaka skill install sonoscli` — install from Clawhub (bare name, or `name@version`)
+  - `shaka skill update [name]` — update one skill or all installed skills
+  - `shaka skill remove <name>` — remove an installed skill
+  - `shaka skill list` — list system and installed skills with their source
+  - `--github` and `--clawhub` flags to override auto-detection
+- **Security scanning on install** — Skills are scanned before installation for executable files, URLs, HTML comments, and invisible characters. Findings are presented for review before proceeding. Use `--yolo` to skip
+- **GitHub skill discovery** — Repos without a root `SKILL.md` are searched via fallback paths: marketplace metadata (`.claude-plugin/marketplace.json`), `.claude/skills/`, and `skills/` directories
+- **Clawhub registry** — HTTP-based skill source with version resolution and ZIP extraction
+- **Skill manifest** — Installed skills tracked in `skills.json` with source, provider, and version metadata
+- **Doctor integration** — `shaka doctor` now checks installed skill health
+
 ## [0.6.1] — 2026-03-11
 
 ### Added
@@ -156,13 +173,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
   - Backup written before every consolidation
 - **Learnings search** — `shaka memory search` and MCP tool now return learnings alongside sessions
 - **Search result type discriminator** — `SearchResult.type` field (`"session"` | `"learning"`)
-- **Multi-provider skill installation** — Skills can now be installed from GitHub repositories or the Clawhub registry (`clawhub.ai`), with automatic source detection based on input format
-  - `shaka skill install user/repo` — GitHub (input contains `/`)
-  - `shaka skill install sonoscli` or `sonoscli@1.2.0` — Clawhub (bare word)
-  - `--github` and `--clawhub` flags to override auto-detection (`--clawdhub` kept as deprecated alias)
-- **Clawhub provider** — HTTP-based skill installation from the Clawhub registry with version resolution, ZIP download, and extraction
-- **GitHub marketplace fallback** — GitHub repos without a root `SKILL.md` are checked for `.claude-plugin/marketplace.json`; if found, available skills are listed for user selection
-- **SkillSourceProvider abstraction** — Provider interface and registry (`canHandle`, `fetch`) enabling pluggable skill sources
 - **Windows support** — Shaka now runs on Windows alongside macOS and Linux
   - Cross-platform path utilities (`src/platform/paths.ts`) with `readSymlinkTarget()` and `removeLink()` helpers
   - Junctions instead of directory symlinks for zero-privilege Windows support (no Developer Mode or admin required)
@@ -177,10 +187,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 - **Summarization prompt extended** — Now extracts learnings alongside session summaries in a single inference call
 - **Session summaries exclude learnings** — `## Learnings` section stripped from session summary body (stored separately in `learnings.md`)
 - **`hashSessionId` extracted** — Shared utility in `src/memory/utils.ts` (was private in storage.ts)
-- **Skills manifest uses provider-agnostic fields** — `InstalledSkill` now uses `provider` and `version` instead of git-specific `ref` and `commit` fields
-- **Skill install/update services use provider abstraction** — Services delegate fetching to `SkillSourceProvider` instead of calling git directly; shared pipeline (validate → scan → install → persist) is source-agnostic
-- **`skill-git.ts` split into `skill-pipeline.ts` + `skill-source/github.ts`** — Generic deployment helpers separated from GitHub-specific git operations
-- **`shaka skill list` shows provider** — Installed skills now display their provider name (e.g., `github: user/repo` or `clawhub: sonoscli`)
 - **All path construction uses `path.join()`** — Replaced hardcoded `/` separators across `src/` modules, `defaults/` hooks, providers, configurers, and tests
 - **`pathToFileURL()` for dynamic imports** — Bare Windows paths (`C:\...`) fail with `import()`, now converted to `file://` URLs
 - **Security pattern matching is cross-platform** — Path patterns normalize separators before matching
@@ -285,6 +291,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.7.0]: https://github.com/jgmontoya/shaka/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jgmontoya/shaka/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jgmontoya/shaka/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/jgmontoya/shaka/compare/v0.4.2...v0.5.0

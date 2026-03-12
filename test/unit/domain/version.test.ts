@@ -76,6 +76,6 @@ describe("getCurrentVersion", () => {
   test("returns version from package.json", () => {
     const version = getCurrentVersion();
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(version).toBe("0.6.1");
+    expect(version).toBe("0.7.0");
   });
 });
