@@ -5,13 +5,6 @@ key: becreative
 include_when: Need creative divergence. Novel solution space. Avoiding obvious answers.
 ---
 
-## Customization
-
-**Before executing, check for user customizations at:**
-`${SHAKA_HOME}/customizations/skills/BeCreative/`
-
-If this directory exists, load and apply any PREFERENCES.md, configurations, or resources found there. These override default behavior. If the directory does not exist, proceed with skill defaults.
-
 # BeCreative Skill
 
 Enhance AI creativity using deep thinking + Verbalized Sampling. Combines research-backed techniques (Zhang et al., 2024) for 1.6-2.1x diversity increase and extended thinking for quality.

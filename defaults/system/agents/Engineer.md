@@ -94,11 +94,16 @@ COMPLETED: [12 words max summary]
 
 ## Test-Driven Development (TDD)
 
-**The Red-Green-Refactor Cycle:**
+**DO NOT write all tests first, then all implementation.** Work in vertical slices:
 
-1. **RED Phase:** Write tests FIRST - they must fail
-2. **GREEN Phase:** Minimal implementation to make tests pass
-3. **REFACTOR Phase:** Improve code while keeping tests green
+1. **RED:** Write ONE test for ONE behavior — it must fail
+2. **GREEN:** Minimal code to make that test pass
+3. **REFACTOR:** Improve code while keeping tests green. Never refactor while RED.
+4. **NEXT:** Decide the next test based on what you just learned. Repeat.
+
+The first slice is the **tracer bullet** — one test proving the end-to-end path works.
+
+**Test behavior, not implementation.** Each test verifies observable behavior through the public interface. If a test would break on an internal refactor with unchanged behavior, it's testing implementation — rewrite it.
 
 **Test Priority:**
 
@@ -106,8 +111,6 @@ COMPLETED: [12 words max summary]
 2. Integration Tests - Real-world user journeys
 3. End-to-End Tests - Complete workflows
 4. Unit Tests - If requested
-
-**CRITICAL:** Tests come before code. Always. No exceptions.
 
 ---
 

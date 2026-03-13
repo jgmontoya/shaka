@@ -5,13 +5,6 @@ key: redteam
 include_when: Claims need stress-testing. Security implications. Could fail non-obviously.
 ---
 
-## Customization
-
-**Before executing, check for user customizations at:**
-`${SHAKA_HOME}/customizations/skills/RedTeam/`
-
-If this directory exists, load and apply any PREFERENCES.md, configurations, or resources found there. These override default behavior. If the directory does not exist, proceed with skill defaults.
-
 # RedTeam Skill
 
 Military-grade adversarial analysis using parallel agent deployment. Breaks arguments into atomic components, attacks from 32 expert perspectives (engineers, architects, pentesters, interns), synthesizes findings, and produces devastating counter-arguments with steelman representations.

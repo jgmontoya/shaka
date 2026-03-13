@@ -5,13 +5,6 @@ key: council
 include_when: Multiple valid approaches exist. Design decisions with no clear winner.
 ---
 
-## Customization
-
-**Before executing, check for user customizations at:**
-`${SHAKA_HOME}/customizations/skills/Council/`
-
-If this directory exists, load and apply any PREFERENCES.md, configurations, or resources found there. These override default behavior. If the directory does not exist, proceed with skill defaults.
-
 # Council Skill
 
 Multi-agent debate system where specialized agents discuss topics in rounds, respond to each other's points, and surface insights through intellectual friction.

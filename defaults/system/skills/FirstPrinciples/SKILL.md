@@ -5,13 +5,6 @@ key: firstprinciples
 include_when: Problem may be a symptom. Assumptions need examining. "Why" over "how."
 ---
 
-## Customization
-
-**Before executing, check for user customizations at:**
-`${SHAKA_HOME}/customizations/skills/FirstPrinciples/`
-
-If this directory exists, load and apply any PREFERENCES.md, configurations, or resources found there. These override default behavior. If the directory does not exist, proceed with skill defaults.
-
 # FirstPrinciples Skill
 
 Foundational reasoning methodology based on Elon Musk's physics-based thinking framework. Deconstructs problems to fundamental truths rather than reasoning by analogy.
