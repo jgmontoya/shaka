@@ -374,10 +374,10 @@ Workflows live in `system/workflows/` (shipped) and `customizations/workflows/` 
 
 **Shipped workflows:**
 
-| Workflow         | Purpose                                                       |
-| ---------------- | ------------------------------------------------------------- |
-| `review-and-fix` | Run a code review then assess and fix valid issues            |
-| `plan-feature`   | Plan a feature with iterative critique and revision cycles    |
+| Workflow         | Purpose                                                    |
+| ---------------- | ---------------------------------------------------------- |
+| `review-and-fix` | Run a code review then assess and fix valid issues         |
+| `plan-feature`   | Plan a feature with iterative critique and revision cycles |
 
 ```bash
 shaka run review-and-fix     # Run the shipped review-and-fix workflow
@@ -390,14 +390,15 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 
 **Shipped skills:**
 
-| Skill           | Purpose                                       |
-| --------------- | --------------------------------------------- |
-| BeCreative      | Extended thinking + diverse option generation |
-| Council         | Multi-perspective debate (3-7 agents)         |
-| RedTeam         | Adversarial validation (32 agents)            |
-| Science         | Scientific method workflows                   |
-| FirstPrinciples | Deconstruct → Challenge → Reconstruct         |
-| WritingRules    | Anti-slop prose constraints + `shaka scan`    |
+| Skill           | Purpose                                          |
+| --------------- | ------------------------------------------------ |
+| TDD             | Test-driven development (default for all builds) |
+| BeCreative      | Extended thinking + diverse option generation    |
+| Council         | Multi-perspective debate (3-7 agents)            |
+| RedTeam         | Adversarial validation (32 agents)               |
+| Science         | Scientific method workflows                      |
+| FirstPrinciples | Deconstruct → Challenge → Reconstruct            |
+| WritingRules    | Anti-slop prose constraints + `shaka scan`       |
 
 Skills are invoked by context ("review this PR") or explicitly ("use the code-review skill").
 

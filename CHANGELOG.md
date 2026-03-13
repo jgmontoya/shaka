@@ -4,6 +4,17 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] — 2026-03-13
+
+### Added
+
+- **TDD skill** — Default-on test-driven development skill with red-green-refactor discipline, horizontal slicing anti-pattern, mock boundary guidelines, and per-cycle gate. Adapted from [Matt Pocock's TDD skill](https://github.com/mattpocock/skills/tree/main/tdd) with modifications for AI agent context
+
+### Changed
+
+- **Engineer agent** — Improved TDD section with vertical slice workflow, tracer bullet approach, and horizontal slicing anti-pattern warning
+- **Skills cleanup** — Removed dead Customization boilerplate from BeCreative, Council, FirstPrinciples, and RedTeam skills (section referenced a `customizations/skills/` path with no backing infrastructure)
+
 ## [0.7.0] — 2026-03-12
 
 ### Added
@@ -291,6 +302,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.7.1]: https://github.com/jgmontoya/shaka/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jgmontoya/shaka/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/jgmontoya/shaka/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/jgmontoya/shaka/compare/v0.5.0...v0.6.0
