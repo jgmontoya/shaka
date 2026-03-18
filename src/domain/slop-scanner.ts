@@ -111,6 +111,21 @@ const CARDINAL_SINS: PatternDef[] = [
     name: "not just X, but Y",
     suggestion: "State the positive directly",
   },
+  {
+    pattern: /\bnot because\s+[^.]+\.\s*because\b/gi,
+    name: "Not because X. Because Y.",
+    suggestion: "State Y directly",
+  },
+  {
+    pattern: /\bisn't the problem\.\s*\w+\s+is\b/gi,
+    name: "X isn't the problem. Y is.",
+    suggestion: "State the problem directly",
+  },
+  {
+    pattern: /\bit feels like\s+[^.]+\.\s*it's actually\b/gi,
+    name: "It feels like X. It's actually Y.",
+    suggestion: "State Y directly",
+  },
 ];
 
 const BANNED_WORDS: Map<string, string> = new Map([
@@ -169,6 +184,9 @@ const BANNED_WORDS: Map<string, string> = new Map([
   ["fundamentally", "be specific"],
   // Tier 5: Additional AI tells
   ["genuine", "real, actual"],
+  ["genuinely", "delete or be specific"],
+  ["honestly", "delete"],
+  ["literally", "delete or be specific"],
   ["straightforward", "simple, direct"],
   ["unlock", "enable, reveal"],
   ["navigate", "handle, manage"],
@@ -185,6 +203,7 @@ const BANNED_WORDS: Map<string, string> = new Map([
   ["instructive", "useful, informative"],
   ["leveraging", "using, applying"],
   ["leveraged", "used, applied"],
+  ["unpack", "explain"],
 ]);
 
 const BANNED_CONSTRUCTIONS: PatternDef[] = [
@@ -235,6 +254,41 @@ const BANNED_CONSTRUCTIONS: PatternDef[] = [
     pattern: /\bContrary to popular belief\b/gi,
     name: "Contrary to popular belief",
     suggestion: "State your view",
+  },
+  {
+    pattern: /\bFull stop\b/gi,
+    name: "Full stop",
+    suggestion: "Delete",
+  },
+  {
+    pattern: /\bLet that sink in\b/gi,
+    name: "Let that sink in",
+    suggestion: "Delete",
+  },
+  {
+    pattern: /\bHere's the thing\b/gi,
+    name: "Here's the thing",
+    suggestion: "Delete, state the point",
+  },
+  {
+    pattern: /\bHere's what I mean\b/gi,
+    name: "Here's what I mean",
+    suggestion: "Delete, state the point",
+  },
+  {
+    pattern: /\bThink about it\b/gi,
+    name: "Think about it",
+    suggestion: "Delete",
+  },
+  {
+    pattern: /\bAnd that's okay\b/gi,
+    name: "And that's okay",
+    suggestion: "Delete",
+  },
+  {
+    pattern: /\blean into\b/gi,
+    name: "lean into",
+    suggestion: "accept, embrace",
   },
 ];
 
@@ -321,6 +375,38 @@ const AI_TELL_PATTERNS: PatternDef[] = [
     pattern: /\bNot only\b[^.]*\bbut also\b/gi,
     name: "Not only...but also",
     suggestion: "State both points directly",
+  },
+  // False agency: inanimate objects performing human actions
+  {
+    pattern: /\bthe data tells\b/gi,
+    name: "false agency: the data tells",
+    suggestion: "Name who analyzed the data",
+  },
+  {
+    pattern: /\bthe (market|industry) rewards\b/gi,
+    name: "false agency: the market rewards",
+    suggestion: "Name who pays or benefits",
+  },
+  {
+    pattern: /\bthe (conversation|discussion) moves\b/gi,
+    name: "false agency: the conversation moves",
+    suggestion: "Name who steered it",
+  },
+  {
+    pattern: /\bthe (decision|answer) emerges\b/gi,
+    name: "false agency: the decision emerges",
+    suggestion: "Name who decided",
+  },
+  {
+    pattern: /\bthe culture shifts\b/gi,
+    name: "false agency: the culture shifts",
+    suggestion: "Name who changed behavior",
+  },
+  // Dramatic fragmentation
+  {
+    pattern: /That's it\.\s*That's the\b/gi,
+    name: "dramatic fragmentation",
+    suggestion: "Write a complete sentence",
   },
 ];
 

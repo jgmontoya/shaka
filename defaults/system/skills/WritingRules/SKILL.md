@@ -41,7 +41,7 @@ leverage, utilize, synergy, ecosystem, paradigm, stakeholder, holistic, proactiv
 
 ### Vague Intensifiers
 
-significantly, substantially, considerably, notably, remarkably, particularly, especially, importantly, essentially, fundamentally
+significantly, substantially, considerably, notably, remarkably, particularly, especially, importantly, essentially, fundamentally, genuinely, honestly, literally
 
 ---
 
@@ -83,6 +83,8 @@ significantly, substantially, considerably, notably, remarkably, particularly, e
 - "And that's a [adjective] thing"
 - "marks a shift"
 - "represents a breakthrough"
+- "Full stop."
+- "Let that sink in."
 
 ### Fake Depth
 
@@ -92,6 +94,17 @@ significantly, substantially, considerably, notably, remarkably, particularly, e
 - "reflects the growing"
 - "showcases the potential"
 - "demonstrates the value"
+
+### Rhetorical Setups
+
+- "What if [reframe]?"
+- "Here's what I mean:"
+- "Here's the thing:"
+- "Think about it:"
+- "And that's okay."
+- "I promise"
+
+These announce insight instead of delivering it. Make the point. Let readers draw conclusions.
 
 ---
 
@@ -105,6 +118,8 @@ significantly, substantially, considerably, notably, remarkably, particularly, e
 
 **Same Sentence Rhythm:** Mix short punchy claims with complex constructions. Don't repeat subject-verb-object.
 
+**Dramatic Fragmentation:** Don't use sentence fragments for manufactured profundity. "X. That's it. That's the thing." and "This unlocks something. Freedom." are presentation tricks. Write complete sentences.
+
 ---
 
 ## Forbidden Comparison Structures
@@ -114,6 +129,11 @@ significantly, substantially, considerably, notably, remarkably, particularly, e
 - "less about X, more about Y"
 - "It's not just X, it's Y"
 - "Not only...but also"
+- "Not because X. Because Y."
+- "X isn't the problem. Y is."
+- "It feels like X. It's actually Y."
+
+State Y directly. Drop the negation.
 
 ---
 
@@ -127,11 +147,31 @@ significantly, substantially, considerably, notably, remarkably, particularly, e
 
 **Generic Attribution:** Cite specific sources or omit.
 
+**False Agency:** Don't give inanimate objects human verbs. AI does this to avoid naming actors.
+
+| Slop | Fix |
+| --- | --- |
+| "a complaint becomes a fix" | "the team fixed it that week" |
+| "the decision emerges" | "the lead decided" |
+| "the data tells us" | "we read the data and concluded" |
+| "the culture shifts" | "people changed how they worked" |
+| "the market rewards" | "buyers pay for it" |
+
+Name the human. If no specific person fits, use "you."
+
+**Narrator-from-a-Distance:** Don't float above the scene like a documentarian. Put the reader in the room.
+
+| Slop | Fix |
+| --- | --- |
+| "Nobody designed this." | "You don't sit down one day and decide to..." |
+| "This happens because..." | "You hit this when..." |
+| "People tend to..." | "You'll find that..." |
+
 ---
 
 ## Punctuation
 
-Use straight quotes and straight apostrophes, not curly. Limit em dash usage.
+Use straight quotes and straight apostrophes, not curly. No em dashes. They are one of the most consistent AI tells. Use commas or periods instead.
 
 ---
 
@@ -156,6 +196,25 @@ Use straight quotes and straight apostrophes, not curly. Limit em dash usage.
 | tapestry      | mix, combination     |
 | pivotal       | important, key       |
 | crucial       | important, necessary |
+| navigate      | handle               |
+| unpack        | explain              |
+| lean into     | accept, embrace      |
+
+---
+
+## Examples
+
+**Before:** Here's the thing: what makes great documentation isn't just clarity, it's empathy. The conversation shifts when teams genuinely start to lean into user feedback. And that's a good thing.
+
+**After:** Great documentation explains things from the reader's position. Teams that read user feedback write better docs.
+
+**Before:** The implications are significant. This fundamentally represents a breakthrough in how organizations navigate the complexities of distributed systems.
+
+**After:** Distributed systems got easier to run. Here's what changed.
+
+**Before:** Nobody designed this system to fail. It happens because people tend to optimize for speed, not resilience. Not always. Not perfectly. But consistently.
+
+**After:** You build for speed because the deadline is Friday. Resilience gets cut from the sprint. The system breaks under load and you spend the weekend fixing it.
 
 ---
 
