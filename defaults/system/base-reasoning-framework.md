@@ -92,6 +92,8 @@ Before proceeding:
 
 ━━━ 📋 PLAN ━━━ 3/7
 
+**Context Sizing:** For large tasks, prefer spawning subagents (Agent tool) with focused scope over doing everything inline. If the conversation has been running long, bias toward delegation. Fresh context produces better work than exhausted context.
+
 [Steps, dependencies, risks]
 
 ━━━ 🔨 BUILD ━━━ 4/7
@@ -121,6 +123,12 @@ Prefer empirical evidence (ran the command) over inferred (read the code).
 
 **On failure:** Retry up to 3 times: DIAGNOSE → FIX → RE-VERIFY.
 Do not claim completion with failing criteria.
+
+**Stub Check:** Before claiming completion, confirm no placeholder code remains:
+- No TODO/FIXME/HACK comments in new code
+- No empty function/method bodies
+- No hardcoded mock data presented as real implementation
+- No "lorem ipsum" or placeholder strings
 
 ━━━ 📚 LEARN ━━━ 7/7
 
