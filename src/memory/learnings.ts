@@ -198,7 +198,7 @@ function reinforcementScore(entry: LearningEntry): number {
   return Math.min((entry.exposures.length - 1) / REINFORCEMENT_SATURATE, 1.0);
 }
 
-function matchesCwd(entry: LearningEntry, cwd: string): boolean {
+export function matchesCwd(entry: LearningEntry, cwd: string): boolean {
   if (entry.cwds.includes("*")) return true;
   return entry.cwds.some((parent) => {
     const rel = relative(parent, cwd);
@@ -514,6 +514,77 @@ export function parseQualityAssessmentOutput(raw: string): QualityVerdict[] {
   return verdicts;
 }
 
+// --- Ranking (auto-prune) ---
+
+/**
+ * Build prompt to rank pre-filtered entries by quality for auto-pruning.
+ * Caller is responsible for filtering (CWD, exposure count, age).
+ * Uses the same quality criteria as buildQualityAssessmentPrompt.
+ *
+ * Returns null if entries is empty.
+ */
+export function buildRankingPrompt(entries: LearningEntry[]): string | null {
+  if (entries.length === 0) return null;
+
+  const numbered = entries
+    .map(
+      (e, i) =>
+        `[${i + 1}] (${e.category}) ${e.title} [${e.exposures.length} exposure(s)]\n${e.body}`,
+    )
+    .join("\n\n");
+
+  return `Rank these entries from LOWEST to HIGHEST future-session utility.
+
+A learning is low quality if it fails ANY of these tests:
+${QUALITY_GATES}
+
+Common low-quality patterns:
+${LOW_QUALITY_PATTERNS}
+
+High-quality entries — do NOT include these in the ranking:
+${HIGH_QUALITY_PATTERNS}
+
+## Entries
+
+${numbered}
+
+## Instructions
+
+List ONLY entries that fail at least one quality test, ranked from worst to least-worst:
+RANK 1 [N] — reason (which quality test it fails)
+RANK 2 [N] — reason
+...
+
+If all entries pass all quality tests, output exactly:
+ALL ACCEPTABLE`;
+}
+
+/**
+ * Parse ranking output into verdicts sorted by rank (worst first).
+ * Returns 0-based indices. Sorts by the RANK number rather than
+ * trusting LLM line ordering.
+ */
+export function parseRankingOutput(raw: string): QualityVerdict[] {
+  if (raw.trim() === "ALL ACCEPTABLE") return [];
+
+  const parsed: { rank: number; index: number; reason: string }[] = [];
+  const lineRe = /^RANK\s+(\d+)\s*\[(\d+)\]\s*[-–—]\s*(.+)$/;
+
+  for (const line of raw.split("\n")) {
+    const match = line.trim().match(lineRe);
+    if (!match) continue;
+
+    const rank = Number.parseInt(match[1] ?? "", 10);
+    const index = Number.parseInt(match[2] ?? "", 10) - 1;
+    const reason = match[3]?.trim() ?? "";
+    if (Number.isNaN(rank) || !(index >= 0) || !reason) continue;
+
+    parsed.push({ rank, index, reason });
+  }
+
+  return parsed.sort((a, b) => a.rank - b.rank).map(({ index, reason }) => ({ index, reason }));
+}
+
 // --- Filtering ---
 
 /** Filter entries by free-text query. Global entries always included. */
@@ -542,6 +613,29 @@ export function filterLearnings(entries: LearningEntry[], query: string): Learni
 /** Sort entries by exposure count, highest first. */
 export function sortByExposures(entries: LearningEntry[]): LearningEntry[] {
   return [...entries].sort((a, b) => b.exposures.length - a.exposures.length);
+}
+
+// --- Archive ---
+
+export const ARCHIVE_FILE = "learnings-archive.md";
+
+/** Append archived entries to learnings-archive.md. Atomic write via temp + rename. */
+export async function appendToArchive(memoryDir: string, entries: LearningEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+
+  const archivePath = join(memoryDir, ARCHIVE_FILE);
+  const file = Bun.file(archivePath);
+
+  let existing: LearningEntry[] = [];
+  if (await file.exists()) {
+    const content = await file.text();
+    existing = parseLearnings(content);
+  }
+
+  const merged = [...existing, ...entries];
+  const tmpPath = join(memoryDir, `.${ARCHIVE_FILE}.tmp.${process.pid}`);
+  await Bun.write(tmpPath, renderLearnings(merged));
+  await rename(tmpPath, archivePath);
 }
 
 // Re-export for hooks

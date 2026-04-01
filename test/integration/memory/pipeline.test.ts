@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -151,6 +151,135 @@ describe("Memory pipeline", () => {
       const opencodeResults = await searchMemory("sidebar", testMemoryDir);
       expect(opencodeResults).toHaveLength(1);
       expect(opencodeResults[0]?.title).toContain("Dashboard Layout");
+    });
+  });
+
+  describe("condensation pipeline", () => {
+    test("full pipeline: entries survive dedup and contradiction, then condense", async () => {
+      // Simulate a realistic consolidation run with 20+ entries where:
+      // - Passes 1-2 run (above threshold)
+      // - Pass 3 condenses high-exposure entries into a compound
+      // - Source entries are archived
+      // - Compound replaces sources in the final learnings
+
+      // Mock inference to handle all three passes:
+      // Pass 1 (dedup): NO DUPLICATES
+      // Pass 2 (contradiction): NO CONTRADICTIONS
+      // Pass 3 (condensation): cluster entries 1 and 2
+      let callNum = 0;
+      mock.module("../../../src/inference", () => ({
+        inference: async () => {
+          callNum++;
+          if (callNum === 1) return { success: true, text: "NO DUPLICATES" };
+          if (callNum === 2) return { success: true, text: "NO CONTRADICTIONS" };
+          return {
+            success: true,
+            text: `CLUSTER [1, 2] — Bun runtime conventions
+TITLE: Bun Runtime Conventions
+BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-native APIs that avoid unnecessary Node.js compatibility layers.`,
+          };
+        },
+      }));
+
+      const { loadLearnings, writeLearnings } = await import("../../../src/memory/learnings");
+      const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
+
+      // Build 20+ entries (to trigger passes 1-2).
+      // First 2 have 2+ exposures and same CWD → condensation candidates.
+      // Rest are filler with single exposure, single CWD (no promotion candidates).
+      const twoExposures = [
+        { date: "2026-03-01", sessionHash: "aaaa0000" },
+        { date: "2026-03-05", sessionHash: "bbbb0000" },
+      ];
+
+      const entries = [
+        {
+          category: "pattern" as const,
+          cwds: ["/myapp"],
+          exposures: twoExposures,
+          nonglobal: false,
+          title: "Use Bun.file() for file I/O",
+          body: "Bun.file() is the native way to read files in Bun.",
+        },
+        {
+          category: "pattern" as const,
+          cwds: ["/myapp"],
+          exposures: twoExposures,
+          nonglobal: false,
+          title: "Use bun:test for testing",
+          body: "The bun:test module provides a fast test runner built into Bun.",
+        },
+        // 18 filler entries with different CWDs to avoid promotion prompts
+        ...Array.from({ length: 18 }, (_, i) => ({
+          category: "fact" as const,
+          cwds: [`/filler-${i}`],
+          exposures: [{ date: "2026-03-01", sessionHash: `fill${String(i).padStart(4, "0")}` }],
+          nonglobal: false,
+          title: `Filler entry ${i}`,
+          body: `This is filler entry ${i}.`,
+        })),
+      ];
+
+      await writeLearnings(testMemoryDir, entries);
+      await runConsolidation(testMemoryDir);
+
+      // Verify: learnings.md has compound + 18 fillers = 19 entries
+      const final = await loadLearnings(testMemoryDir);
+      expect(final).toHaveLength(19);
+
+      const compound = final.find((e) => e.title === "Bun Runtime Conventions");
+      expect(compound).toBeDefined();
+      expect(compound?.cwds).toEqual(["/myapp"]);
+      expect(compound?.body).toContain("Bun.file()");
+      expect(compound?.body).toContain("bun:test");
+
+      // Verify: original entries no longer in active learnings
+      expect(final.find((e) => e.title === "Use Bun.file() for file I/O")).toBeUndefined();
+      expect(final.find((e) => e.title === "Use bun:test for testing")).toBeUndefined();
+
+      // Verify: source entries are in the archive
+      const archiveContent = await Bun.file(join(testMemoryDir, "learnings-archive.md")).text();
+      expect(archiveContent).toContain("Use Bun.file() for file I/O");
+      expect(archiveContent).toContain("Use bun:test for testing");
+
+      // Verify: all 3 inference calls were made (dedup, contradiction, condensation)
+      expect(callNum).toBe(3);
+    });
+
+    test("condensed entries are searchable in archive", async () => {
+      const { writeLearnings } = await import("../../../src/memory/learnings");
+      const { appendToArchive } = await import("../../../src/memory/learnings");
+
+      // Write an active learning and an archived one
+      await writeLearnings(testMemoryDir, [
+        {
+          category: "pattern" as const,
+          cwds: ["/myapp"],
+          exposures: [{ date: "2026-03-01", sessionHash: "aaaa0000" }],
+          nonglobal: false,
+          title: "Active Entry",
+          body: "This is still active.",
+        },
+      ]);
+
+      await appendToArchive(testMemoryDir, [
+        {
+          category: "pattern" as const,
+          cwds: ["/myapp"],
+          exposures: [{ date: "2026-02-01", sessionHash: "bbbb0000" }],
+          nonglobal: false,
+          title: "Archived Entry",
+          body: "This was condensed and archived.",
+        },
+      ]);
+
+      // Search should find both
+      const activeResults = await searchMemory("Active", testMemoryDir);
+      expect(activeResults.length).toBeGreaterThan(0);
+
+      const archiveResults = await searchMemory("Archived", testMemoryDir);
+      expect(archiveResults.length).toBeGreaterThan(0);
+      expect(archiveResults[0]?.snippet).toContain("[archived]");
     });
   });
 

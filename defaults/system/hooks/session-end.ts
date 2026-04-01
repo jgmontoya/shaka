@@ -26,6 +26,7 @@ import {
   hashSessionId,
   inference,
   isSubagent,
+  loadConfig,
   loadLearnings,
   mergeNewLearnings,
   parseClaudeCodeTranscript,
@@ -33,6 +34,7 @@ import {
   parseOpencodeTranscript,
   parseSummaryOutput,
   resolveShakaHome,
+  runMaintenance,
   truncateTranscript,
   undoSessionLearnings,
   updateRollups,
@@ -284,8 +286,8 @@ async function worker(tmpPath: string) {
 
   // Extract and write learnings (fail-open: summary already written)
   t = performance.now();
-  await extractAndWriteLearnings(rawOutput, metadata, memoryDir);
-  mark("Learnings extraction", t);
+  const newLearningsCount = await extractAndWriteLearnings(rawOutput, metadata, memoryDir);
+  mark("Learnings extraction", t, `${newLearningsCount} new`);
 
   // Update rolling summaries (fail-open: session summary already written)
   t = performance.now();
@@ -294,6 +296,30 @@ async function worker(tmpPath: string) {
     console.error(`Rollups update failed: ${err instanceof Error ? err.message : String(err)}`);
   });
   mark("Rollups update", t);
+
+  // Maintenance: consolidation, auto-promote, auto-prune (fail-open)
+  t = performance.now();
+  try {
+    const config = await loadConfig();
+    if (config?.memory?.maintenance?.enabled !== false) {
+      const maintenanceResult = await runMaintenance(memoryDir, cwd, newLearningsCount);
+      if (maintenanceResult.skipped) {
+        mark("Maintenance skipped", t, maintenanceResult.reason ?? "");
+      } else {
+        const detail = [
+          `condensed=${maintenanceResult.condensed ?? 0}`,
+          `promoted=${maintenanceResult.promoted ?? 0}`,
+          `pruned=${maintenanceResult.pruned ?? 0}`,
+        ].join(", ");
+        mark("Maintenance complete", t, detail);
+      }
+    } else {
+      mark("Maintenance disabled", t);
+    }
+  } catch (err) {
+    console.error(`Maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
+    mark("Maintenance failed", t);
+  }
 
   mark("Session-end worker total", t0, provider);
 
@@ -305,12 +331,13 @@ async function worker(tmpPath: string) {
 /**
  * Extract learnings from inference output and write to learnings.md.
  * Fail-open: any error is logged but does not affect the summary.
+ * Returns the number of learnings extracted (0 on failure).
  */
 async function extractAndWriteLearnings(
   rawOutput: string,
   metadata: SessionMetadata,
   memoryDir: string,
-): Promise<void> {
+): Promise<number> {
   try {
     const sessionHash = hashSessionId(metadata.sessionId);
     const extracted = parseExtractedLearnings(rawOutput, {
@@ -321,7 +348,7 @@ async function extractAndWriteLearnings(
 
     if (extracted.length === 0) {
       console.error("No learnings extracted from this session");
-      return;
+      return 0;
     }
 
     // Load, undo previous extractions from this session, merge new
@@ -331,10 +358,12 @@ async function extractAndWriteLearnings(
 
     await writeLearnings(memoryDir, entries);
     console.error(`Wrote ${extracted.length} learning(s) to learnings.md`);
+    return extracted.length;
   } catch (err) {
     console.error(
       `Learnings extraction failed: ${err instanceof Error ? err.message : String(err)}`,
     );
+    return 0;
   }
 }
 

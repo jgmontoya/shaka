@@ -1,23 +1,15 @@
 /**
- * Consolidation orchestration for `shaka memory consolidate`.
+ * Interactive consolidation for `shaka memory consolidate`.
  *
- * Runs duplicate detection, contradiction resolution, and interactive
- * CWD-to-global promotion. Each pass delegates to pure functions in
- * `../../memory/consolidation` and persists results via `writeLearnings()`.
+ * Delegates all consolidation passes to `../../memory/consolidation`,
+ * then handles interactive promotion prompts and user-facing output.
  */
 
 import { join } from "node:path";
-import { inference } from "../../inference";
-import {
-  applyDuplicateMerges,
-  buildContradictionPrompt,
-  buildDuplicatePrompt,
-  parseContradictionOutput,
-  parseDuplicateOutput,
-  resolveContradictions,
-} from "../../memory/consolidation";
+import { runFullConsolidation } from "../../memory/consolidation";
 import {
   type LearningEntry,
+  appendToArchive,
   findPromotionCandidates,
   loadLearnings,
   markNonglobal,
@@ -28,20 +20,11 @@ import {
 } from "../../memory/learnings";
 import { promptUser } from "./index";
 
-const CONSOLIDATION_THRESHOLD = 20;
-
 export async function runConsolidation(memoryDir: string): Promise<void> {
   let entries = await loadLearnings(memoryDir);
-
-  if (entries.length < CONSOLIDATION_THRESHOLD) {
-    console.log(
-      `learnings.md has ${entries.length} entries. No consolidation needed (threshold: ${CONSOLIDATION_THRESHOLD}).`,
-    );
-    return;
-  }
-
   const originalCount = entries.length;
   const content = renderLearnings(entries);
+
   console.log(
     `learnings.md has ${originalCount} entries (${content.length} chars). Consolidating...`,
   );
@@ -51,13 +34,26 @@ export async function runConsolidation(memoryDir: string): Promise<void> {
   await Bun.write(backupPath, content);
   console.log(`Backup written to ${backupPath}`);
 
-  // Pass 1: Duplicate detection
-  console.log("\n--- Pass 1: Duplicate detection ---");
-  entries = await deduplicateEntries(entries);
+  const result = await runFullConsolidation(entries);
+  entries = result.entries;
 
-  // Pass 2: Contradiction detection
-  console.log("\n--- Pass 2: Contradiction detection ---");
-  entries = await resolveEntryContradictions(entries);
+  if (result.deduplicatedCount > 0) {
+    console.log(`Merged ${result.deduplicatedCount} duplicate(s).`);
+  }
+  if (result.contradictionsResolved > 0) {
+    console.log(`Resolved ${result.contradictionsResolved} contradiction(s).`);
+  }
+
+  if (result.archived.length > 0) {
+    await appendToArchive(memoryDir, result.archived);
+    console.log(`Archived ${result.archived.length} source entries.`);
+  }
+
+  if (result.compoundsCreated > 0) {
+    console.log(`Created ${result.compoundsCreated} compound(s).`);
+  } else {
+    console.log("No condensation candidates found.");
+  }
 
   // Interactive: CWD-to-global promotion
   entries = await promptForPromotions(entries);
@@ -65,49 +61,6 @@ export async function runConsolidation(memoryDir: string): Promise<void> {
   // Write final result
   await writeLearnings(memoryDir, entries);
   console.log(`\nDone. ${originalCount} -> ${entries.length} entries.`);
-}
-
-async function deduplicateEntries(entries: LearningEntry[]): Promise<LearningEntry[]> {
-  const prompt = buildDuplicatePrompt(entries);
-  const result = await inference({ userPrompt: prompt, timeout: 30000 });
-
-  if (!result.success || !result.text) {
-    console.log("Duplicate detection inference failed. Skipping.");
-    return entries;
-  }
-
-  const groups = parseDuplicateOutput(result.text);
-  if (groups.length === 0) {
-    console.log("No duplicates found.");
-    return entries;
-  }
-
-  const merged = applyDuplicateMerges(entries, groups);
-  console.log(`Merged ${groups.length} duplicate group(s). Reduced to ${merged.length} entries.`);
-  return merged;
-}
-
-async function resolveEntryContradictions(entries: LearningEntry[]): Promise<LearningEntry[]> {
-  const prompt = buildContradictionPrompt(entries);
-  const result = await inference({ userPrompt: prompt, timeout: 30000 });
-
-  if (!result.success || !result.text) {
-    console.log("Contradiction detection inference failed. Skipping.");
-    return entries;
-  }
-
-  const pairs = parseContradictionOutput(result.text);
-  if (pairs.length === 0) {
-    console.log("No contradictions found.");
-    return entries;
-  }
-
-  const resolved = resolveContradictions(entries, pairs);
-  const removedCount = entries.length - resolved.length;
-  console.log(
-    `Resolved ${pairs.length} contradiction(s)${removedCount > 0 ? ` (${removedCount} entries removed)` : ""}.`,
-  );
-  return resolved;
 }
 
 async function promptForPromotions(entries: LearningEntry[]): Promise<LearningEntry[]> {

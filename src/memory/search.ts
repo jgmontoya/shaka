@@ -1,14 +1,21 @@
 /**
- * Memory search: case-insensitive substring matching across session summaries
- * and learnings.
+ * Memory search: case-insensitive substring matching across session summaries,
+ * active learnings, and archived learnings.
  *
  * Searches file content (title, body, tags) and returns matches
  * sorted by date (most recent first) with context snippets.
+ * Archive results are prefixed with "[archived]" in their snippets.
  */
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { loadLearnings, renderEntry } from "./learnings";
+import {
+  ARCHIVE_FILE,
+  type LearningEntry,
+  loadLearnings,
+  parseLearnings,
+  renderEntry,
+} from "./learnings";
 import { parseSummaryOutput } from "./summarize";
 
 const DEFAULT_MAX_RESULTS = 10;
@@ -44,12 +51,13 @@ export async function searchMemory(
 ): Promise<SearchResult[]> {
   const limit = maxResults ?? DEFAULT_MAX_RESULTS;
 
-  const [sessionResults, learningResults] = await Promise.all([
+  const [sessionResults, learningResults, archiveResults] = await Promise.all([
     filter?.type === "learning" ? [] : searchSessions(query, memoryDir, filter),
     filter?.type === "session" ? [] : searchLearnings(query, memoryDir, filter),
+    filter?.type === "session" ? [] : searchArchive(query, memoryDir, filter),
   ]);
 
-  return [...learningResults, ...sessionResults]
+  return [...learningResults, ...archiveResults, ...sessionResults]
     .sort((a, b) => b.date.localeCompare(a.date))
     .slice(0, limit);
 }
@@ -106,14 +114,13 @@ async function searchSessions(
   return results;
 }
 
-async function searchLearnings(
+function searchEntries(
+  entries: LearningEntry[],
   query: string,
-  memoryDir: string,
+  filePath: string,
   filter?: SearchFilter,
-): Promise<SearchResult[]> {
-  const entries = await loadLearnings(memoryDir);
-  if (entries.length === 0) return [];
-
+  snippetPrefix?: string,
+): SearchResult[] {
   const queryLower = query.toLowerCase();
   const results: SearchResult[] = [];
 
@@ -129,19 +136,50 @@ async function searchLearnings(
     if (!searchable.includes(queryLower)) continue;
 
     const lastExposure = entry.exposures[entry.exposures.length - 1];
+    const snippet = extractSnippet(renderEntry(entry), queryLower);
 
     results.push({
       type: "learning",
-      filePath: join(memoryDir, "learnings.md"),
+      filePath,
       title: entry.title,
       date: lastExposure?.date ?? "",
       tags: [entry.category],
-      snippet: extractSnippet(renderEntry(entry), queryLower),
+      snippet: snippetPrefix ? `${snippetPrefix} ${snippet}` : snippet,
       category: entry.category,
     });
   }
 
   return results;
+}
+
+async function searchLearnings(
+  query: string,
+  memoryDir: string,
+  filter?: SearchFilter,
+): Promise<SearchResult[]> {
+  const entries = await loadLearnings(memoryDir);
+  return searchEntries(entries, query, join(memoryDir, "learnings.md"), filter);
+}
+
+async function searchArchive(
+  query: string,
+  memoryDir: string,
+  filter?: SearchFilter,
+): Promise<SearchResult[]> {
+  const archivePath = join(memoryDir, ARCHIVE_FILE);
+  const file = Bun.file(archivePath);
+
+  if (!(await file.exists())) return [];
+
+  let content: string;
+  try {
+    content = await file.text();
+  } catch {
+    return [];
+  }
+
+  const entries = parseLearnings(content);
+  return searchEntries(entries, query, archivePath, filter, "[archived]");
 }
 
 /**

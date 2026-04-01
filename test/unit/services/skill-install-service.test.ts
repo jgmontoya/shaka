@@ -234,7 +234,10 @@ describe("SkillInstallService", () => {
 
       // Temp dir is in OS tmpdir, not in shakaHome
       const tmpDir = join(tempDir, ".tmp");
-      const exists = await stat(tmpDir).then(() => true, () => false);
+      const exists = await stat(tmpDir).then(
+        () => true,
+        () => false,
+      );
       expect(exists).toBe(false);
     });
   });

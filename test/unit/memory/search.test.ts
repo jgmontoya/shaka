@@ -486,4 +486,66 @@ describe("searchMemory", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.category).toBe("fact");
   });
+
+  // --- Archive search tests ---
+
+  test("finds entries in learnings-archive.md", async () => {
+    const { renderLearnings } = await import("../../../src/memory/learnings");
+
+    const archiveEntries = [
+      {
+        category: "pattern" as const,
+        cwds: ["/projects/myapp"],
+        exposures: [{ date: "2026-02-05", sessionHash: "arch0000" }],
+        nonglobal: false,
+        title: "Archived testing pattern",
+        body: "Use factories for test data.",
+      },
+    ];
+
+    await Bun.write(join(testMemoryDir, "learnings-archive.md"), renderLearnings(archiveEntries));
+
+    const results = await searchMemory("factories", testMemoryDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("Archived testing pattern");
+    expect(results[0]?.snippet).toContain("[archived]");
+  });
+
+  test("returns both active and archived results for same query", async () => {
+    const { renderLearnings } = await import("../../../src/memory/learnings");
+
+    // Active learning
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "correction",
+        cwds: ["/projects/myapp"],
+        exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+        nonglobal: false,
+        title: "Active Bun Pattern",
+        body: "Use Bun.file() for file I/O.",
+      },
+    ]);
+
+    // Archived learning
+    const archiveEntries = [
+      {
+        category: "pattern" as const,
+        cwds: ["/projects/myapp"],
+        exposures: [{ date: "2026-02-05", sessionHash: "arch0000" }],
+        nonglobal: false,
+        title: "Archived Bun Pattern",
+        body: "Use bun:test for testing.",
+      },
+    ];
+
+    await Bun.write(join(testMemoryDir, "learnings-archive.md"), renderLearnings(archiveEntries));
+
+    const results = await searchMemory("Bun", testMemoryDir);
+
+    expect(results).toHaveLength(2);
+    const titles = results.map((r) => r.title);
+    expect(titles).toContain("Active Bun Pattern");
+    expect(titles).toContain("Archived Bun Pattern");
+  });
 });

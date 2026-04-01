@@ -26,7 +26,10 @@
     "learnings_budget": 6000,
     "sessions_budget": 5000,
     "recency_window_days": 90,
-    "search_max_results": 10
+    "search_max_results": 10,
+    "maintenance": {
+      "enabled": true
+    }
   },
   "commands": {
     "disabled": []

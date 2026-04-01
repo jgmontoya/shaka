@@ -111,11 +111,13 @@ export {
   type LearningEntry,
   type LearningCategory,
   type Exposure,
+  ARCHIVE_FILE,
   parseLearnings,
   renderEntry,
   renderLearnings,
   loadLearnings,
   writeLearnings,
+  appendToArchive,
   scoreEntry,
   selectLearnings,
   undoSessionLearnings,
@@ -124,6 +126,11 @@ export {
   parseExtractedLearnings,
   hashSessionId,
 } from "./memory/learnings";
+
+export {
+  type MaintenanceResult,
+  runMaintenance,
+} from "./memory/maintenance";
 
 export {
   type SemVer,
