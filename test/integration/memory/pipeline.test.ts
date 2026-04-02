@@ -179,6 +179,7 @@ TITLE: Bun Runtime Conventions
 BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-native APIs that avoid unnecessary Node.js compatibility layers.`,
           };
         },
+        hasInferenceProvider: async () => false,
       }));
 
       const { loadLearnings, writeLearnings } = await import("../../../src/memory/learnings");

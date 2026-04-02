@@ -349,6 +349,7 @@ describe("runMaintenance", () => {
     // Arrange: first run (null state), 2+ exposure entries trigger condensation
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -378,6 +379,7 @@ describe("runMaintenance", () => {
   test("updates state file after successful run", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -403,6 +405,7 @@ describe("runMaintenance", () => {
   test("appends to JSONL maintenance log after run", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -430,6 +433,7 @@ describe("runMaintenance", () => {
   test("auto-promotes entries appearing in 3+ CWDs without user prompt", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -463,6 +467,7 @@ describe("runMaintenance", () => {
   test("does not promote nonglobal entries", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -494,11 +499,10 @@ RANK 2 [2] — one-time debugging step`;
     mock.module("../../../src/inference", () => ({
       inference: async () => {
         callCount++;
-        // Passes 1-2 (dedup, contradictions) each make 1 call; pass 3 makes 0
-        // (entries have 1 exposure, below condensation threshold)
         if (callCount <= 2) return { success: true, text: "NO DUPLICATES" };
         return { success: true, text: rankingResponse };
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -538,6 +542,7 @@ RANK 5 [5] — reason 5`;
         if (callCount <= 2) return { success: true, text: "NO DUPLICATES" };
         return { success: true, text: rankingResponse };
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -564,6 +569,7 @@ RANK 5 [5] — reason 5`;
       inference: async () => {
         throw new Error("network timeout");
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -596,6 +602,7 @@ RANK 5 [5] — reason 5`;
         if (callCount <= 2) return { success: true, text: "NO DUPLICATES" };
         throw new Error("ranking timeout");
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -628,6 +635,7 @@ RANK 5 [5] — reason 5`;
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: rankingResponse }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -660,6 +668,7 @@ RANK 5 [5] — reason 5`;
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: rankingResponse }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
@@ -690,6 +699,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: condensationResponse }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");

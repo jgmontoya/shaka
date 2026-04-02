@@ -6,6 +6,7 @@ import { join } from "node:path";
 // Mock inference so dedup/contradiction passes are no-ops
 mock.module("../../../src/inference", () => ({
   inference: async () => ({ success: true, text: "NO DUPLICATES" }),
+  hasInferenceProvider: async () => false,
 }));
 
 import { createMemoryCommand } from "../../../src/commands/memory/index";

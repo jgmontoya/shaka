@@ -128,6 +128,7 @@ BODY: Use Bun.file() for file I/O and bun:test for testing. Avoids Node.js-speci
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: inferenceResponse }),
+      hasInferenceProvider: async () => false,
     }));
 
     // Re-import to pick up mock
@@ -157,6 +158,7 @@ BODY: Use Bun.file() for file I/O and bun:test for testing. Avoids Node.js-speci
   test("skips candidates where inference fails (fail-open)", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: false, error: "timeout" }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { condenseEntries } = await import("../../../src/memory/consolidation");
@@ -200,6 +202,7 @@ BODY: Merged body A.`,
         // Second call fails
         return { success: false, error: "timeout" };
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { condenseEntries } = await import("../../../src/memory/consolidation");
@@ -260,6 +263,7 @@ describe("runConsolidation", () => {
         inferenceCalled = true;
         return { success: true, text: "NO CLUSTERS" };
       },
+      hasInferenceProvider: async () => false,
     }));
 
     const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
@@ -291,6 +295,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: inferenceResponse }),
+      hasInferenceProvider: async () => false,
     }));
 
     const { runConsolidation } = await import("../../../src/commands/memory/consolidate");

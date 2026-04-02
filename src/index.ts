@@ -128,6 +128,13 @@ export {
 } from "./memory/learnings";
 
 export {
+  type InferenceOptions,
+  type InferenceResult,
+  inference,
+  hasInferenceProvider,
+} from "./inference";
+
+export {
   type MaintenanceResult,
   runMaintenance,
 } from "./memory/maintenance";
@@ -143,13 +150,6 @@ export {
   findLatestTag,
   findNewerLocalTag,
 } from "./domain/version";
-
-export {
-  type InferenceOptions,
-  type InferenceResult,
-  inference,
-  hasInferenceProvider,
-} from "./inference";
 
 export {
   matchesPattern,
