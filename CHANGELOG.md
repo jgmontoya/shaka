@@ -4,6 +4,19 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-04-02
+
+### Added
+
+- **Learning condensation** — `shaka memory consolidate` now synthesizes related learnings into compound entries, freeing context budget. Originals are archived and remain searchable
+- **Automatic maintenance** — Learnings are consolidated, promoted, and pruned automatically after sessions. Disable with `memory.maintenance.enabled: false` in config
+- **Archive search** — `shaka memory search` includes archived learnings
+
+### Changed
+
+- **Reasoning framework** — Context sizing guidance and stub detection before claiming completion
+- **Steering rules** — "Handle Discovered Issues" rule: auto-fix blockers, flag non-blockers, ask on scope changes
+
 ## [0.7.2] — 2026-03-14
 
 ### Fixed
@@ -308,6 +321,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.8.0]: https://github.com/jgmontoya/shaka/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/jgmontoya/shaka/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/jgmontoya/shaka/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/jgmontoya/shaka/compare/v0.6.1...v0.7.0

@@ -160,7 +160,7 @@ shaka memory search <query>   # Search session summaries and learnings
 shaka memory stats            # Show learnings count, exposures, and category breakdown
 shaka memory review           # Browse and manage learnings interactively
 shaka memory review --prune   # AI-assisted quality assessment of learnings
-shaka memory consolidate      # Merge duplicate and contradictory learnings
+shaka memory consolidate      # Deduplicate, resolve contradictions, and condense related learnings
 ```
 
 ### Init Flow
@@ -488,12 +488,13 @@ Persistent context that survives sessions. The memory system captures what happe
 - **Summary storage** — Summaries are stored as markdown in `memory/summaries/` with a JSON index for fast lookup
 - **Session context** — The `session-start` hook loads recent summaries into context so the AI knows what you worked on recently
 - **Rolling summaries** — Daily, weekly, and monthly rollups compress session history into persistent per-project digests, loaded into context at session start
-- **Search** — `shaka memory search <query>` searches summaries by keyword; also available as an MCP tool for in-session search
+- **Search** — `shaka memory search <query>` searches summaries, active learnings, and archived learnings; also available as an MCP tool for in-session search
 - **Review** — `shaka memory review` provides an interactive TUI for browsing, filtering, and deleting learnings. `--prune` adds AI-assisted quality scoring to flag low-value entries
-- **Consolidation** — `shaka memory consolidate` merges duplicate learnings and resolves contradictions
+- **Consolidation** — `shaka memory consolidate` runs three passes: deduplication, contradiction resolution, and condensation. Condensation merges related high-exposure learnings into compound entries, freeing context budget. Source entries are archived (searchable, recoverable)
+- **Automatic maintenance** — After each session, the system checks time (24h) and volume (10+ new learnings) gates. When triggered, it runs consolidation, auto-promotes cross-project learnings to global scope, and conditionally prunes lowest-quality entries under budget pressure (capped at 3 per run, with exposure and age safety floors). Configurable via `memory.maintenance.enabled`
 - **Security event logging** — The security validator writes logs to `memory/security/`
 
-**Planned:** Semantic retrieval via vector search (likely sqlite-vec), tiered memory with importance scoring.
+**Planned:** Semantic retrieval via vector search (likely sqlite-vec).
 
 ## Provider Support
 
