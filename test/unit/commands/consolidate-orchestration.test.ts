@@ -114,6 +114,10 @@ describe("condenseEntries", () => {
 // mock.module must be called before importing the module under test.
 
 describe("condenseEntries (with inference)", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
   function twoExposures() {
     return [
       { date: "2026-03-01", sessionHash: "aaaa0000" },
@@ -235,6 +239,10 @@ BODY: Merged body A.`,
     // First candidate (/proj-a) succeeded, second (/proj-b) failed
     expect(result.compoundsCreated).toBe(1);
     expect(result.entries.find((e) => e.title === "Compound A")).toBeDefined();
+    // A1 and A2 consumed by condensation
+    expect(result.entries.find((e) => e.title === "A1")).toBeUndefined();
+    expect(result.entries.find((e) => e.title === "A2")).toBeUndefined();
+    expect(result.archived).toHaveLength(2);
     // B1 and B2 survive unchanged
     expect(result.entries.find((e) => e.title === "B1")).toBeDefined();
     expect(result.entries.find((e) => e.title === "B2")).toBeDefined();

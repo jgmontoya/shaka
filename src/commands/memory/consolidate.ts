@@ -44,11 +44,6 @@ export async function runConsolidation(memoryDir: string): Promise<void> {
     console.log(`Resolved ${result.contradictionsResolved} contradiction(s).`);
   }
 
-  if (result.archived.length > 0) {
-    await appendToArchive(memoryDir, result.archived);
-    console.log(`Archived ${result.archived.length} source entries.`);
-  }
-
   if (result.compoundsCreated > 0) {
     console.log(`Created ${result.compoundsCreated} compound(s).`);
   } else {
@@ -58,8 +53,13 @@ export async function runConsolidation(memoryDir: string): Promise<void> {
   // Interactive: CWD-to-global promotion
   entries = await promptForPromotions(entries);
 
-  // Write final result
+  // Write active set first, then archive — ensures source entries don't
+  // appear in both active and archive if the process is interrupted.
   await writeLearnings(memoryDir, entries);
+  if (result.archived.length > 0) {
+    await appendToArchive(memoryDir, result.archived);
+    console.log(`Archived ${result.archived.length} source entries.`);
+  }
   console.log(`\nDone. ${originalCount} -> ${entries.length} entries.`);
 }
 

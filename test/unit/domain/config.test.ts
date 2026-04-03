@@ -686,6 +686,7 @@ describe("Config", () => {
 
       const changed = await ensureConfigComplete(testShakaHome);
 
+      expect(changed).toBe(false);
       const updated = await Bun.file(`${testShakaHome}/config.json`).json();
       expect(updated.memory.maintenance.enabled).toBe(false);
     });
