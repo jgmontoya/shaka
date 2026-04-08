@@ -760,9 +760,13 @@ function parseBootstrapExtractionOutput(raw: string): Map<string, string> {
     // Check if there are actual fragments (### headings)
     if (!body.includes("### ")) continue;
 
-    // Build the knowledge section text
-    const knowledgeSection = `## Knowledge\n\n${body}`;
-    result.set(filename, knowledgeSection);
+    // Accumulate fragments — the LLM may emit multiple SESSION blocks for the same file
+    const existing = result.get(filename);
+    if (existing) {
+      result.set(filename, `${existing}\n\n${body}`);
+    } else {
+      result.set(filename, `## Knowledge\n\n${body}`);
+    }
   }
 
   return result;
@@ -787,14 +791,18 @@ export async function bootstrapKnowledge(
   const limit = options?.limit;
   const dryRun = options?.dryRun ?? false;
 
+  if (batchSize <= 0) {
+    throw new Error("batchSize must be a positive integer");
+  }
+
   const sessionsDir = join(memoryDir, "sessions");
   const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
 
   // Step 1: Find sessions matching CWD without ## Knowledge
   const candidates = await findSessionsWithoutKnowledge(sessionsDir, cwd);
 
-  // Apply limit
-  const sessionsToProcess = limit ? candidates.slice(0, limit) : candidates;
+  // Apply limit (undefined = no limit, 0 = process nothing)
+  const sessionsToProcess = limit !== undefined ? candidates.slice(0, limit) : candidates;
 
   const emptyResult: BootstrapResult = {
     sessionsFound: candidates.length,

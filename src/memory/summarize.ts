@@ -272,10 +272,9 @@ function stripSection(body: string, heading: string): string {
  * and stored outside the session summary body.
  */
 function stripExtractedSections(body: string): string {
-  let result = body;
-  result = stripSection(result, "Learnings");
-  result = stripSection(result, "Knowledge");
-  return result;
+  // Only strip Learnings — Knowledge stays in the persisted summary
+  // because the compilation pipeline reads it from session files.
+  return stripSection(body, "Learnings");
 }
 
 // --- Knowledge extraction prompt ---

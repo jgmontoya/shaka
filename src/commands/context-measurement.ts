@@ -245,6 +245,17 @@ async function measureLearnings(shakaHome: string): Promise<LearningsComponent> 
 }
 
 async function measureKnowledge(shakaHome: string): Promise<KnowledgeComponent> {
+  const config = await loadConfig(shakaHome);
+  if (config?.memory?.knowledge_enabled === false) {
+    return {
+      name: "Knowledge Base",
+      chars: 0,
+      detail: "disabled via memory.knowledge_enabled",
+      hook: "SessionStart",
+      topicCount: 0,
+    };
+  }
+
   const memoryDir = join(shakaHome, "memory");
   const cwd = process.cwd();
 

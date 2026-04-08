@@ -18,11 +18,11 @@ interface CompileOptions {
 
 /** Wrap the inference module as a simple prompt -> string function. */
 async function infer(prompt: string): Promise<string> {
-  const result = await inference({ userPrompt: prompt });
-  if (!result.success) {
-    throw new Error(`Inference failed: ${result.error}`);
+  const result = await inference({ userPrompt: prompt, timeout: 60000 });
+  if (!result.success || !result.text?.trim()) {
+    throw new Error(`Inference failed: ${result.error ?? "no response"}`);
   }
-  return result.text ?? "";
+  return result.text;
 }
 
 export async function runCompile(
@@ -32,6 +32,10 @@ export async function runCompile(
 ): Promise<void> {
   if (options.bootstrap) {
     await runBootstrap(memoryDir, cwd, options);
+  } else if (options.dryRun) {
+    console.log(
+      "--dry-run is only supported with --bootstrap. Use: shaka memory compile --bootstrap --dry-run",
+    );
   } else {
     await runStandardCompile(memoryDir, cwd);
   }

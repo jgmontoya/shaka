@@ -406,12 +406,12 @@ Topics: auth, architecture
       expect(result?.body).toContain("## Summary");
       expect(result?.body).not.toContain("## Learnings");
       expect(result?.body).not.toContain("Use Bun.file()");
-      // Knowledge section should also be stripped (extracted separately)
-      expect(result?.body).not.toContain("## Knowledge");
-      expect(result?.body).not.toContain("Auth System");
+      // Knowledge section stays in the body — compilation reads it from session files
+      expect(result?.body).toContain("## Knowledge");
+      expect(result?.body).toContain("Auth System");
     });
 
-    test("strips both sections regardless of order", () => {
+    test("strips Learnings but preserves Knowledge regardless of order", () => {
       const knowledgeFirst = `---
 date: "2026-02-09"
 cwd: /projects/myapp
@@ -445,9 +445,9 @@ Always use tmp + rename.
       expect(result).not.toBeNull();
       expect(result?.body).toContain("## Summary");
       expect(result?.body).toContain("## Decisions");
-      expect(result?.body).not.toContain("## Knowledge");
+      expect(result?.body).toContain("## Knowledge");
+      expect(result?.body).toContain("Deploy Pipeline");
       expect(result?.body).not.toContain("## Learnings");
-      expect(result?.body).not.toContain("Deploy Pipeline");
       expect(result?.body).not.toContain("Use atomic writes");
     });
 
