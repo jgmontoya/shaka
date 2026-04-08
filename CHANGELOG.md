@@ -4,6 +4,21 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.9.0] — 2026-04-08
+
+### Added
+
+- **Knowledge base** — Extracts domain knowledge from sessions (architecture decisions, root causes, design rationale), compiles into topic pages, and injects a topic index at session start. The LLM reads individual pages on demand.
+- **Bootstrap command** — `shaka memory compile --bootstrap` retroactively extracts knowledge from historical sessions in batches. Supports `--dry-run`, `--limit`, and `--batch-size` flags.
+- **Knowledge compilation** — Deterministic tag-based grouping with LLM-powered topic page creation and merging. Manifest tracks compiled sessions for incremental processing.
+- **Context measurement** — `shaka doctor --context` now reports knowledge base injection and uses 1M token context window reference.
+
+### Changed
+
+- **Section-aware stripping** — `## Learnings` and `## Knowledge` sections are stripped independently from session summary bodies, fixing a bug where content after `## Learnings` was silently dropped.
+- **Shared utilities** — `isPathRelated` and `hashContent` extracted to `src/memory/utils.ts` for reuse across rollups and knowledge modules.
+- **E2e timeout** — Learnings extraction wait increased from 30s to 60s to accommodate the compilation step in the session-end worker.
+
 ## [0.8.0] — 2026-04-02
 
 ### Added
@@ -321,6 +336,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.9.0]: https://github.com/jgmontoya/shaka/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jgmontoya/shaka/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/jgmontoya/shaka/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/jgmontoya/shaka/compare/v0.7.0...v0.7.1

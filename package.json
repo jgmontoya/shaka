@@ -1,6 +1,6 @@
 {
   "name": "shaka",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "A personal AI assistant framework. Provider-agnostic. Your data stays yours.",
   "license": "MIT",
   "repository": {
