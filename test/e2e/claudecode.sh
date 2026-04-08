@@ -328,7 +328,7 @@ LEARNINGS_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/learnings.md"
 
 # SessionEnd hook runs asynchronously — wait for learnings to be written
 echo "  Waiting for learnings extraction..."
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
   if [ -f "$LEARNINGS_FILE" ]; then
     break
   fi
@@ -338,7 +338,7 @@ done
 if [ -f "$LEARNINGS_FILE" ]; then
   pass "learnings.md created"
 else
-  fail "learnings.md not found after 30s"
+  fail "learnings.md not found after 60s"
   ls -laR "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/" 2>&1 || true
   exit 1
 fi
@@ -358,6 +358,83 @@ if [ "$FOUND_KEYWORDS" = true ]; then
 else
   warn "learnings.md exists but content may not match expected keywords"
   head -20 "$LEARNINGS_FILE"
+fi
+
+# ── Knowledge: extraction from session ────────────────────────────────
+
+section "Knowledge extraction"
+echo "  Running: claude -p \"<architecture decision prompt>\""
+
+claude -p "We just decided to use SQLite with FTS5 for our search system instead of Elasticsearch. The reasons: it runs locally with zero dependencies, it's deterministic (no ML), and our scale is under 1000 documents so the performance is sufficient. Elasticsearch would add operational complexity we don't need. Summarize this decision briefly." --allowedTools "" >/dev/null 2>&1 || true
+
+SESSIONS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/sessions"
+
+# Wait for the session-end worker to process this session
+echo "  Waiting for knowledge extraction..."
+KNOWLEDGE_FOUND=false
+for i in $(seq 1 60); do
+  if grep -rl "## Knowledge" "$SESSIONS_DIR"/*.md >/dev/null 2>&1; then
+    KNOWLEDGE_FOUND=true
+    break
+  fi
+  sleep 1
+done
+
+if [ "$KNOWLEDGE_FOUND" = true ]; then
+  pass "Knowledge fragment extracted into session summary"
+  # Verify the fragment has Topics: line
+  if grep -rl "Topics:" "$SESSIONS_DIR"/*.md >/dev/null 2>&1; then
+    pass "Knowledge fragment has Topics tags"
+  else
+    warn "Knowledge fragment may be missing Topics tags"
+  fi
+else
+  warn "No ## Knowledge section found in session summaries (LLM may not have extracted knowledge)"
+fi
+
+# ── Knowledge base: config ────────────────────────────────────────────
+
+section "Knowledge base"
+
+CONFIG_FILE="$SHAKA_HOME/config.json"
+
+if jq -e '.memory.knowledge_enabled' "$CONFIG_FILE" >/dev/null 2>&1; then
+  pass "knowledge_enabled present in config"
+else
+  fail "knowledge_enabled not found in config"
+  jq '.memory' "$CONFIG_FILE" 2>&1 || true
+  exit 1
+fi
+
+# Check if knowledge directory was created by session-end worker
+KNOWLEDGE_DIR="$SHAKA_HOME/memory/knowledge"
+
+if [ -d "$KNOWLEDGE_DIR" ]; then
+  pass "Knowledge directory created"
+
+  # Check for manifest (compilation ran)
+  MANIFEST_FILES=$(find "$KNOWLEDGE_DIR" -name ".manifest.json" 2>/dev/null | head -1)
+  if [ -n "$MANIFEST_FILES" ]; then
+    pass "Knowledge manifest exists (compilation ran)"
+
+    # Check for _index.md (compilation should have produced topic pages from the architecture session)
+    INDEX_FILES=$(find "$KNOWLEDGE_DIR" -name "_index.md" 2>/dev/null | head -1)
+    if [ -n "$INDEX_FILES" ]; then
+      pass "Knowledge index exists"
+      if grep -qi "sqlite\|search\|fts5" "$INDEX_FILES" 2>/dev/null; then
+        pass "Knowledge index contains search architecture topic"
+      else
+        warn "Knowledge index exists but may not contain expected topic"
+        cat "$INDEX_FILES" 2>/dev/null | head -10
+      fi
+    else
+      warn "No _index.md found (compilation may not have produced topic pages yet)"
+    fi
+  else
+    warn "No manifest found (compilation may not have triggered — sessions may lack knowledge)"
+  fi
+else
+  warn "Knowledge directory not created (session-end worker may not have triggered compilation)"
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────

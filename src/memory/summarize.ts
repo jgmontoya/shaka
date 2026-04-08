@@ -25,6 +25,13 @@ export interface SessionSummary {
   readonly body: string;
 }
 
+export interface KnowledgeFragment {
+  readonly title: string;
+  readonly body: string;
+  readonly topics: string[];
+  readonly sourceSession: string;
+}
+
 /**
  * Build a prompt that asks the LLM to extract structured information
  * from a coding session transcript, including reusable learnings.
@@ -33,9 +40,11 @@ export function buildSummarizationPrompt(
   messages: NormalizedMessage[],
   metadata: SessionMetadata,
   existingLearningTitles: string[] = [],
+  existingTopicTitles: string[] = [],
 ): string {
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
   const learningsSection = buildExtractionPromptSection(existingLearningTitles);
+  const knowledgeSection = buildKnowledgeExtractionSection(existingTopicTitles);
 
   return `You are analyzing a coding session transcript. Extract structured information.
 
@@ -51,6 +60,7 @@ Extract:
 5. Unresolved questions or next steps
 6. 3-5 keyword tags for searchability
 ${learningsSection}
+${knowledgeSection}
 
 Format as markdown with YAML frontmatter:
 
@@ -86,7 +96,14 @@ session_id: ${metadata.sessionId}
 
 ### (category) Title
 
-Body (1-3 sentences).`;
+Body (1-3 sentences).
+
+## Knowledge
+
+### Topic Title
+
+Body (1-5 sentences describing how something works, why a decision was made, or what was discovered).
+Topics: tag1, tag2`;
 }
 
 /**
@@ -231,17 +248,134 @@ function extractBody(markdown: string, title: string): string {
   // Find the title line and take everything after it
   const titleLine = `# ${title}`;
   const titleIndex = markdown.indexOf(titleLine);
-  if (titleIndex === -1) return stripLearningsSection(markdown.trim());
+  if (titleIndex === -1) return stripExtractedSections(markdown.trim());
 
   const afterTitle = markdown.slice(titleIndex + titleLine.length);
-  return stripLearningsSection(afterTitle.trim());
+  return stripExtractedSections(afterTitle.trim());
 }
 
 /**
- * Remove the ## Learnings section from the body.
- * Learnings are extracted separately by parseExtractedLearnings()
- * and stored in learnings.md, not in session summary files.
+ * Remove a ## heading and its content from the body.
+ * Stops at the next ## heading or end of string.
+ * Used to strip sections that are extracted separately
+ * (Learnings → learnings.md, Knowledge → topic pages).
  */
-function stripLearningsSection(body: string): string {
-  return body.replace(/\n*## Learnings[\s\S]*$/, "").trim();
+function stripSection(body: string, heading: string): string {
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`\\n*## ${escaped}[\\s\\S]*?(?=\\n## |\\s*$)`);
+  return body.replace(pattern, "").trim();
+}
+
+/**
+ * Remove extracted sections from the body.
+ * Both Learnings and Knowledge are extracted by separate parsers
+ * and stored outside the session summary body.
+ */
+function stripExtractedSections(body: string): string {
+  let result = body;
+  result = stripSection(result, "Learnings");
+  result = stripSection(result, "Knowledge");
+  return result;
+}
+
+// --- Knowledge extraction prompt ---
+
+/**
+ * Build the knowledge extraction section for the summarization prompt.
+ * Includes existing topic titles for tag convergence.
+ */
+function buildKnowledgeExtractionSection(existingTopicTitles: string[]): string {
+  const topicsBlock =
+    existingTopicTitles.length > 0
+      ? `Existing knowledge topics: ${existingTopicTitles.join(", ")}. Reuse these as Topics tags when the content is related.`
+      : "No existing knowledge topics yet. Use descriptive, lowercase tags.";
+
+  return `
+8. Domain knowledge: substantive understanding worth compiling into a persistent
+   knowledge base. Focus on the Decisions and Problems Solved sections — these
+   carry the densest knowledge. Return 0-3 fragments. Most sessions have 0-1.
+
+A knowledge fragment must pass ALL three tests:
+- SUBSTANTIVE: Does it describe how something works, why a decision was made, or what was discovered?
+- DURABLE: Will this still be true in a month? (Filter out in-progress debugging, temporary workarounds)
+- NON-OBVIOUS: Would someone new to the project not know this from reading the code alone?
+
+Do NOT extract as knowledge:
+- Facts derivable from reading the code (function signatures, file structure)
+- Ephemeral state (current bugs, in-progress work)
+- Restatements of learnings (behavioral nudges belong in the Learnings section)
+- Git-derivable history (what changed in which commit)
+- General language/framework facts any experienced developer would know (e.g., how TypeScript readonly works, how async/await behaves) — only extract PROJECT-SPECIFIC knowledge
+- Implementation details too narrow to help with future work (one function's error handling strategy)
+
+Simple behavioral nudges ("always do X", "never do Y") belong in Learnings, not Knowledge.
+Knowledge requires substance — how something works, why a decision was made, what was discovered.
+If a fact genuinely contains both a behavioral nudge AND domain understanding, it can appear in both.
+
+${topicsBlock}
+
+Format knowledge as:
+
+## Knowledge
+
+### Topic Title
+
+Body (1-5 sentences).
+Topics: tag1, tag2`;
+}
+
+// --- Knowledge extraction parsing ---
+
+/**
+ * Parse knowledge fragments from the inference output's ## Knowledge section.
+ * Attaches session metadata to each extracted fragment.
+ *
+ * Each fragment has a ### title, a body (1-5 sentences), and an optional
+ * Topics: line with comma-separated tags. Tags are normalized to lowercase.
+ */
+export function parseExtractedKnowledge(
+  raw: string,
+  metadata: { date: string; cwd: string; sessionHash: string },
+): KnowledgeFragment[] {
+  const sectionMatch = raw.match(/^## Knowledge\s*$/m);
+  if (!sectionMatch || sectionMatch.index === undefined) return [];
+
+  // Extract only the Knowledge section (stop at next ## heading or EOF)
+  let section = raw.slice(sectionMatch.index + sectionMatch[0].length);
+  const nextHeading = section.match(/\n## /);
+  if (nextHeading?.index !== undefined) {
+    section = section.slice(0, nextHeading.index);
+  }
+
+  const blocks = section.split(/^### /m).filter((b) => b.trim());
+  const fragments: KnowledgeFragment[] = [];
+
+  for (const block of blocks) {
+    const lines = block.trim().split("\n");
+    const title = lines[0]?.trim();
+    if (!title) continue;
+
+    // Separate body lines from the Topics: line
+    const bodyLines: string[] = [];
+    let topics: string[] = [];
+
+    for (const line of lines.slice(1)) {
+      const topicsMatch = line.match(/^Topics:\s*(.+)$/i);
+      if (topicsMatch?.[1]) {
+        topics = topicsMatch[1]
+          .split(",")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean);
+      } else {
+        bodyLines.push(line);
+      }
+    }
+
+    const body = bodyLines.join("\n").trim();
+    if (!body) continue;
+
+    fragments.push({ title, body, topics, sourceSession: metadata.sessionHash });
+  }
+
+  return fragments;
 }

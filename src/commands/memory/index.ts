@@ -1,6 +1,6 @@
 /**
  * CLI handler for `shaka memory` command.
- * Subcommands: search, list, consolidate, review.
+ * Subcommands: search, list, consolidate, review, compile.
  */
 
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { resolveShakaHome } from "../../domain/config";
 import { type LearningEntry, loadLearnings } from "../../memory/learnings";
 import { type SearchFilter, searchMemory } from "../../memory/search";
 import { type SummaryIndex, listSummaries } from "../../memory/storage";
+import { runCompile } from "./compile";
 import { runConsolidation } from "./consolidate";
 import { runReview } from "./review";
 
@@ -117,6 +118,26 @@ export function createMemoryCommand(): Command {
       const memoryDir = resolveMemoryDir();
       await runReview(memoryDir, options);
     });
+
+  memory
+    .command("compile")
+    .description("Compile knowledge from session summaries into topic pages")
+    .option("--bootstrap", "Retroactively extract knowledge from historical sessions")
+    .option("--dry-run", "Show what would be processed without making changes")
+    .option("--batch-size <n>", "Sessions per LLM call (default 5)")
+    .option("--limit <n>", "Max sessions to process")
+    .action(
+      async (options: {
+        bootstrap?: boolean;
+        dryRun?: boolean;
+        batchSize?: string;
+        limit?: string;
+      }) => {
+        const memoryDir = resolveMemoryDir();
+        const cwd = process.cwd();
+        await runCompile(memoryDir, cwd, options);
+      },
+    );
 
   memory
     .command("stats")

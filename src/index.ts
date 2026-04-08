@@ -73,9 +73,22 @@ export {
 export {
   type SessionMetadata,
   type SessionSummary,
+  type KnowledgeFragment,
   buildSummarizationPrompt,
   parseSummaryOutput,
+  parseExtractedKnowledge,
 } from "./memory/summarize";
+
+export {
+  readExistingTopicTitles,
+  loadKnowledgeIndex,
+  compileKnowledge,
+  bootstrapKnowledge,
+  type CompilationResult,
+  type KnowledgeManifest,
+  type BootstrapOptions,
+  type BootstrapResult,
+} from "./memory/knowledge";
 
 export {
   type SummaryIndex,

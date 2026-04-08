@@ -19,8 +19,9 @@ import {
   resolveDefaultsUserDir,
   resolveShakaHome,
 } from "../domain/config";
+import { loadKnowledgeIndex, readExistingTopicTitles } from "../memory/knowledge";
 import { loadLearnings, renderEntry, selectLearnings } from "../memory/learnings";
-import { loadRollups } from "../memory/rollups";
+import { loadRollups, projectSlug } from "../memory/rollups";
 import { listSummaries, renderSessionSection, selectRecentSummaries } from "../memory/storage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -61,12 +62,17 @@ export interface FormatReminderComponents {
   classificationPrompt: Component;
 }
 
+export interface KnowledgeComponent extends Component {
+  topicCount: number;
+}
+
 export interface ContextMeasurement {
   shakaHome: string;
   framework: Component;
   identity: Component;
   userFiles: UserFileComponent[];
   learnings: LearningsComponent;
+  knowledge: KnowledgeComponent;
   sessions: SessionsComponent;
   rollups: RollupsComponent;
   formatReminder: FormatReminderComponents;
@@ -238,6 +244,38 @@ async function measureLearnings(shakaHome: string): Promise<LearningsComponent> 
   };
 }
 
+async function measureKnowledge(shakaHome: string): Promise<KnowledgeComponent> {
+  const memoryDir = join(shakaHome, "memory");
+  const cwd = process.cwd();
+
+  let injectedChars = 0;
+  let topicCount = 0;
+
+  try {
+    const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+    const topics = await readExistingTopicTitles(knowledgeDir);
+    topicCount = topics.length;
+
+    const rendered = await loadKnowledgeIndex(memoryDir, cwd);
+    injectedChars = rendered.length;
+  } catch {
+    // no knowledge base
+  }
+
+  const topicWord = topicCount === 1 ? "topic" : "topics";
+
+  return {
+    name: "Knowledge Base",
+    chars: injectedChars,
+    detail:
+      topicCount > 0
+        ? `${topicCount} ${topicWord} indexed, index injected (LLM reads pages on demand)`
+        : "no compiled topics",
+    hook: "SessionStart",
+    topicCount,
+  };
+}
+
 async function measureSessions(shakaHome: string): Promise<SessionsComponent> {
   const config = await loadConfig(shakaHome);
   const budget = config?.memory?.sessions_budget ?? 5000;
@@ -389,6 +427,7 @@ export async function collectMeasurements(shakaHome: string): Promise<ContextMea
   const identity = await measureIdentityHeader(shakaHome);
   const userFiles = await measureUserFiles(shakaHome);
   const learnings = await measureLearnings(shakaHome);
+  const knowledge = await measureKnowledge(shakaHome);
   const sessions = await measureSessions(shakaHome);
   const rollups = await measureRollups(shakaHome);
   const formatReminder = await measureFormatReminder(shakaHome);
@@ -399,6 +438,7 @@ export async function collectMeasurements(shakaHome: string): Promise<ContextMea
     (framework.chars > 0 ? 1 : 0) +
     injectedUserFiles.length +
     (learnings.chars > 0 ? 1 : 0) +
+    (knowledge.chars > 0 ? 1 : 0) +
     (rollups.chars > 0 ? 1 : 0) +
     (sessions.chars > 0 ? 1 : 0);
   const separators = measureSeparators(partCount);
@@ -408,6 +448,7 @@ export async function collectMeasurements(shakaHome: string): Promise<ContextMea
     identity,
     ...userFiles,
     learnings,
+    knowledge,
     rollups,
     sessions,
     separators,
@@ -420,6 +461,7 @@ export async function collectMeasurements(shakaHome: string): Promise<ContextMea
     identity,
     userFiles,
     learnings,
+    knowledge,
     sessions,
     rollups,
     formatReminder,
@@ -454,6 +496,7 @@ function printMeasurement(m: ContextMeasurement): void {
     m.identity,
     ...m.userFiles,
     m.learnings,
+    m.knowledge,
     m.rollups,
     m.sessions,
     m.separators,
@@ -592,6 +635,7 @@ function printMeasurement(m: ContextMeasurement): void {
       chars: injectedUserFiles.reduce((s, f) => s + f.chars, 0),
     },
     { label: "Learnings", chars: m.learnings.chars },
+    { label: "Knowledge Base", chars: m.knowledge.chars },
     { label: "Rolling Summaries", chars: m.rollups.chars },
     { label: "Session Summaries", chars: m.sessions.chars },
     { label: "Separators", chars: m.separators.chars },
@@ -606,9 +650,9 @@ function printMeasurement(m: ContextMeasurement): void {
 
   console.log();
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  console.log("  ℹ  Context window reference: Claude Opus ~200K tokens");
+  console.log("  ℹ  Context window reference: Claude Opus ~1M tokens");
   console.log(
-    `     Session start overhead: ~${pct(estimateTokens(m.sessionStartTotal), 200_000)} of context window`,
+    `     Session start overhead: ~${pct(estimateTokens(m.sessionStartTotal), 1_000_000)} of context window`,
   );
   console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 }

@@ -4,6 +4,8 @@ import {
   type SessionSummary,
   buildSummarizationPrompt,
   parseSummaryOutput,
+  parseExtractedKnowledge,
+  type KnowledgeFragment,
 } from "../../../src/memory/summarize";
 import type { NormalizedMessage } from "../../../src/memory/transcript";
 
@@ -111,6 +113,32 @@ describe("Summarize", () => {
     test("shows placeholder when no existing learnings", () => {
       const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata, []);
       expect(prompt).toContain("No existing learnings yet.");
+    });
+
+    test("includes knowledge extraction section", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata);
+      expect(prompt).toContain("## Knowledge");
+      expect(prompt).toContain("SUBSTANTIVE");
+      expect(prompt).toContain("DURABLE");
+      expect(prompt).toContain("NON-OBVIOUS");
+      expect(prompt).toContain("Topics:");
+    });
+
+    test("includes existing topic titles when provided", () => {
+      const prompt = buildSummarizationPrompt(
+        sampleMessages,
+        sampleMetadata,
+        [],
+        ["auth-system", "deployment-pipeline"],
+      );
+      expect(prompt).toContain("auth-system");
+      expect(prompt).toContain("deployment-pipeline");
+    });
+
+    test("knowledge section distinguishes behavioral nudges from domain knowledge", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata);
+      expect(prompt).toContain("behavioral nudges");
+      expect(prompt).toContain("Learnings");
     });
   });
 
@@ -346,6 +374,83 @@ User prefers no emojis.
       expect(result?.body).not.toContain("No emojis");
     });
 
+    test("strips ## Learnings but preserves ## Knowledge after it", () => {
+      const withBoth = `---
+date: "2026-02-09"
+cwd: /projects/myapp
+tags: [test]
+provider: claude
+session_id: ses-abc123
+---
+
+# Session with both sections
+
+## Summary
+Did some work.
+
+## Learnings
+
+### (correction) Use Bun.file()
+
+This project uses Bun runtime.
+
+## Knowledge
+
+### Auth System
+
+The auth layer uses JWT with rotating refresh tokens.
+Topics: auth, architecture
+`;
+      const result = parseSummaryOutput(withBoth);
+      expect(result).not.toBeNull();
+      expect(result?.body).toContain("## Summary");
+      expect(result?.body).not.toContain("## Learnings");
+      expect(result?.body).not.toContain("Use Bun.file()");
+      // Knowledge section should also be stripped (extracted separately)
+      expect(result?.body).not.toContain("## Knowledge");
+      expect(result?.body).not.toContain("Auth System");
+    });
+
+    test("strips both sections regardless of order", () => {
+      const knowledgeFirst = `---
+date: "2026-02-09"
+cwd: /projects/myapp
+tags: [test]
+provider: claude
+session_id: ses-abc123
+---
+
+# Session with reversed order
+
+## Summary
+Did some work.
+
+## Decisions
+- Chose option A.
+
+## Knowledge
+
+### Deploy Pipeline
+
+Docker to ECS with blue-green.
+Topics: deployment
+
+## Learnings
+
+### (pattern) Use atomic writes
+
+Always use tmp + rename.
+`;
+      const result = parseSummaryOutput(knowledgeFirst);
+      expect(result).not.toBeNull();
+      expect(result?.body).toContain("## Summary");
+      expect(result?.body).toContain("## Decisions");
+      expect(result?.body).not.toContain("## Knowledge");
+      expect(result?.body).not.toContain("## Learnings");
+      expect(result?.body).not.toContain("Deploy Pipeline");
+      expect(result?.body).not.toContain("Use atomic writes");
+    });
+
     test("handles LLM using ```yaml code fence instead of --- frontmatter", () => {
       const codeFenceFrontmatter = `\`\`\`yaml
 date: 2026-02-09
@@ -487,6 +592,92 @@ session_id: ses-abc123
 Just body text without a heading.
 `;
       expect(parseSummaryOutput(noTitle)).toBeNull();
+    });
+  });
+
+  describe("parseExtractedKnowledge", () => {
+    const metadata = { date: "2026-04-15", cwd: "/projects/myapp", sessionHash: "abc12345" };
+
+    test("extracts fragments from a well-formed Knowledge section", () => {
+      const raw = `## Summary
+Some summary text.
+
+## Knowledge
+
+### Auth Middleware Architecture
+
+The auth layer uses JWT with rotating refresh tokens. Session state is stateless
+on the server side — all state lives in the token.
+Topics: auth, architecture, scaling
+
+### Why FTS5 Over Vector Search
+
+FTS5 was chosen for memory search because it's deterministic.
+Topics: search, architecture-decisions
+`;
+      const fragments = parseExtractedKnowledge(raw, metadata);
+      expect(fragments).toHaveLength(2);
+      expect(fragments[0]?.title).toBe("Auth Middleware Architecture");
+      expect(fragments[0]?.body).toContain("JWT with rotating refresh tokens");
+      expect(fragments[0]?.topics).toEqual(["auth", "architecture", "scaling"]);
+      expect(fragments[0]?.sourceSession).toBe("abc12345");
+      expect(fragments[1]?.title).toBe("Why FTS5 Over Vector Search");
+      expect(fragments[1]?.topics).toEqual(["search", "architecture-decisions"]);
+    });
+
+    test("returns empty array when no Knowledge section exists", () => {
+      const raw = `## Summary\nSome summary.\n\n## Learnings\n\n### (fact) Something\n\nA fact.`;
+      expect(parseExtractedKnowledge(raw, metadata)).toEqual([]);
+    });
+
+    test("returns empty array when Knowledge section is empty", () => {
+      const raw = `## Summary\nSome summary.\n\n## Knowledge\n`;
+      expect(parseExtractedKnowledge(raw, metadata)).toEqual([]);
+    });
+
+    test("handles fragment without Topics line", () => {
+      const raw = `## Knowledge
+
+### Orphan Fragment
+
+This fragment has no topics line.
+`;
+      const fragments = parseExtractedKnowledge(raw, metadata);
+      expect(fragments).toHaveLength(1);
+      expect(fragments[0]?.title).toBe("Orphan Fragment");
+      expect(fragments[0]?.topics).toEqual([]);
+      expect(fragments[0]?.body).toContain("no topics line");
+    });
+
+    test("stops at the next ## heading after Knowledge", () => {
+      const raw = `## Knowledge
+
+### Something Useful
+
+Useful content.
+Topics: useful
+
+## Learnings
+
+### (correction) Not a knowledge fragment
+
+This should not be parsed as knowledge.
+`;
+      const fragments = parseExtractedKnowledge(raw, metadata);
+      expect(fragments).toHaveLength(1);
+      expect(fragments[0]?.title).toBe("Something Useful");
+    });
+
+    test("normalizes topic tags to lowercase and trimmed", () => {
+      const raw = `## Knowledge
+
+### Mixed Case Tags
+
+Content here.
+Topics: Auth, ARCHITECTURE, Scaling
+`;
+      const fragments = parseExtractedKnowledge(raw, metadata);
+      expect(fragments[0]?.topics).toEqual(["auth", "architecture", "scaling"]);
     });
   });
 });

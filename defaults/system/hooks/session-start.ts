@@ -14,6 +14,7 @@ import {
   isUnmodifiedTemplate,
   listSummaries,
   loadConfig,
+  loadKnowledgeIndex,
   loadLearnings,
   loadShakaFile,
   renderEntry,
@@ -198,6 +199,25 @@ async function main() {
     mark("Loaded learnings", t, `${learningsSection.length} chars`);
   } else {
     mark("No learnings to load", t);
+  }
+
+  // Load knowledge index (topic list with paths — LLM reads pages on demand)
+  t = performance.now();
+  const knowledgeEnabled = config?.memory?.knowledge_enabled ?? true;
+  if (knowledgeEnabled) {
+    try {
+      const knowledgeIndex = await loadKnowledgeIndex(memoryDir, process.cwd());
+      if (knowledgeIndex) {
+        contextParts.push(knowledgeIndex);
+        mark("Loaded knowledge index", t, `${knowledgeIndex.length} chars`);
+      } else {
+        mark("No knowledge base to load", t);
+      }
+    } catch {
+      mark("Knowledge index load failed (fail-open)", t);
+    }
+  } else {
+    mark("Knowledge base disabled", t);
   }
 
   // Load rolling summaries (compressed history between learnings and sessions)

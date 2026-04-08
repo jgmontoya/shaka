@@ -325,6 +325,7 @@ describe("collectMeasurements", () => {
         m.identity.chars +
         m.userFiles.filter((f) => !f.skipped).reduce((s, f) => s + f.chars, 0) +
         m.learnings.chars +
+        m.knowledge.chars +
         m.rollups.chars +
         m.sessions.chars +
         m.separators.chars;
@@ -388,6 +389,46 @@ describe("collectMeasurements", () => {
 
       // partCount = 0 (no framework, no injected user files, no memory) → 0 separators
       expect(m.separators.chars).toBe(0);
+    });
+  });
+
+  describe("knowledge measurement", () => {
+    test("returns zero when no knowledge directory exists", async () => {
+      await setupMinimalHome(testDir);
+      const m = await collectMeasurements(testDir);
+
+      expect(m.knowledge.chars).toBe(0);
+      expect(m.knowledge.name).toBe("Knowledge Base");
+    });
+
+    test("measures knowledge index when topics exist", async () => {
+      await setupMinimalHome(testDir);
+      const { rebuildIndex } = await import("../../../src/memory/knowledge");
+      const { projectSlug } = await import("../../../src/memory/rollups");
+
+      const knowledgeDir = join(testDir, "memory", "knowledge", projectSlug(process.cwd()));
+      await mkdir(knowledgeDir, { recursive: true });
+
+      const topicPage = `---
+title: Auth System
+created: 2026-04-01
+updated: 2026-04-15
+confidence: high
+sources: [2026-04-01-abc12345]
+summary: "JWT + rotating refresh tokens"
+---
+
+## Overview
+
+The auth layer uses JWT.
+`;
+      await Bun.write(join(knowledgeDir, "auth-system.md"), topicPage);
+      await rebuildIndex(knowledgeDir);
+
+      const m = await collectMeasurements(testDir);
+
+      expect(m.knowledge.chars).toBeGreaterThan(0);
+      expect(m.knowledge.detail).toContain("1 topic");
     });
   });
 

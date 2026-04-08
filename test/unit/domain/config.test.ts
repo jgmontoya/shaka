@@ -503,6 +503,7 @@ describe("Config", () => {
           sessions_budget: 5000,
           recency_window_days: 90,
           search_max_results: 10,
+          knowledge_enabled: true,
           maintenance: { enabled: true },
         },
       };
@@ -575,6 +576,7 @@ describe("Config", () => {
         sessions_budget: 5000,
         recency_window_days: 90,
         search_max_results: 10,
+        knowledge_enabled: true,
         maintenance: { enabled: true },
       });
     });
@@ -600,6 +602,7 @@ describe("Config", () => {
         sessions_budget: 5000,
         recency_window_days: 90,
         search_max_results: 10,
+        knowledge_enabled: true,
         maintenance: { enabled: true },
       });
     });
@@ -617,6 +620,7 @@ describe("Config", () => {
           sessions_budget: 2000,
           recency_window_days: 60,
           search_max_results: 5,
+          knowledge_enabled: true,
           maintenance: { enabled: true },
         },
       };
@@ -655,6 +659,7 @@ describe("Config", () => {
           sessions_budget: 5000,
           recency_window_days: 90,
           search_max_results: 10,
+          knowledge_enabled: true,
         },
       };
       await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
@@ -679,6 +684,7 @@ describe("Config", () => {
           sessions_budget: 5000,
           recency_window_days: 90,
           search_max_results: 10,
+          knowledge_enabled: true,
           maintenance: { enabled: false },
         },
       };

@@ -27,6 +27,7 @@
     "sessions_budget": 5000,
     "recency_window_days": 90,
     "search_max_results": 10,
+    "knowledge_enabled": true,
     "maintenance": {
       "enabled": true
     }

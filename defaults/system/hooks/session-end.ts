@@ -22,6 +22,7 @@ import {
   type NormalizedMessage,
   type SessionMetadata,
   buildSummarizationPrompt,
+  compileKnowledge,
   getSummarizationModel,
   hashSessionId,
   inference,
@@ -33,6 +34,8 @@ import {
   parseExtractedLearnings,
   parseOpencodeTranscript,
   parseSummaryOutput,
+  projectSlug,
+  readExistingTopicTitles,
   resolveShakaHome,
   runMaintenance,
   truncateTranscript,
@@ -243,8 +246,14 @@ async function worker(tmpPath: string) {
   const existingTitles = existingLearnings.map((e) => e.title);
   mark("Loaded existing learnings", t, `${existingTitles.length} titles`);
 
-  // Build prompt (single call produces both summary + learnings)
-  const prompt = buildSummarizationPrompt(truncated, metadata, existingTitles);
+  // Load existing knowledge topic titles for tag convergence (fail-open)
+  t = performance.now();
+  const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+  const existingTopicTitles = await readExistingTopicTitles(knowledgeDir);
+  mark("Loaded topic titles", t, `${existingTopicTitles.length} topics`);
+
+  // Build prompt (single call produces summary + learnings + knowledge)
+  const prompt = buildSummarizationPrompt(truncated, metadata, existingTitles, existingTopicTitles);
 
   // Call inference
   const model = await getSummarizationModel(provider);
@@ -319,6 +328,31 @@ async function worker(tmpPath: string) {
   } catch (err) {
     console.error(`Maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
     mark("Maintenance failed", t);
+  }
+
+  // Step 6: Knowledge compilation (own gating via manifest delta, fail-open)
+  t = performance.now();
+  try {
+    const config = await loadConfig();
+    if (config?.memory?.knowledge_enabled !== false) {
+      const compilationModel = await getSummarizationModel(provider);
+      const inferFn = async (prompt: string): Promise<string> => {
+        const res = await inference({ userPrompt: prompt, model: compilationModel, timeout: 60000 });
+        if (!res.success || !res.text) throw new Error(res.error ?? "inference failed");
+        return res.text;
+      };
+      const result = await compileKnowledge(memoryDir, cwd, inferFn);
+      if (result.sessionsProcessed === 0) {
+        mark("Knowledge compilation skipped", t, "no unprocessed sessions");
+      } else {
+        mark("Knowledge compilation complete", t, `${result.topicsCreated.length} created, ${result.topicsUpdated.length} updated`);
+      }
+    } else {
+      mark("Knowledge compilation disabled", t);
+    }
+  } catch (err) {
+    console.error(`Knowledge compilation failed: ${err instanceof Error ? err.message : String(err)}`);
+    mark("Knowledge compilation failed", t);
   }
 
   mark("Session-end worker total", t0, provider);

@@ -10,11 +10,12 @@
  */
 
 import { mkdir, readdir, rename, rmdir, stat } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { inference } from "../inference";
 import type { SummaryIndex } from "./storage";
+import { isPathRelated } from "./utils";
 
 // --- Types ---
 
@@ -358,12 +359,6 @@ async function readProjectCwd(projDir: string): Promise<string | null> {
     if (rollup) return rollup.cwd;
   }
   return null;
-}
-
-/** Check if two paths have an ancestor/descendant relationship (or are equal). */
-function isPathRelated(a: string, b: string): boolean {
-  const rel = relative(a, b);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 /** Find project dirs whose CWD is an ancestor or descendant of the given cwd. */

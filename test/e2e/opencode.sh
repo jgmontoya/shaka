@@ -245,6 +245,20 @@ else
   exit 1
 fi
 
+# ── Knowledge base: config ────────────────────────────────────────────
+
+section "Knowledge base"
+
+CONFIG_FILE="$SHAKA_HOME/config.json"
+
+if jq -e '.memory.knowledge_enabled' "$CONFIG_FILE" >/dev/null 2>&1; then
+  pass "knowledge_enabled present in config"
+else
+  fail "knowledge_enabled not found in config"
+  jq '.memory' "$CONFIG_FILE" 2>&1 || true
+  exit 1
+fi
+
 # ── Uninstall ─────────────────────────────────────────────────────────
 
 section "Uninstall"
