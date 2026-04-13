@@ -1,0 +1,55 @@
+# Shaka + Codex — isolated test environment
+# Provides full isolation — no writes to host ~/.codex/ or global bun state
+#
+# Uses Trixie (not Bookworm like claude/opencode) because the Codex CLI binary
+# requires GLIBC 2.38+ and Bookworm only ships 2.36.
+
+FROM debian:trixie-slim
+
+LABEL org.opencontainers.image.title="shaka-codex" \
+      org.opencontainers.image.description="Shaka dev/test environment with Codex provider"
+
+# Install curl, jq (needed for installers + test assertions), then clean up
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates unzip jq && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash shakaUser
+USER shakaUser
+WORKDIR /home/shakaUser
+
+# Install bun (user-level — everything under ~/.bun/)
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/home/shakaUser/.bun/bin:${PATH}"
+
+# Install Codex CLI from GitHub releases (auto-detect architecture)
+RUN mkdir -p /home/shakaUser/.local/bin && \
+    ARCH=$(uname -m) && \
+    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
+      TRIPLE="aarch64-unknown-linux-gnu"; \
+    else \
+      TRIPLE="x86_64-unknown-linux-gnu"; \
+    fi && \
+    curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-${TRIPLE}.tar.gz" | \
+    tar xz -C /home/shakaUser/.local/bin && \
+    mv "/home/shakaUser/.local/bin/codex-${TRIPLE}" /home/shakaUser/.local/bin/codex && \
+    chmod +x /home/shakaUser/.local/bin/codex && \
+    mkdir -p /home/shakaUser/.codex
+ENV PATH="/home/shakaUser/.local/bin:${PATH}"
+
+# Set up app directory
+WORKDIR /home/shakaUser/app
+
+# Install dependencies (layer caching)
+COPY --chown=shakaUser:shakaUser package.json bun.lock ./
+RUN bun install --frozen-lockfile && bun link
+
+# Copy source
+COPY --chown=shakaUser:shakaUser src/ src/
+COPY --chown=shakaUser:shakaUser defaults/ defaults/
+COPY --chown=shakaUser:shakaUser test/ test/
+COPY --chown=shakaUser:shakaUser tsconfig.json biome.json ./
+
+# Default: run all checks (typecheck + lint + test)
+CMD ["bun", "run", "check"]

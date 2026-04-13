@@ -16,7 +16,7 @@ import { normalizeCwd } from "../domain/paths";
 export const NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 export const MAX_NAME_LENGTH = 64;
 const RESERVED_NAMES = new Set(["shaka"]);
-const KNOWN_PROVIDERS = new Set(["claude", "opencode"]);
+const KNOWN_PROVIDERS = new Set(["claude", "opencode", "codex"]);
 
 /** Overridable command fields (used in providers block). */
 export interface CommandFields {
@@ -33,6 +33,7 @@ export interface DiscoveredCommand extends CommandFields {
   providers?: {
     claude?: Partial<CommandFields>;
     opencode?: Partial<CommandFields>;
+    codex?: Partial<CommandFields>;
   };
   body: string;
   sourcePath: string;
@@ -190,7 +191,7 @@ function parseProviders(value: unknown): DiscoveredCommand["providers"] | undefi
   for (const provider of KNOWN_PROVIDERS) {
     const overrides = obj[provider];
     if (!overrides || typeof overrides !== "object") continue;
-    result[provider as "claude" | "opencode"] = parseFieldOverrides(
+    result[provider as "claude" | "opencode" | "codex"] = parseFieldOverrides(
       overrides as Record<string, unknown>,
     );
   }

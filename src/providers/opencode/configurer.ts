@@ -46,10 +46,13 @@ function defaultOpencodeConfigDir(): string {
 
 export class OpencodeProviderConfigurer implements ProviderConfigurer {
   readonly name = "opencode" as const;
+  readonly label = "opencode";
+  readonly skillsDir: string;
   private readonly opencodeConfigDir: string;
 
   constructor(options?: { opencodeConfigDir?: string }) {
     this.opencodeConfigDir = options?.opencodeConfigDir ?? defaultOpencodeConfigDir();
+    this.skillsDir = join(this.opencodeConfigDir, "skills");
   }
 
   isInstalled(): boolean {

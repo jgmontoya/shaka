@@ -29,9 +29,9 @@ async function reloadProviders(shakaHome: string): Promise<void> {
     process.exit(1);
   }
 
-  const providerNames: ProviderName[] = [];
-  if (config.providers.claude.enabled) providerNames.push("claude");
-  if (config.providers.opencode.enabled) providerNames.push("opencode");
+  const providerNames = (Object.keys(config.providers) as ProviderName[]).filter(
+    (name) => config.providers[name as keyof typeof config.providers]?.enabled,
+  );
 
   if (providerNames.length === 0) {
     console.error("ERROR: No providers enabled in config. Run `shaka init` first.");
@@ -47,9 +47,9 @@ async function reloadProviders(shakaHome: string): Promise<void> {
     const provider = createProvider(providerName);
     const result = await provider.install({ shakaHome, permissionMode });
     if (!result.ok) {
-      console.error(`  ✗ Failed to reload ${providerName}: ${result.error.message}`);
+      console.error(`  ✗ Failed to reload ${provider.label}: ${result.error.message}`);
     } else {
-      console.log(`  ✓ Reloaded ${providerName} configuration`);
+      console.log(`  ✓ Reloaded ${provider.label} configuration`);
       installedProviders.push(provider);
     }
   }

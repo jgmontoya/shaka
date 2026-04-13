@@ -31,6 +31,7 @@ import {
   loadLearnings,
   mergeNewLearnings,
   parseClaudeCodeTranscript,
+  parseCodexTranscript,
   parseExtractedLearnings,
   parseOpencodeTranscript,
   parseSummaryOutput,
@@ -60,6 +61,7 @@ interface SessionEndInput {
   transcript_path?: string;
   reason?: string;
   cwd?: string;
+  provider?: string;
 }
 
 /**
@@ -85,19 +87,36 @@ async function readStdin(timeout = 3000): Promise<string> {
 
 /**
  * Read and parse transcript based on provider.
- * Claude Code: read transcript_path directly from disk.
- * opencode: spawn `opencode export <sessionId>` to get transcript.
+ * Each provider identifies itself via input.provider (set by configurer or debounce script).
  */
 async function loadTranscript(input: SessionEndInput): Promise<NormalizedMessage[]> {
-  if (typeof input.transcript_path === "string") {
-    return await loadClaudeTranscript(input.transcript_path);
+  switch (input.provider) {
+    case "claude":
+      return await loadClaudeTranscript(input.transcript_path!);
+    case "codex":
+      return await loadCodexTranscript(input.transcript_path);
+    case "opencode":
+      return await loadOpencodeTranscript(input.session_id);
+    default:
+      console.error(`Unknown provider "${input.provider}", falling back to opencode transcript parser`);
+      return await loadOpencodeTranscript(input.session_id);
   }
-  return await loadOpencodeTranscript(input.session_id);
 }
 
 async function loadClaudeTranscript(transcriptPath: string): Promise<NormalizedMessage[]> {
   const content = await Bun.file(transcriptPath).text();
   return parseClaudeCodeTranscript(content);
+}
+
+async function loadCodexTranscript(transcriptPath: string | undefined): Promise<NormalizedMessage[]> {
+  if (!transcriptPath) return [];
+  try {
+    const content = await Bun.file(transcriptPath).text();
+    return parseCodexTranscript(content);
+  } catch {
+    console.error(`Failed to read Codex transcript: ${transcriptPath}`);
+    return [];
+  }
 }
 
 async function loadOpencodeTranscript(sessionId: string | undefined): Promise<NormalizedMessage[]> {
@@ -157,17 +176,23 @@ async function dispatch() {
     process.exit(0);
   }
 
+  // Inject provider from --provider arg if not already set (Claude configurer passes this)
+  const providerArgIdx = process.argv.indexOf("--provider");
+  if (!input.provider && providerArgIdx !== -1) {
+    input.provider = process.argv[providerArgIdx + 1];
+  }
+
   const sessionId = input.session_id ?? "unknown";
   const shakaHome = resolveShakaHome();
   const memoryDir = join(shakaHome, "memory");
   await mkdir(memoryDir, { recursive: true });
 
-  // Write stdin payload to temp file so the worker can read it
+  // Write enriched payload to temp file so the worker can read it
   const tmpPath = join(
     memoryDir,
     `.session-end-input-${sessionId.slice(0, 8)}-${process.pid}.json`,
   );
-  await Bun.write(tmpPath, rawInput);
+  await Bun.write(tmpPath, JSON.stringify(input));
 
   // Spawn detached worker — stderr goes to log file for diagnostics
   const logPath = join(memoryDir, ".session-end-worker.log");
@@ -212,10 +237,13 @@ async function worker(tmpPath: string) {
 
   const sessionId = input.session_id ?? "unknown";
   const cwd = input.cwd ?? process.cwd();
-  const isClaudeCode = "transcript_path" in input && typeof input.transcript_path === "string";
-  const provider = isClaudeCode ? "claude" : "opencode";
+  const provider = input.provider ?? "opencode";
 
   console.error(`Worker started: ${provider} session ${sessionId}`);
+
+  const shakaHome = resolveShakaHome();
+  const memoryDir = join(shakaHome, "memory");
+  const date = new Date().toISOString().split("T")[0] ?? new Date().toISOString();
 
   // Load and parse transcript
   let t = performance.now();
@@ -231,14 +259,11 @@ async function worker(tmpPath: string) {
 
   // Build metadata
   const metadata: SessionMetadata = {
-    date: new Date().toISOString().split("T")[0] ?? new Date().toISOString(),
+    date,
     cwd,
     provider,
     sessionId,
   };
-
-  const shakaHome = resolveShakaHome();
-  const memoryDir = join(shakaHome, "memory");
 
   // Load existing learnings for title matching in extraction prompt
   t = performance.now();

@@ -12,8 +12,7 @@ import { lstat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { type Result, ok } from "../domain/result";
 import { readSymlinkTarget, removeLink } from "../platform/paths";
-import type { ClaudeProviderConfigurer } from "../providers/claude/configurer";
-import { createProvider } from "../providers/registry";
+import { createProvider, getProviderNames } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
 import { type DetectedProviders, detectInstalledProviders } from "./provider-detection";
 
@@ -29,10 +28,7 @@ export interface UninstallOptions {
 }
 
 export interface UninstallResult {
-  providers: {
-    claude: { detected: boolean; uninstalled: boolean };
-    opencode: { detected: boolean; uninstalled: boolean };
-  };
+  providers: Record<ProviderName, { detected: boolean; uninstalled: boolean }>;
   removed: string[];
   errors: string[];
 }
@@ -51,23 +47,16 @@ export class UninstallService {
    */
   async uninstallProviders(): Promise<UninstallResult["providers"]> {
     const detected = await this.detectProviders();
-    const providerNames: ProviderName[] = ["claude", "opencode"];
-    const result: UninstallResult["providers"] = {
-      claude: { detected: detected.claude, uninstalled: false },
-      opencode: { detected: detected.opencode, uninstalled: false },
-    };
+    const result = {} as UninstallResult["providers"];
 
-    for (const name of providerNames) {
+    for (const name of getProviderNames()) {
+      result[name] = { detected: detected[name], uninstalled: false };
       if (!detected[name]) continue;
+
       const provider = createProvider(name);
       const uninstallResult = await provider.uninstall({ shakaHome: this.shakaHome });
       result[name].uninstalled = uninstallResult.ok;
-    }
-
-    // Unregister MCP server from Claude Code
-    if (detected.claude) {
-      const claude = createProvider("claude") as ClaudeProviderConfigurer;
-      await claude.unregisterMcpServer();
+      await provider.unregisterMcpServer?.();
     }
 
     return result;
@@ -176,7 +165,7 @@ export class UninstallService {
     // 1. Uninstall provider configuration
     const providers = await this.uninstallProviders();
 
-    for (const name of ["claude", "opencode"] as const) {
+    for (const name of getProviderNames()) {
       if (providers[name].detected && !providers[name].uninstalled) {
         errors.push(`Failed to uninstall ${name} configuration`);
       }

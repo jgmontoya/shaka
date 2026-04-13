@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   type NormalizedMessage,
   parseClaudeCodeTranscript,
+  parseCodexTranscript,
   parseOpencodeTranscript,
   truncateTranscript,
 } from "../../../src/memory/transcript";
@@ -307,6 +308,81 @@ describe("Transcript", () => {
       const result = parseOpencodeTranscript(input);
       expect(result).toHaveLength(1);
       expect(result[0]!.content).toBe("First paragraph.\nSecond paragraph.");
+    });
+  });
+
+  describe("parseCodexTranscript", () => {
+    test("parses user_message as user role", () => {
+      const input = `{"type":"event_msg","payload":{"type":"user_message","message":"read the file README.md"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([{ role: "user", content: "read the file README.md" }]);
+    });
+
+    test("parses agent_message commentary as assistant role", () => {
+      const input = `{"type":"event_msg","payload":{"type":"agent_message","message":"Reading README.md now.","phase":"commentary"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([{ role: "assistant", content: "Reading README.md now." }]);
+    });
+
+    test("parses agent_message final_answer as assistant role", () => {
+      const input = `{"type":"event_msg","payload":{"type":"agent_message","message":"Here is the content.","phase":"final_answer"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([{ role: "assistant", content: "Here is the content." }]);
+    });
+
+    test("folds function_call as [Tool: name]", () => {
+      const input = `{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"ls\\"}"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([{ role: "assistant", content: "[Tool: exec_command]" }]);
+    });
+
+    test("skips function_call_output lines", () => {
+      const input = `{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_xxx","output":"# Shaka\\n"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([]);
+    });
+
+    test("parses full multi-line Codex transcript", () => {
+      const lines = [
+        `{"type":"event_msg","payload":{"type":"user_message","message":"read the file README.md"}}`,
+        `{"type":"event_msg","payload":{"type":"agent_message","message":"Reading README.md now.","phase":"commentary"}}`,
+        `{"type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"head -n 1 README.md\\"}"}}`,
+        `{"type":"response_item","payload":{"type":"function_call_output","call_id":"call_xxx","output":"# Shaka\\n"}}`,
+        `{"type":"event_msg","payload":{"type":"agent_message","message":"\`# Shaka\`","phase":"final_answer"}}`,
+      ];
+      const result = parseCodexTranscript(lines.join("\n"));
+      expect(result).toHaveLength(4); // user, commentary, tool, final_answer
+      expect(result[0]!.role).toBe("user");
+      expect(result[0]!.content).toBe("read the file README.md");
+      expect(result[1]!.role).toBe("assistant");
+      expect(result[1]!.content).toBe("Reading README.md now.");
+      expect(result[2]!.role).toBe("assistant");
+      expect(result[2]!.content).toBe("[Tool: exec_command]");
+      expect(result[3]!.role).toBe("assistant");
+      expect(result[3]!.content).toBe("`# Shaka`");
+    });
+
+    test("returns empty array for empty input", () => {
+      expect(parseCodexTranscript("")).toEqual([]);
+    });
+
+    test("handles malformed lines gracefully (no throw)", () => {
+      const input = ["not valid json", `{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}`, "{incomplete"].join("\n");
+      const result = parseCodexTranscript(input);
+      expect(result).toHaveLength(1);
+      expect(result[0]!.role).toBe("user");
+    });
+
+    test("skips lines with unknown payload types", () => {
+      const input = `{"type":"event_msg","payload":{"type":"system_init","data":{}}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([]);
+    });
+
+    test("skips agent_message with empty message", () => {
+      const input = `{"type":"event_msg","payload":{"type":"agent_message","message":"","phase":"commentary"}}`;
+      const result = parseCodexTranscript(input);
+      expect(result).toEqual([]);
     });
   });
 

@@ -27,6 +27,10 @@ export interface ShakaConfig {
       readonly enabled: boolean;
       readonly summarization_model?: string;
     };
+    readonly codex?: {
+      readonly enabled: boolean;
+      readonly summarization_model?: string;
+    };
   };
   readonly assistant: {
     readonly name: string;
@@ -137,7 +141,7 @@ export async function loadConfig(shakaHome?: string): Promise<ShakaConfig | null
 
 /**
  * Check if running as a subagent (spawned by main agent).
- * Works with both Claude Code and opencode.
+ * Works with Claude Code, opencode, and Codex.
  */
 export function isSubagent(env: NodeJS.ProcessEnv = process.env): boolean {
   // Claude Code: task agents set CLAUDE_AGENT_TYPE or run in .claude/Agents/
@@ -147,6 +151,9 @@ export function isSubagent(env: NodeJS.ProcessEnv = process.env): boolean {
   // opencode: check for subagent indicators
   if (env.OPENCODE_SUBAGENT === "true") return true;
   if (env.OPENCODE_AGENT_ID !== undefined) return true;
+
+  // Codex: set by the hook wrapper when transcript_path is absent
+  if (env.CODEX_SUBAGENT === "true") return true;
 
   return false;
 }
@@ -189,12 +196,13 @@ export function isPermissionsManaged(config: ShakaConfig | null): boolean {
  * Returns undefined when "auto" so inference skips the --model flag entirely.
  */
 export async function getSummarizationModel(
-  provider: "claude" | "opencode",
+  provider: string,
   shakaHome?: string,
 ): Promise<string | undefined> {
-  const defaults = { claude: "haiku", opencode: "auto" };
+  const defaults: Record<string, string> = { claude: "haiku", opencode: "auto", codex: "auto" };
   const config = await loadConfig(shakaHome);
-  const model = config?.providers?.[provider]?.summarization_model ?? defaults[provider];
+  const providerConfig = config?.providers?.[provider as keyof typeof config.providers];
+  const model = providerConfig?.summarization_model ?? defaults[provider] ?? "auto";
   return model === "auto" ? undefined : model;
 }
 
@@ -268,6 +276,14 @@ export async function ensureConfigComplete(shakaHome: string): Promise<boolean> 
     maintenance: { ...memoryDefaults.maintenance, ...(existingMemory.maintenance as object) },
   };
   if (JSON.stringify(config.memory) !== before) changed = true;
+
+  // Backfill codex provider if missing (added in Phase 0b)
+  const providers = (config.providers ?? {}) as Record<string, unknown>;
+  if (providers.codex === undefined) {
+    providers.codex = { enabled: false, summarization_model: "auto" };
+    config.providers = providers;
+    changed = true;
+  }
 
   if (changed) {
     await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`);

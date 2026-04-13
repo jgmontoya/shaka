@@ -12,11 +12,9 @@ import { Eta } from "eta";
 import { type Result, err, ok } from "../domain/result";
 import { getCurrentVersion } from "../domain/version";
 import { readSymlinkTarget, removeLink, resolveFromModule } from "../platform/paths";
-import {
-  type DetectedProviders,
-  type ProviderName,
-  detectInstalledProviders,
-} from "./provider-detection";
+import { getProviderNames } from "../providers/registry";
+import type { ProviderName } from "../providers/types";
+import { type DetectedProviders, detectInstalledProviders } from "./provider-detection";
 
 // Resolve defaults directory relative to this module
 const DEFAULT_DEFAULTS_PATH = resolveFromModule(import.meta.url, "../../defaults");
@@ -48,10 +46,7 @@ export interface InitOptions {
 }
 
 export interface InitResult {
-  providers: {
-    claude: { detected: boolean; installed: boolean };
-    opencode: { detected: boolean; installed: boolean };
-  };
+  providers: Record<ProviderName, { detected: boolean; installed: boolean }>;
   directories: string[];
   files: string[];
   symlinks: string[];
@@ -299,14 +294,12 @@ export class InitService {
     try {
       const config = await file.json();
       if (config.providers) {
-        config.providers.claude = {
-          ...config.providers.claude,
-          enabled: providers.includes("claude"),
-        };
-        config.providers.opencode = {
-          ...config.providers.opencode,
-          enabled: providers.includes("opencode"),
-        };
+        for (const name of getProviderNames()) {
+          config.providers[name] = {
+            ...config.providers[name],
+            enabled: providers.includes(name),
+          };
+        }
         await Bun.write(configPath, `${JSON.stringify(config, null, 2)}\n`);
       }
       return ok(undefined);
@@ -347,10 +340,7 @@ export class InitService {
     if (selected && selected.length > 0) {
       return selected.filter((p) => detected[p]);
     }
-    const all: ProviderName[] = [];
-    if (detected.claude) all.push("claude");
-    if (detected.opencode) all.push("opencode");
-    return all;
+    return getProviderNames().filter((name) => detected[name]);
   }
 
   /**
@@ -363,7 +353,9 @@ export class InitService {
     const toInstall = this.resolveProviders(options.providers, detected);
 
     if (toInstall.length === 0) {
-      return err(new Error("No AI providers detected. Install Claude Code or opencode first."));
+      return err(
+        new Error("No AI providers detected. Install Claude Code, opencode, or Codex first."),
+      );
     }
 
     // 1. Create user-owned directories
@@ -391,17 +383,16 @@ export class InitService {
     // 6. Persist provider selection to config.json
     await this.updateConfigProviders(toInstall);
 
+    const providerResult = {} as InitResult["providers"];
+    for (const name of getProviderNames()) {
+      providerResult[name] = {
+        detected: detected[name],
+        installed: toInstall.includes(name),
+      };
+    }
+
     const result: InitResult = {
-      providers: {
-        claude: {
-          detected: detected.claude,
-          installed: toInstall.includes("claude"),
-        },
-        opencode: {
-          detected: detected.opencode,
-          installed: toInstall.includes("opencode"),
-        },
-      },
+      providers: providerResult,
       directories: directories.value,
       files: [...userFiles.value, ...configFiles.value],
       symlinks: symlinks.value,

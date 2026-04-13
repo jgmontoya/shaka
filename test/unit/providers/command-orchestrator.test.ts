@@ -20,12 +20,14 @@ describe("command-orchestrator", () => {
 
   /** Create a mock provider that records installCommands calls. */
   function mockProvider(
-    name: "claude" | "opencode",
+    name: "claude" | "opencode" | "codex",
     fn?: (config: CommandInstallConfig) => Promise<void>,
   ): ProviderConfigurer & { calls: CommandInstallConfig[] } {
     const calls: CommandInstallConfig[] = [];
     return {
       name,
+      label: name,
+      skillsDir: "/tmp/test-skills",
       calls,
       isInstalled: () => true,
       install: async () => ({ ok: true as const, value: undefined }),

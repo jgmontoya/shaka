@@ -7,10 +7,16 @@ import type { Result } from "../domain/result";
 import type { DiscoveredCommand } from "./command-discovery";
 import type { CommandManifest } from "./command-manifest";
 
-export type ProviderName = "claude" | "opencode";
+export type ProviderName = "claude" | "opencode" | "codex";
 
 export interface ProviderConfigurer {
   readonly name: ProviderName;
+
+  /** Human-readable label (e.g., "Claude Code", "opencode", "Codex") */
+  readonly label: string;
+
+  /** Absolute path to this provider's skills directory */
+  readonly skillsDir: string;
 
   /** Check if provider CLI is installed */
   isInstalled(): boolean;
@@ -26,6 +32,12 @@ export interface ProviderConfigurer {
 
   /** Check installation status: hooks, agents, skills, commands */
   checkInstallation(config: InstallConfig): Promise<InstallationStatus>;
+
+  /** Register MCP server with this provider (e.g., `claude mcp add`, `codex mcp add`) */
+  registerMcpServer?(): Promise<Result<void, Error>>;
+
+  /** Unregister MCP server from this provider */
+  unregisterMcpServer?(): Promise<Result<void, Error>>;
 }
 
 export interface CommandInstallConfig {

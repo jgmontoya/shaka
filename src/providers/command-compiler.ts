@@ -52,7 +52,7 @@ function buildFrontmatter(fields: Record<string, unknown>): string {
 /** Merge base command fields with provider-specific overrides. */
 function applyOverrides(
   command: DiscoveredCommand,
-  provider: "claude" | "opencode",
+  provider: "claude" | "opencode" | "codex",
 ): CommandFields {
   const overrides = command.providers?.[provider];
   if (!overrides) return command;
@@ -78,6 +78,60 @@ export function compileForClaude(command: DiscoveredCommand, targetDir: string):
     model: fields.model,
     context: fields.subtask ? "fork" : undefined, // Claude Code uses "context: fork" for background subagents
     "user-invocable": fields.userInvocable ?? true,
+  });
+
+  return {
+    path: join(targetDir, command.name, "SKILL.md"),
+    content: frontmatter + body,
+  };
+}
+
+const ORDINALS = [
+  "first",
+  "second",
+  "third",
+  "fourth",
+  "fifth",
+  "sixth",
+  "seventh",
+  "eighth",
+  "ninth",
+];
+
+/**
+ * Replace $ARGUMENTS and positional $N with natural-language descriptions.
+ * Skips $N inside shell injection blocks (!`...`), same guard as decrementPositionalArgs.
+ */
+function replaceArgsWithNaturalLanguage(body: string): string {
+  return body
+    .replace(/!`[^`]*`|\$ARGUMENTS/g, (match) =>
+      match.startsWith("!`")
+        ? match
+        : "Interpret the user's message after the skill name to determine the target.",
+    )
+    .replace(/!`[^`]*`|\$(\d+)/g, (match, n) => {
+      if (n == null) return match; // shell injection block
+      const num = Number(n);
+      if (num === 0) return match;
+      const ord = ORDINALS[num - 1] ?? `#${num}`;
+      return `the ${ord} argument from the user's message`;
+    });
+}
+
+/** Compile a Shaka command to Codex skill format (SKILL.md). */
+export function compileForCodex(command: DiscoveredCommand, targetDir: string): CompiledCommand {
+  const fields = applyOverrides(command, "codex");
+  const rawBody = autoAppendArguments(command.body);
+  const body = replaceArgsWithNaturalLanguage(rawBody);
+
+  // Merge argument-hint into description for Codex skill discovery
+  const description = fields.argumentHint
+    ? `${fields.description}. Invoke with $${command.name} ${fields.argumentHint}`
+    : fields.description;
+
+  const frontmatter = buildFrontmatter({
+    name: command.name,
+    description,
   });
 
   return {

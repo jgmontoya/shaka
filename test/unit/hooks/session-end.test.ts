@@ -43,4 +43,17 @@ describe("session-end hook", () => {
     // Worker reads temp file and deletes it
     expect(source).toContain("unlink(tmpPath)");
   });
+
+  test("source file has provider discrimination for codex", async () => {
+    const source = await Bun.file("defaults/system/hooks/session-end.ts").text();
+    // loadTranscript should route codex to its own parser
+    expect(source).toContain('"codex"');
+    expect(source).toContain("loadCodexTranscript");
+    expect(source).toContain("parseCodexTranscript");
+  });
+
+  test("SessionEndInput interface includes optional provider field", async () => {
+    const source = await Bun.file("defaults/system/hooks/session-end.ts").text();
+    expect(source).toContain("provider?: string");
+  });
 });

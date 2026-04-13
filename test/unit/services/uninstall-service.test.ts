@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Result } from "../../../src/domain/result";
 import { ok } from "../../../src/domain/result";
 import { resolveFromModule } from "../../../src/platform/paths";
+import { getProviderNames } from "../../../src/providers/registry";
 import { InitService } from "../../../src/services/init-service";
 import { UninstallService } from "../../../src/services/uninstall-service";
 
@@ -16,7 +17,7 @@ describe("UninstallService", () => {
 
   /** Set up a fully initialized shaka home for testing uninstall. */
   async function setupInitializedHome(
-    providers: { claude: boolean; opencode: boolean } = { claude: true, opencode: false },
+    providers: { claude: boolean; opencode: boolean; codex: boolean } = { claude: true, opencode: false, codex: false },
   ) {
     const initService = new InitService({
       shakaHome: testHome,
@@ -30,12 +31,12 @@ describe("UninstallService", () => {
   }
 
   function createService(
-    overrides: { detectProviders?: () => Promise<{ claude: boolean; opencode: boolean }> } = {},
+    overrides: { detectProviders?: () => Promise<{ claude: boolean; opencode: boolean; codex: boolean }> } = {},
   ) {
     return new UninstallService({
       shakaHome: testHome,
       detectProviders:
-        overrides.detectProviders ?? (async () => ({ claude: false, opencode: false })),
+        overrides.detectProviders ?? (async () => ({ claude: false, opencode: false, codex: false })),
     });
   }
 
@@ -214,10 +215,10 @@ describe("UninstallService", () => {
     });
 
     test("reports provider uninstall status", async () => {
-      await setupInitializedHome({ claude: true, opencode: false });
+      await setupInitializedHome({ claude: true, opencode: false, codex: false });
       // No actual provider installed in test env, so detection returns false
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: false }),
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
       });
 
       const result = await service.uninstall({ deleteUserData: false });
@@ -226,6 +227,25 @@ describe("UninstallService", () => {
       if (result.ok) {
         expect(result.value.providers.claude.detected).toBe(false);
         expect(result.value.providers.opencode.detected).toBe(false);
+      }
+    });
+
+    test("providers result has an entry for every registered provider", async () => {
+      await setupInitializedHome({ claude: true, opencode: false, codex: false });
+      const service = createService({
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
+      });
+
+      const result = await service.uninstall({ deleteUserData: false });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const names = getProviderNames();
+        for (const name of names) {
+          expect(result.value.providers[name]).toBeDefined();
+          expect(typeof result.value.providers[name].detected).toBe("boolean");
+          expect(typeof result.value.providers[name].uninstalled).toBe("boolean");
+        }
       }
     });
   });

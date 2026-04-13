@@ -66,6 +66,7 @@ export { type HookEvent, HOOK_EVENTS } from "./providers/hook-discovery";
 export {
   type NormalizedMessage,
   parseClaudeCodeTranscript,
+  parseCodexTranscript,
   parseOpencodeTranscript,
   truncateTranscript,
 } from "./memory/transcript";

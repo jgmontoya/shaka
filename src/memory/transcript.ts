@@ -135,6 +135,78 @@ function normalizeClaudeAssistantMessage(
   return { role: "assistant", content: combined };
 }
 
+// --- Codex JSONL Parser ---
+
+interface CodexLine {
+  type: string;
+  payload?: {
+    type?: string;
+    message?: string;
+    phase?: string;
+    name?: string;
+    arguments?: string;
+    call_id?: string;
+    output?: string;
+  };
+}
+
+/**
+ * Parse a Codex CLI JSONL transcript into normalized messages.
+ *
+ * Handles:
+ * - user_message events (role: user)
+ * - agent_message events — all phases: commentary + final_answer (role: assistant)
+ * - function_call entries folded as [Tool: <name>] (role: assistant)
+ * - function_call_output is skipped (tool results are noisy)
+ * - No deduplication needed (Codex uses append-only events, not progressive updates)
+ * - Malformed lines skipped gracefully
+ */
+export function parseCodexTranscript(jsonlContent: string): NormalizedMessage[] {
+  if (!jsonlContent.trim()) return [];
+
+  const messages: NormalizedMessage[] = [];
+
+  for (const line of jsonlContent.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let parsed: CodexLine;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+
+    const msg = normalizeCodexLine(parsed);
+    if (msg) messages.push(msg);
+  }
+
+  return messages;
+}
+
+function normalizeCodexLine(parsed: CodexLine): NormalizedMessage | null {
+  const payload = parsed.payload;
+  if (!payload?.type) return null;
+
+  if (payload.type === "user_message") {
+    if (!payload.message) return null;
+    return { role: "user", content: payload.message };
+  }
+
+  if (payload.type === "agent_message") {
+    if (!payload.message) return null;
+    return { role: "assistant", content: payload.message };
+  }
+
+  if (payload.type === "function_call") {
+    if (!payload.name) return null;
+    return { role: "assistant", content: `[Tool: ${payload.name}]` };
+  }
+
+  // function_call_output and other types are skipped
+  return null;
+}
+
 // --- opencode Export JSON Parser ---
 
 interface OpencodeExport {

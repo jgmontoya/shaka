@@ -31,6 +31,24 @@ describe("session-start hook", () => {
     expect(source).toContain("isUnmodifiedTemplate");
     expect(source).toContain("unmodified template, skipped");
   });
+
+  test("source file cleans up stale session-end-input files", async () => {
+    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
+    expect(source).toContain(".session-end-input-*.json");
+  });
+
+  test("source file cleans up stale codex pending marker files", async () => {
+    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
+    expect(source).toContain(".codex-pending-*.json");
+  });
+
+  test("source file recovers stale codex markers by spawning session-end workers", async () => {
+    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
+    // Should read marker data and spawn session-end worker for crash recovery
+    expect(source).toContain("session_id");
+    expect(source).toContain("transcript_path");
+    expect(source).toContain("--worker");
+  });
 });
 
 /**

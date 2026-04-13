@@ -4,6 +4,19 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Codex as third provider** — OpenAI Codex CLI is now a first-class Shaka provider alongside Claude Code and opencode. `shaka init --codex` sets up everything: context injection, security validation, session memory, skills, commands, agents, MCP tools, and workflows. Codex users get the same Shaka experience as Claude Code and opencode users.
+- **New agents** — CodeReviewer, DevOpsEngineer, and TechnicalWriter
+- **Expanded anti-slop detection** — Writing rules and slop scanner now catch many more AI writing tells: magic adverbs, opening cliches, transition zombies, fake depth phrases, rhetorical Q&A, negative parallelism, dramatic countdowns, false vulnerability, and more. Em dashes banned entirely. Based on patterns from tropes.fyi. ([@dannym-arx](https://github.com/dannym-arx))
+
+### Changed
+
+- **Provider internals are data-driven** — Adding a new provider no longer requires editing detection, init, uninstall, skill linking, or reload code. Register a configurer and the rest follows.
+- **Uninstall preserves non-Shaka hooks** — Codex uninstall removes only Shaka-managed entries from `hooks.json`, preserving user-added hooks
+
 ## [0.9.0] — 2026-04-08
 
 ### Added

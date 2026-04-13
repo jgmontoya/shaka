@@ -250,7 +250,7 @@ async function reloadProviders(shakaHome: string): Promise<void> {
 
   const installedProviders: ProviderConfigurer[] = [];
   for (const provider of providers) {
-    if (!config?.providers[provider.name].enabled) continue;
+    if (!config?.providers[provider.name]?.enabled) continue;
     if (!provider.isInstalled()) continue;
 
     const result = await provider.install({ shakaHome });
