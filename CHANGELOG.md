@@ -4,7 +4,7 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] — 2026-04-13
 
 ### Added
 
@@ -349,6 +349,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
+[0.10.0]: https://github.com/jgmontoya/shaka/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/jgmontoya/shaka/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/jgmontoya/shaka/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/jgmontoya/shaka/compare/v0.7.1...v0.7.2
