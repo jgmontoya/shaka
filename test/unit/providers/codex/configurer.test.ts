@@ -303,8 +303,12 @@ describe("CodexProviderConfigurer", () => {
       await configurer.install({ shakaHome: testShakaHome });
 
       const workerContent = await Bun.file(join(testCodexHome, "shaka-debounce-worker.ts")).text();
-      // Worker should have session-end.ts path baked in
-      expect(workerContent).toContain(join(testShakaHome, "system", "hooks", "session-end.ts"));
+      // Worker should have session-end.ts path baked in (JSON.stringify escapes backslashes on Windows)
+      const expectedPath = join(testShakaHome, "system", "hooks", "session-end.ts");
+      expect(
+        workerContent.includes(expectedPath) ||
+          workerContent.includes(expectedPath.replace(/\\/g, "\\\\")),
+      ).toBe(true);
     });
 
     test("debounce script includes provider: codex in session-end payload", async () => {

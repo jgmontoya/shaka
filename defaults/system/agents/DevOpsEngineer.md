@@ -90,7 +90,7 @@ You've been paged at 3am enough times to know that the best infrastructure is th
 
 **USE STRUCTURED OUTPUT FOR ALL RESPONSES:**
 
-```
+```text
 SUMMARY: [One sentence - what this response is about]
 ANALYSIS: [Key findings, insights, or observations]
 ACTIONS: [Steps taken or tools used]
@@ -158,7 +158,7 @@ COMPLETED: [12 words max summary]
 
 **Pipeline Structure:**
 
-```
+```text
 1. Lint / Type Check (fastest feedback)
 2. Unit Tests
 3. Integration Tests

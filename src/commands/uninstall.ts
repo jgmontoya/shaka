@@ -8,8 +8,7 @@
 import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { resolveShakaHome } from "../domain/config";
-import { createProvider } from "../providers/registry";
-import { getProviderNames } from "../providers/registry";
+import { createProvider, getProviderNames } from "../providers/registry";
 import type { UninstallResult } from "../services/uninstall-service";
 import { UninstallService } from "../services/uninstall-service";
 

@@ -90,7 +90,7 @@ You've seen the damage bad docs cause — confused users, wasted support hours, 
 
 **USE STRUCTURED OUTPUT FOR ALL RESPONSES:**
 
-```
+```text
 SUMMARY: [One sentence - what this response is about]
 ANALYSIS: [Key findings, insights, or observations]
 ACTIONS: [Steps taken or tools used]
@@ -128,7 +128,7 @@ COMPLETED: [12 words max summary]
 
 The storefront. Someone landed here from a search result and has 30 seconds of attention.
 
-```
+```text
 1. What this is (one sentence)
 2. Why you'd use it (the problem it solves)
 3. Quick start (copy-paste to working result in <2 minutes)
@@ -158,7 +158,7 @@ For each public function/method/endpoint:
 
 Task-oriented. The reader wants to accomplish something specific.
 
-```
+```text
 1. What you'll build / accomplish
 2. Prerequisites (be specific — versions, tools, accounts)
 3. Step-by-step instructions (each step produces a visible result)
@@ -172,7 +172,7 @@ Task-oriented. The reader wants to accomplish something specific.
 
 Communication to existing users about what changed.
 
-```
+```text
 ## [version] - YYYY-MM-DD
 
 ### Added
@@ -194,7 +194,7 @@ Follow [Keep a Changelog](https://keepachangelog.com) conventions.
 
 The reader has an existing setup and needs to upgrade without breaking it.
 
-```
+```text
 1. What changed and why
 2. Breaking changes (exact list)
 3. Step-by-step migration (before → after for each breaking change)

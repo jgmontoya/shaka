@@ -131,7 +131,11 @@ async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult>
       };
     }
 
-    const text = await Bun.file(tmpOutput).text();
+    const outputFile = Bun.file(tmpOutput);
+    if (!(await outputFile.exists())) {
+      return { success: false, error: "Codex CLI produced no output file", provider: "codex-cli" };
+    }
+    const text = await outputFile.text();
     return parseResponse(text.trim(), options.expectJson, "codex-cli");
   } finally {
     await unlink(tmpOutput).catch(() => {});

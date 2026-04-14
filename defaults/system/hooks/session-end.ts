@@ -92,7 +92,11 @@ async function readStdin(timeout = 3000): Promise<string> {
 async function loadTranscript(input: SessionEndInput): Promise<NormalizedMessage[]> {
   switch (input.provider) {
     case "claude":
-      return await loadClaudeTranscript(input.transcript_path!);
+      if (!input.transcript_path) {
+        console.error("Claude session missing transcript_path");
+        return [];
+      }
+      return await loadClaudeTranscript(input.transcript_path);
     case "codex":
       return await loadCodexTranscript(input.transcript_path);
     case "opencode":
@@ -243,7 +247,7 @@ async function worker(tmpPath: string) {
 
   const shakaHome = resolveShakaHome();
   const memoryDir = join(shakaHome, "memory");
-  const date = new Date().toISOString().split("T")[0] ?? new Date().toISOString();
+  const date = new Date().toISOString().slice(0, 10);
 
   // Load and parse transcript
   let t = performance.now();
