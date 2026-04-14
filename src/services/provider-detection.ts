@@ -7,12 +7,13 @@
  * - defaults/ templates (via import from 'shaka')
  */
 
-export type ProviderName = "claude" | "opencode";
+import { getProviderNames } from "../providers/registry";
+import type { ProviderName } from "../providers/types";
 
-export interface DetectedProviders {
-  claude: boolean;
-  opencode: boolean;
-}
+// Re-export from the canonical definition in types.ts
+export type { ProviderName } from "../providers/types";
+
+export type DetectedProviders = Record<ProviderName, boolean>;
 
 // Cache detection results within a session
 let cachedDetection: DetectedProviders | null = null;
@@ -33,10 +34,11 @@ export function detectInstalledProviders(): DetectedProviders {
     return cachedDetection;
   }
 
-  cachedDetection = {
-    claude: isProviderInstalled("claude"),
-    opencode: isProviderInstalled("opencode"),
-  };
+  const result = {} as DetectedProviders;
+  for (const name of getProviderNames()) {
+    result[name] = isProviderInstalled(name);
+  }
+  cachedDetection = result;
   return cachedDetection;
 }
 

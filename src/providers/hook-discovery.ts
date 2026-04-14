@@ -141,6 +141,18 @@ export const SHAKA_TO_CLAUDE_EVENT: Record<HookEvent, string> = {
 };
 
 /**
+ * Map Shaka event names to Codex CLI event names.
+ * Used by Codex configurer when writing to hooks.json.
+ */
+export const SHAKA_TO_CODEX_EVENT: Record<HookEvent, string | null> = {
+  "session.start": "SessionStart",
+  "session.end": null, // Handled specially by Codex configurer (Stop debounce script, Phase 2)
+  "prompt.submit": "UserPromptSubmit",
+  "tool.before": "PreToolUse",
+  "tool.after": "PostToolUse",
+};
+
+/**
  * Map Shaka event names to opencode plugin hooks.
  * Used by opencode configurer when generating the plugin.
  * null means no direct equivalent — handled specially.

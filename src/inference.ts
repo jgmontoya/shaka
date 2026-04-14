@@ -10,6 +10,9 @@
  */
 
 import { spawn } from "node:child_process";
+import { unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { detectInstalledProviders } from "./services/provider-detection";
 
 export interface InferenceOptions {
@@ -85,6 +88,58 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
 
   const text = result.stdout.toString().trim();
   return parseResponse(text, options.expectJson, "opencode-cli");
+}
+
+/**
+ * Call Codex CLI for inference.
+ *
+ * Uses `codex exec` with:
+ * - `--disable codex_hooks` to prevent hook recursion
+ * - `--ephemeral` to skip transcript persistence
+ * - `-c 'sandbox="read-only"'` for safe text-only inference
+ * - `-o <file>` for clean output (no ANSI codes or spinner)
+ *
+ * Prompt goes as a positional argument (not stdin — differs from callClaudeCLI).
+ * Uses spawnCLI (not Bun.$) because Bun.$ drops empty string arguments.
+ */
+async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult> {
+  const tmpOutput = join(tmpdir(), `.shaka-codex-inference-${process.pid}-${Date.now()}.txt`);
+  try {
+    const args = [
+      "exec",
+      "--disable",
+      "codex_hooks",
+      "--ephemeral",
+      "--skip-git-repo-check",
+      "-c",
+      'sandbox="read-only"',
+    ];
+    if (options.model) args.push("-m", options.model);
+    // Codex exec has no --system-prompt flag; prepend to user prompt (same as opencode)
+    const prompt = options.systemPrompt
+      ? `${options.systemPrompt}\n\n${options.userPrompt}`
+      : options.userPrompt;
+    args.push("-o", tmpOutput, prompt);
+
+    const result = await spawnCLI("codex", args, "", options.timeout);
+
+    if (result.code !== 0) {
+      return {
+        success: false,
+        error: `Codex CLI error: ${result.stderr}`,
+        provider: "codex-cli",
+      };
+    }
+
+    const outputFile = Bun.file(tmpOutput);
+    if (!(await outputFile.exists())) {
+      return { success: false, error: "Codex CLI produced no output file", provider: "codex-cli" };
+    }
+    const text = await outputFile.text();
+    return parseResponse(text.trim(), options.expectJson, "codex-cli");
+  } finally {
+    await unlink(tmpOutput).catch(() => {});
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,8 +221,12 @@ function parseResponse(text: string, expectJson?: boolean, provider?: string): I
 /**
  * Run inference using available CLI tools.
  *
- * Tries Claude CLI first, then OpenCode CLI.
- * Both handle their own authentication — no API keys needed.
+ * Priority order (cheapest to most expensive):
+ * 1. Claude CLI — cheapest with haiku default
+ * 2. OpenCode CLI — local models or anthropic/haiku
+ * 3. Codex CLI — most expensive (gpt-5.4 default), tried last
+ *
+ * All handle their own authentication — no API keys needed.
  */
 export async function inference(options: InferenceOptions): Promise<InferenceResult> {
   const providers = await detectInstalledProviders();
@@ -182,9 +241,15 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
     if (result.success) return result;
   }
 
+  // Codex last — gpt-5.4 default is expensive for summarization tasks
+  if (providers.codex) {
+    const result = await callCodexCLI(options);
+    if (result.success) return result;
+  }
+
   return {
     success: false,
-    error: "No inference provider available. Install claude or opencode CLI.",
+    error: "No inference provider available. Install claude, opencode, or codex CLI.",
   };
 }
 
@@ -193,5 +258,5 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
  */
 export async function hasInferenceProvider(): Promise<boolean> {
   const providers = await detectInstalledProviders();
-  return providers.claude || providers.opencode;
+  return providers.claude || providers.opencode || providers.codex;
 }

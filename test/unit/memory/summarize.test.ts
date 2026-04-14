@@ -560,7 +560,7 @@ All good.`;
       // The body captures everything after the title within the frontmatter block
     });
 
-    test("normalizes non-standard provider values", () => {
+    test("preserves any non-empty provider string", () => {
       const nonStandardProvider = `---
 date: 2026-02-10
 cwd: /projects/myapp
@@ -576,8 +576,30 @@ Works with non-standard provider string.
 `;
       const result = parseSummaryOutput(nonStandardProvider);
       expect(result).not.toBeNull();
-      expect(result?.metadata.provider).toBe("opencode");
+      // Provider string is preserved as-is — session-end.ts overrides with
+      // the real provider from hook input anyway (line 289: { ...parsed, metadata })
+      expect(result?.metadata.provider).toBe("openrouter/anthropic/claude-haiku-4.5");
       expect(result?.title).toBe("Session with custom provider");
+    });
+
+    test("parses codex provider in frontmatter", () => {
+      const codexOutput = `---
+date: 2026-04-12
+cwd: /projects/myapp
+tags: [codex, test]
+provider: codex
+session_id: ses-codex-001
+---
+
+# Codex session summary
+
+## Summary
+Session ran on Codex provider.
+`;
+      const result = parseSummaryOutput(codexOutput);
+      expect(result).not.toBeNull();
+      expect(result?.metadata.provider).toBe("codex");
+      expect(result?.metadata.sessionId).toBe("ses-codex-001");
     });
 
     test("returns null when title heading is missing", () => {

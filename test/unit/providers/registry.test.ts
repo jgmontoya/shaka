@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ClaudeProviderConfigurer } from "../../../src/providers/claude/configurer";
+import { CodexProviderConfigurer } from "../../../src/providers/codex/configurer";
 import { OpencodeProviderConfigurer } from "../../../src/providers/opencode/configurer";
-import { createProvider, getAllProviders } from "../../../src/providers/registry";
+import { createProvider, getAllProviders, getProviderNames } from "../../../src/providers/registry";
+import type { ProviderName } from "../../../src/providers/types";
 
 describe("Provider Registry", () => {
   describe("createProvider", () => {
@@ -16,14 +18,34 @@ describe("Provider Registry", () => {
       expect(provider).toBeInstanceOf(OpencodeProviderConfigurer);
       expect(provider.name).toBe("opencode");
     });
+
+    test("creates Codex provider", () => {
+      const provider = createProvider("codex");
+      expect(provider).toBeInstanceOf(CodexProviderConfigurer);
+      expect(provider.name).toBe("codex");
+    });
   });
 
   describe("getAllProviders", () => {
-    test("returns both providers", () => {
+    test("returns all providers", () => {
       const providers = getAllProviders();
-      expect(providers).toHaveLength(2);
+      expect(providers).toHaveLength(3);
       expect(providers.map((p) => p.name)).toContain("claude");
       expect(providers.map((p) => p.name)).toContain("opencode");
+      expect(providers.map((p) => p.name)).toContain("codex");
+    });
+  });
+
+  describe("getProviderNames", () => {
+    test("returns all provider names without constructing configurers", () => {
+      const names = getProviderNames();
+      expect(names).toEqual(["claude", "opencode", "codex"]);
+    });
+
+    test("returns ProviderName[] type", () => {
+      const names: ProviderName[] = getProviderNames();
+      expect(names).toBeDefined();
+      expect(names.length).toBe(3);
     });
   });
 });

@@ -122,7 +122,7 @@ function findConfigMismatches(
   const mismatches: ProviderMismatch[] = [];
 
   for (const { provider, cliInstalled, status } of statuses) {
-    const configEnabled = config.providers[provider.name].enabled;
+    const configEnabled = config.providers[provider.name]?.enabled ?? false;
     const actuallyInstalled = cliInstalled && isFullyInstalled(status);
 
     if (configEnabled !== actuallyInstalled) {
@@ -183,7 +183,7 @@ function logProviderStatuses(config: ShakaConfig | null, statuses: ProviderCheck
   let hasIssues = false;
 
   for (const { provider, cliInstalled, status } of statuses) {
-    const enabled = config?.providers[provider.name].enabled ?? false;
+    const enabled = config?.providers[provider.name]?.enabled ?? false;
     const providerHasIssues = logProviderStatus(provider, cliInstalled, status, enabled);
     hasIssues = hasIssues || providerHasIssues;
   }
@@ -199,7 +199,7 @@ async function recheckAfterFix(shakaHome: string): Promise<boolean> {
   for (const provider of providers) {
     const cliInstalled = provider.isInstalled();
     const status = await provider.checkInstallation({ shakaHome });
-    const enabled = config?.providers[provider.name].enabled ?? false;
+    const enabled = config?.providers[provider.name]?.enabled ?? false;
     if (enabled && cliInstalled && !isFullyInstalled(status)) {
       hasIssues = true;
     }

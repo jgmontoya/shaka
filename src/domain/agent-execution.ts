@@ -35,10 +35,14 @@ export async function runAgentStep(options: AgentExecutionOptions): Promise<Agen
     return runOpencode(options.prompt, options.timeout);
   }
 
+  if (providers.codex) {
+    return runCodex(options.prompt, options.timeout);
+  }
+
   return {
     exitCode: 1,
     stdout: "",
-    stderr: "No agent provider available. Install claude or opencode CLI.",
+    stderr: "No agent provider available. Install claude, opencode, or codex CLI.",
   };
 }
 
@@ -50,6 +54,11 @@ function runClaude(prompt: string, timeout?: number): Promise<AgentExecutionResu
 /** Run via opencode CLI — prompt passed as positional argument. */
 function runOpencode(prompt: string, timeout?: number): Promise<AgentExecutionResult> {
   return spawnWithStdin("opencode", ["run", "--agent", "coder", prompt], "", timeout);
+}
+
+/** Run via Codex CLI — --full-auto enables autonomous tool use for workflow steps. */
+function runCodex(prompt: string, timeout?: number): Promise<AgentExecutionResult> {
+  return spawnWithStdin("codex", ["exec", "--full-auto", prompt], "", timeout);
 }
 
 /** Spawn a CLI process, optionally piping stdin. */

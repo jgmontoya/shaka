@@ -14,7 +14,7 @@ import type { NormalizedMessage } from "./transcript";
 export interface SessionMetadata {
   readonly date: string;
   readonly cwd: string;
-  readonly provider: "claude" | "opencode";
+  readonly provider: string;
   readonly sessionId: string;
 }
 
@@ -224,13 +224,10 @@ function extractMetadata(frontmatter: Record<string, unknown>): SessionMetadata 
 
   if (!date || !cwd || !provider || !sessionId) return null;
 
-  // Normalize provider to known values. The hook overrides metadata with
-  // original values anyway, so we accept any non-empty provider string here
-  // to avoid rejecting valid summaries when the LLM echoes non-standard values
-  // (e.g. "openrouter/anthropic/claude-haiku-4.5").
-  const normalizedProvider: "claude" | "opencode" = provider === "claude" ? "claude" : "opencode";
-
-  return { date, cwd, provider: normalizedProvider, sessionId };
+  // Accept any non-empty provider string. The session-end hook overrides
+  // metadata with the real provider from hook input anyway, so the LLM's
+  // echo doesn't need to match a known provider name exactly.
+  return { date, cwd, provider, sessionId };
 }
 
 function extractTags(frontmatter: Record<string, unknown>): string[] {

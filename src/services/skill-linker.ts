@@ -7,32 +7,25 @@
  * of the provider's skills directory.
  */
 
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../domain/config";
 import { installAssetSymlink, uninstallAssetSymlink } from "../providers/asset-installer";
+import { getAllProviders } from "../providers/registry";
+import type { ProviderName } from "../providers/types";
 
 interface ProviderSkillDir {
-  provider: "claude" | "opencode";
+  provider: ProviderName;
   skillsDir: string;
 }
 
-function getAllProviderSkillDirs(env: NodeJS.ProcessEnv = process.env): ProviderSkillDir[] {
-  const xdg = env.XDG_CONFIG_HOME;
-  const base = xdg ? join(xdg, "opencode") : join(homedir(), ".config", "opencode");
-  return [
-    { provider: "claude", skillsDir: join(homedir(), ".claude", "skills") },
-    { provider: "opencode", skillsDir: join(base, "skills") },
-  ];
+function getAllProviderSkillDirs(): ProviderSkillDir[] {
+  return getAllProviders().map((p) => ({ provider: p.name, skillsDir: p.skillsDir }));
 }
 
-function getEnabledProviderSkillDirs(
-  config: { providers: { claude: { enabled: boolean }; opencode: { enabled: boolean } } },
-  env: NodeJS.ProcessEnv = process.env,
-): ProviderSkillDir[] {
-  return getAllProviderSkillDirs(env).filter((dir) =>
-    dir.provider === "claude" ? config.providers.claude.enabled : config.providers.opencode.enabled,
-  );
+function getEnabledProviderSkillDirs(config: {
+  providers: Record<string, { enabled: boolean }>;
+}): ProviderSkillDir[] {
+  return getAllProviderSkillDirs().filter((dir) => config.providers[dir.provider]?.enabled);
 }
 
 /**

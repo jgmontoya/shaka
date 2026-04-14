@@ -41,8 +41,12 @@ e2e-claude:
 e2e-opencode:
     docker compose run --rm --build opencode bash test/e2e/opencode.sh
 
+# Run Codex e2e tests in Docker
+e2e-codex:
+    docker compose run --rm --build codex bash test/e2e/codex.sh
+
 # Run all e2e tests
-e2e: e2e-claude e2e-opencode
+e2e: e2e-claude e2e-opencode e2e-codex
 
 # ── Docker shells ─────────────────────────────────────────────────────
 
@@ -53,3 +57,7 @@ shell-claude:
 # Open interactive shell in opencode container
 shell-opencode:
     docker compose run --rm --build opencode sh
+
+# Open interactive shell in Codex container
+shell-codex:
+    docker compose run --rm --build codex sh

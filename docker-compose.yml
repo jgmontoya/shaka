@@ -11,9 +11,11 @@
 # E2E tests:
 #   docker compose run --rm opencode bash test/e2e/opencode.sh
 #   docker compose run --rm claudecode bash test/e2e/claudecode.sh
+#   docker compose run --rm codex bash test/e2e/codex.sh
 #
-# Claude auth: CLAUDE_CODE_OAUTH_TOKEN from root .env (gitignored).
-# Generate token: claude setup-token → paste into .env as CLAUDE_CODE_OAUTH_TOKEN=<token>
+# Auth:
+#   CLAUDE_CODE_OAUTH_TOKEN — from root .env (gitignored) for Claude Code LLM tests
+#   ~/.codex/auth.json — bind-mounted read-only for Codex LLM tests (from `codex login`)
 
 services:
   opencode:
@@ -29,3 +31,13 @@ services:
     image: shaka-claudecode
     environment:
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN}
+
+  codex:
+    build:
+      context: .
+      dockerfile: dockerfile-codex
+    image: shaka-codex
+    volumes:
+      # Mount host Codex auth for LLM integration tests (read-only, optional)
+      # If ~/.codex/auth.json doesn't exist, Docker creates an empty dir — the test detects this and skips
+      - ${HOME}/.codex/auth.json:/home/shakaUser/.codex/auth.json:ro

@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import type { DiscoveredCommand } from "../../../src/providers/command-discovery";
-import { compileForClaude, compileForOpencode } from "../../../src/providers/command-compiler";
+import {
+  compileForClaude,
+  compileForCodex,
+  compileForOpencode,
+} from "../../../src/providers/command-compiler";
 
 function makeCommand(overrides: Partial<DiscoveredCommand> = {}): DiscoveredCommand {
   return {
@@ -162,6 +166,68 @@ describe("compileForOpencode", () => {
     const result = compileForOpencode(cmd, "/home/test/.config/opencode/commands");
     const bodyPart = result.content.split("---\n").slice(-1)[0] ?? "";
     expect(bodyPart.match(/\$ARGUMENTS/g)?.length).toBe(1);
+  });
+});
+
+describe("compileForCodex", () => {
+  test("produces SKILL.md path inside named directory", () => {
+    const targetDir = join("/home", "test", ".agents", "skills");
+    const result = compileForCodex(makeCommand(), targetDir);
+    expect(result.path).toBe(join(targetDir, "commit", "SKILL.md"));
+  });
+
+  test("maps description and argument-hint into description", () => {
+    const cmd = makeCommand({ argumentHint: "<message>" });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    expect(result.content).toContain("description:");
+    expect(result.content).toContain("<message>");
+  });
+
+  test("replaces $ARGUMENTS with natural-language instruction", () => {
+    const cmd = makeCommand({ body: "Review this: $ARGUMENTS" });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    expect(result.content).not.toContain("$ARGUMENTS");
+    expect(result.content).toContain("Interpret the user's message");
+  });
+
+  test("replaces positional args with ordinal descriptions", () => {
+    const cmd = makeCommand({ body: "Deploy $1 to $2" });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    expect(result.content).not.toContain("$1");
+    expect(result.content).not.toContain("$2");
+    expect(result.content).toContain("first argument");
+    expect(result.content).toContain("second argument");
+  });
+
+  test("preserves $N inside shell injection blocks", () => {
+    const cmd = makeCommand({ body: "Run: !`awk '{print $1}'`\n\nAnalyze $1" });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    // $1 inside shell block preserved, $1 outside replaced
+    expect(result.content).toContain("!`awk '{print $1}'`");
+    expect(result.content).toContain("first argument");
+  });
+
+  test("auto-appends $ARGUMENTS before replacing when no arg references", () => {
+    const cmd = makeCommand({ body: "Just do something" });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    // Should have been auto-appended then replaced
+    expect(result.content).toContain("Interpret the user's message");
+  });
+
+  test("drops model, subtask, user-invocable from frontmatter", () => {
+    const cmd = makeCommand({ model: "opus", subtask: true, userInvocable: false });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    expect(result.content).not.toContain("model:");
+    expect(result.content).not.toContain("subtask:");
+    expect(result.content).not.toContain("user-invocable:");
+  });
+
+  test("applies codex provider overrides", () => {
+    const cmd = makeCommand({
+      providers: { codex: { description: "Codex-specific" } },
+    });
+    const result = compileForCodex(cmd, "/home/test/.agents/skills");
+    expect(result.content).toContain("description: Codex-specific");
   });
 });
 

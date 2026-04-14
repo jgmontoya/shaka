@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { Result } from "../../../src/domain/result";
 import { ok } from "../../../src/domain/result";
 import { resolveFromModule } from "../../../src/platform/paths";
+import { getProviderNames } from "../../../src/providers/registry";
 import { InitService } from "../../../src/services/init-service";
 
 describe("InitService", () => {
@@ -18,7 +19,7 @@ describe("InitService", () => {
     return new InitService({
       shakaHome: testHome,
       defaultsPath,
-      detectProviders: async () => ({ claude: true, opencode: false }),
+      detectProviders: async () => ({ claude: true, opencode: false, codex: false }),
       runBunLink: mockBunLink,
       ...overrides,
     });
@@ -252,7 +253,7 @@ describe("InitService", () => {
       }
 
       const content = await Bun.file(join(testHome, "config.json")).json();
-      expect(content.version).toBe("0.9.0");
+      expect(content.version).toBe("0.10.0");
     });
 
     test("creates config.json with personalized names", async () => {
@@ -344,7 +345,7 @@ describe("InitService", () => {
   describe("init", () => {
     test("returns error when no providers detected", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: false }),
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
       });
 
       const result = await service.init();
@@ -364,7 +365,7 @@ describe("InitService", () => {
       if (result.ok) {
         expect(result.value.providers.claude.detected).toBe(true);
         expect(result.value.providers.claude.installed).toBe(true);
-        expect(result.value.currentVersion).toBe("0.9.0");
+        expect(result.value.currentVersion).toBe("0.10.0");
         expect(result.value.directories.length).toBeGreaterThan(0);
         expect(result.value.files.length).toBeGreaterThan(0);
       }
@@ -388,13 +389,13 @@ describe("InitService", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.currentVersion).toBe("0.9.0");
+        expect(result.value.currentVersion).toBe("0.10.0");
       }
     });
 
     test("respects providers array — installs only selected", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: true, opencode: true }),
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
       });
 
       const result = await service.init({ providers: ["claude"] });
@@ -408,7 +409,7 @@ describe("InitService", () => {
 
     test("skips unavailable providers in selection", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: true }),
+        detectProviders: async () => ({ claude: false, opencode: true, codex: false }),
       });
 
       const result = await service.init({ providers: ["claude", "opencode"] });
@@ -424,7 +425,7 @@ describe("InitService", () => {
 
     test("returns error if all selected providers are unavailable", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: false }),
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
       });
 
       const result = await service.init({ providers: ["claude"] });
@@ -437,7 +438,7 @@ describe("InitService", () => {
 
     test("installs all detected when no providers specified", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: true, opencode: true }),
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
       });
 
       const result = await service.init();
@@ -446,6 +447,24 @@ describe("InitService", () => {
       if (result.ok) {
         expect(result.value.providers.claude.installed).toBe(true);
         expect(result.value.providers.opencode.installed).toBe(true);
+      }
+    });
+
+    test("providers result has an entry for every registered provider", async () => {
+      const service = createService({
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
+      });
+
+      const result = await service.init();
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const names = getProviderNames();
+        for (const name of names) {
+          expect(result.value.providers[name]).toBeDefined();
+          expect(typeof result.value.providers[name].detected).toBe("boolean");
+          expect(typeof result.value.providers[name].installed).toBe("boolean");
+        }
       }
     });
 

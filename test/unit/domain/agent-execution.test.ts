@@ -32,4 +32,20 @@ describe("agent-execution", () => {
       clearDetectionCache();
     }
   });
+
+  test("error message mentions codex when no providers available", async () => {
+    const originalWhich = Bun.which;
+    (Bun as Record<string, unknown>).which = () => null;
+    clearDetectionCache();
+
+    try {
+      const { runAgentStep } = await import("../../../src/domain/agent-execution");
+      const result = await runAgentStep({ prompt: "test" });
+
+      expect(result.stderr).toContain("codex");
+    } finally {
+      (Bun as Record<string, unknown>).which = originalWhich;
+      clearDetectionCache();
+    }
+  });
 });

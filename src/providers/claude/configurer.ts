@@ -67,11 +67,24 @@ interface ClaudeSettings {
  * Check if a hook entry was installed by Shaka.
  * Identifies Shaka hooks by their command path containing the shaka hooks directory.
  */
+function isShakaHookCommand(command: string): boolean {
+  const cmd = command.replace(/\\/g, "/");
+  return cmd.includes("/system/hooks/") || cmd.includes("/customizations/hooks/");
+}
+
+/** Append --provider <name> to all Shaka hook commands in event entries. */
+function appendProviderArg(eventHooks: ClaudeHookEntry[], provider: string): void {
+  for (const entry of eventHooks) {
+    for (const hook of entry.hooks) {
+      if (isShakaHookCommand(hook.command)) {
+        hook.command += ` --provider ${provider}`;
+      }
+    }
+  }
+}
+
 function isShakaHookEntry(entry: ClaudeHookEntry): boolean {
-  return entry.hooks.some((h) => {
-    const cmd = h.command.replace(/\\/g, "/");
-    return cmd.includes("/system/hooks/") || cmd.includes("/customizations/hooks/");
-  });
+  return entry.hooks.some((h) => isShakaHookCommand(h.command));
 }
 
 /**
@@ -151,6 +164,8 @@ function groupHooksByEvent(hooks: DiscoveredHook[]): Map<HookEvent, DiscoveredHo
 
 export class ClaudeProviderConfigurer implements ProviderConfigurer {
   readonly name = "claude" as const;
+  readonly label = "Claude Code";
+  readonly skillsDir: string;
   private readonly claudeHome: string;
   private readonly runCommand: (args: string[]) => Promise<{ exitCode: number; stderr: string }>;
 
@@ -159,6 +174,7 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
     runCommand?: (args: string[]) => Promise<{ exitCode: number; stderr: string }>;
   }) {
     this.claudeHome = options?.claudeHome ?? join(homedir(), ".claude");
+    this.skillsDir = join(this.claudeHome, "skills");
     this.runCommand = options?.runCommand ?? defaultRunCommand;
   }
 
@@ -330,6 +346,11 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
 
       registerHooksWithMatchers(eventHooks, hooksWithMatchers);
       registerHooksWithoutMatchers(eventHooks, hooksWithoutMatchers);
+
+      // session.end hooks get --provider claude so the worker uses the right transcript parser
+      if (shakaEvent === "session.end") {
+        appendProviderArg(eventHooks, "claude");
+      }
     }
   }
 

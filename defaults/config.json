@@ -1,5 +1,5 @@
 {
-  "version": "0.9.0",
+  "version": "0.10.0",
   "reasoning": {
     "enabled": true
   },
@@ -12,6 +12,10 @@
       "summarization_model": "haiku"
     },
     "opencode": {
+      "enabled": false,
+      "summarization_model": "auto"
+    },
+    "codex": {
       "enabled": false,
       "summarization_model": "auto"
     }

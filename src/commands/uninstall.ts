@@ -8,6 +8,7 @@
 import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { resolveShakaHome } from "../domain/config";
+import { createProvider, getProviderNames } from "../providers/registry";
 import type { UninstallResult } from "../services/uninstall-service";
 import { UninstallService } from "../services/uninstall-service";
 
@@ -42,14 +43,11 @@ async function promptDeleteUserData(
 
 function logProviderStatus(providers: UninstallResult["providers"]): void {
   console.log("Provider hooks:");
-  for (const [label, name] of [
-    ["Claude Code", "claude"],
-    ["opencode", "opencode"],
-  ] as const) {
+  for (const name of getProviderNames()) {
+    const provider = createProvider(name);
     const p = providers[name];
     const status = p.detected ? (p.uninstalled ? "✓ removed" : "✗ failed") : "not installed";
-    const pad = name === "claude" ? "" : "   ";
-    console.log(`  ${label}:${pad} ${status}`);
+    console.log(`  ${provider.label}: ${status}`);
   }
 }
 

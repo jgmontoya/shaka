@@ -20,7 +20,7 @@ export interface SummaryIndex {
   readonly date: string;
   readonly cwd: string;
   readonly tags: string[];
-  readonly provider: "claude" | "opencode";
+  readonly provider: string;
   readonly sessionId: string;
 }
 
