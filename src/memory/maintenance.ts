@@ -12,6 +12,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { inference } from "../inference";
+import type { ProviderName } from "../providers/types";
 import { runFullConsolidation } from "./consolidation";
 import {
   type LearningEntry,
@@ -157,8 +158,9 @@ async function failOpen<T>(label: string, fn: () => Promise<T>, fallback: T): Pr
 async function consolidate(
   entries: LearningEntry[],
   memoryDir: string,
+  provider?: ProviderName,
 ): Promise<{ entries: LearningEntry[]; condensed: number }> {
-  const result = await runFullConsolidation(entries);
+  const result = await runFullConsolidation(entries, provider);
 
   if (result.archived.length > 0) {
     await appendToArchive(memoryDir, result.archived);
@@ -205,13 +207,14 @@ async function findPruneTargets(
   entries: LearningEntry[],
   cwd: string,
   now: Date,
+  provider?: ProviderName,
 ): Promise<Set<number>> {
   const eligible = findPruneEligible(entries, cwd, now);
 
   const prompt = buildRankingPrompt(eligible);
   if (!prompt) return new Set();
 
-  const result = await inference({ userPrompt: prompt, timeout: 30000 });
+  const result = await inference({ userPrompt: prompt, provider, timeout: 30000 });
   if (!result.success || !result.text) {
     console.error("Auto-prune ranking inference failed. Skipping.");
     return new Set();
@@ -246,8 +249,9 @@ export async function runMaintenance(
   memoryDir: string,
   cwd: string,
   newLearningsExtracted: number,
-  now?: Date,
+  opts?: { now?: Date; provider?: ProviderName },
 ): Promise<MaintenanceResult> {
+  const { now, provider } = opts ?? {};
   const currentTime = now ?? new Date();
   let entries = await loadLearnings(memoryDir);
   const state = await readMaintenanceState(memoryDir);
@@ -263,10 +267,14 @@ export async function runMaintenance(
   await Bun.write(join(memoryDir, "learnings.backup.md"), renderLearnings(entries));
 
   // Step 1: Consolidation (dedup, contradictions, condensation)
-  const condensation = await failOpen("consolidation", () => consolidate(entries, memoryDir), {
-    entries,
-    condensed: 0,
-  });
+  const condensation = await failOpen(
+    "consolidation",
+    () => consolidate(entries, memoryDir, provider),
+    {
+      entries,
+      condensed: 0,
+    },
+  );
   entries = condensation.entries;
 
   // Step 2: Auto-promote
@@ -281,7 +289,7 @@ export async function runMaintenance(
   if (decision.action === "consolidate-and-prune") {
     const pruneTargets = await failOpen(
       "auto-prune",
-      () => findPruneTargets(entries, cwd, currentTime),
+      () => findPruneTargets(entries, cwd, currentTime, provider),
       new Set<number>(),
     );
     if (pruneTargets.size > 0) {

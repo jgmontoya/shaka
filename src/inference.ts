@@ -13,12 +13,24 @@ import { spawn } from "node:child_process";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectInstalledProviders } from "./services/provider-detection";
+import { getSummarizationModel } from "./domain/config";
+import type { ProviderName } from "./providers/types";
+import { type DetectedProviders, detectInstalledProviders } from "./services/provider-detection";
 
 export interface InferenceOptions {
   systemPrompt?: string;
   userPrompt: string;
   model?: string;
+  /**
+   * Optional provider hint for session-context callers (session-end worker,
+   * rollups, maintenance, knowledge compilation). When set and the provider
+   * is installed, it's dispatched FIRST — other installed providers remain
+   * as fallbacks. This matters because the provider that originated a
+   * session is the authoritative dispatch target for its own summarization
+   * work, regardless of what's first in the installed-priority list.
+   * Omit for generic, session-free callers (compile, review, format-reminder).
+   */
+  provider?: ProviderName;
   timeout?: number;
   expectJson?: boolean;
 }
@@ -29,6 +41,51 @@ export interface InferenceResult {
   parsed?: unknown;
   error?: string;
   provider?: string;
+}
+
+export interface InferenceAttempt {
+  readonly provider: ProviderName;
+  readonly model: string | undefined;
+}
+
+/**
+ * Compute the ordered list of (provider, model) attempts for an inference call.
+ *
+ * Pure function — takes `detected` as an injected parameter so the resolution
+ * logic is trivially testable without mocking CLI probing. Model-resolution
+ * belongs here (not in callers like format-reminder) because this is the only
+ * layer that knows which backend inference() will actually dispatch to —
+ * the hook-host provider and the dispatch-winner can differ when multiple
+ * CLIs are installed.
+ *
+ * Semantics:
+ *   - Iterate providers in priority order: claude, opencode, codex.
+ *   - For each installed provider, emit one attempt.
+ *   - If the caller passes an explicit `options.model`, it wins for every
+ *     attempt — config is ignored entirely.
+ *   - Otherwise, each attempt's model comes from
+ *     getSummarizationModel(<provider>), which honors the per-provider
+ *     config.json `summarization_model` and maps "auto" to undefined.
+ */
+export async function resolveInferenceAttempts(
+  options: InferenceOptions,
+  detected: DetectedProviders,
+): Promise<InferenceAttempt[]> {
+  const defaultOrder: ProviderName[] = ["claude", "opencode", "codex"];
+  // If the caller hints a provider AND it's installed, it jumps to the head
+  // of the list; the default order fills the remaining fallback slots.
+  const hint = options.provider;
+  const ordered: ProviderName[] =
+    hint && detected[hint] ? [hint, ...defaultOrder.filter((p) => p !== hint)] : defaultOrder;
+
+  const attempts: InferenceAttempt[] = [];
+  for (const provider of ordered) {
+    if (!detected[provider]) continue;
+    const model =
+      options.model !== undefined ? options.model : await getSummarizationModel(provider);
+    attempts.push({ provider, model });
+  }
+  return attempts;
 }
 
 // ---------------------------------------------------------------------------
@@ -76,7 +133,25 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // opencode expects provider/model format (e.g., "anthropic/claude-haiku-4-5")
   // Skip bare aliases like "haiku" which are Claude CLI-specific
   if (options.model?.includes("/")) args.push("--model", options.model);
-  const result = await Bun.$`opencode ${args}`.quiet().nothrow();
+
+  // Mark this subprocess as a subagent so Shaka's hooks (format-reminder,
+  // session-start) short-circuit via isSubagent(). This is load-bearing:
+  // the opencode plugin wrapper (src/providers/opencode/configurer.ts)
+  // caches the user's prompt via chat.message and passes it as { prompt }
+  // to format-reminder inside experimental.chat.system.transform. Without
+  // this env guard, format-reminder in the child opencode would receive a
+  // valid prompt, call inference() for classification, spawn another
+  // opencode run, cascade — exactly the recursion the generated plugin
+  // enables. Session-end recursion is separately prevented by the same
+  // guard  — opencode's own plugin-teardown-on-session-disposal also stops it,
+  // but the env check is the belt; Exp 30 documented the suspenders.
+  //
+  // Bun.$.env() REPLACES env (does not merge), so spread process.env first
+  // to preserve PATH and other inherited vars.
+  const result = await Bun.$`opencode ${args}`
+    .env({ ...process.env, SHAKA_OPENCODE_SUBAGENT: "true" })
+    .quiet()
+    .nothrow();
 
   if (result.exitCode !== 0) {
     return {
@@ -227,23 +302,33 @@ function parseResponse(text: string, expectJson?: boolean, provider?: string): I
  * 3. Codex CLI — most expensive (gpt-5.4 default), tried last
  *
  * All handle their own authentication — no API keys needed.
+ *
+ * Model resolution: if the caller omits `options.model`, each attempt uses
+ * the per-provider `summarization_model` from config (via
+ * resolveInferenceAttempts). This keeps callers like format-reminder,
+ * compile, and review zero-config — they just call inference() and get
+ * the right model for whichever backend wins the dispatch race.
  */
-export async function inference(options: InferenceOptions): Promise<InferenceResult> {
-  const providers = await detectInstalledProviders();
+export async function inference(
+  options: InferenceOptions,
+  detected: DetectedProviders = detectInstalledProviders(),
+): Promise<InferenceResult> {
+  const attempts = await resolveInferenceAttempts(options, detected);
 
-  if (providers.claude) {
-    const result = await callClaudeCLI(options);
-    if (result.success) return result;
-  }
-
-  if (providers.opencode) {
-    const result = await callOpenCodeCLI(options);
-    if (result.success) return result;
-  }
-
-  // Codex last — gpt-5.4 default is expensive for summarization tasks
-  if (providers.codex) {
-    const result = await callCodexCLI(options);
+  for (const attempt of attempts) {
+    const resolvedOptions = { ...options, model: attempt.model };
+    let result: InferenceResult;
+    switch (attempt.provider) {
+      case "claude":
+        result = await callClaudeCLI(resolvedOptions);
+        break;
+      case "opencode":
+        result = await callOpenCodeCLI(resolvedOptions);
+        break;
+      case "codex":
+        result = await callCodexCLI(resolvedOptions);
+        break;
+    }
     if (result.success) return result;
   }
 
@@ -256,7 +341,8 @@ export async function inference(options: InferenceOptions): Promise<InferenceRes
 /**
  * Check if any inference CLI is available.
  */
-export async function hasInferenceProvider(): Promise<boolean> {
-  const providers = await detectInstalledProviders();
-  return providers.claude || providers.opencode || providers.codex;
+export async function hasInferenceProvider(
+  detected: DetectedProviders = detectInstalledProviders(),
+): Promise<boolean> {
+  return detected.claude || detected.opencode || detected.codex;
 }

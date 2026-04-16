@@ -368,7 +368,7 @@ describe("runMaintenance", () => {
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     expect(result.skipped).toBe(false);
     // Backup should exist
@@ -394,7 +394,7 @@ describe("runMaintenance", () => {
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     const state = await readMaintenanceState(maintenanceTestDir);
     expect(state).not.toBeNull();
@@ -420,7 +420,7 @@ describe("runMaintenance", () => {
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     const logContent = await Bun.file(join(maintenanceTestDir, "maintenance.log")).text();
     const logEntry = JSON.parse(logContent.trim());
@@ -454,7 +454,7 @@ describe("runMaintenance", () => {
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
 
     expect(result.promoted).toBe(1);
 
@@ -483,7 +483,7 @@ describe("runMaintenance", () => {
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
 
     expect(result.promoted).toBe(0);
 
@@ -520,7 +520,7 @@ RANK 2 [2] — one-time debugging step`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     expect(result.pruned).toBe(2);
 
@@ -559,7 +559,7 @@ RANK 5 [5] — reason 5`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     expect(result.pruned).toBe(3);
   });
@@ -587,7 +587,7 @@ RANK 5 [5] — reason 5`;
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     expect(result.skipped).toBe(false);
     const state = await readMaintenanceState(maintenanceTestDir);
@@ -620,7 +620,7 @@ RANK 5 [5] — reason 5`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     // Pruning failed, but pipeline completed
     expect(result.skipped).toBe(false);
@@ -657,7 +657,7 @@ RANK 5 [5] — reason 5`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     // All entries have 2 exposures, none should be prunable regardless of ranking
     expect(result.pruned).toBe(0);
@@ -686,7 +686,7 @@ RANK 5 [5] — reason 5`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
 
     // All entries are < 7 days old, none should be prunable
     expect(result.pruned).toBe(0);
@@ -725,11 +725,56 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, now);
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
 
     expect(result.skipped).toBe(false);
     expect(result.before).toBe(2);
     expect(result.condensed).toBe(1);
     expect(typeof result.after).toBe("number");
+  });
+
+  test("forwards provider hint to every inference() call", async () => {
+    // Regression guard: runMaintenance and the consolidation helpers it
+    // delegates to must forward the session's originating provider hint
+    // so each inference() call can resolve the right per-provider model.
+    // Previously they threaded `model?: string`, which coupled callers to
+    // a specific CLI's model-string format.
+    const seenProviders: Array<string | undefined> = [];
+    mock.module("../../../src/inference", () => ({
+      inference: async (options: { provider?: string }) => {
+        seenProviders.push(options.provider);
+        return { success: true, text: "NO CLUSTERS" };
+      },
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+
+    // Enough entries with 2+ exposures to trigger condensation AND enough
+    // total entries (>=20) to trigger dedup + contradictions passes. That way
+    // the test exercises all three consolidation inference calls.
+    const entries = Array.from({ length: 25 }, (_, i) =>
+      makeEntry({
+        title: `Entry ${i}`,
+        body: "Body.",
+        cwds: ["/projects/myapp"],
+        exposures: [
+          { date: "2026-03-01", sessionHash: `hash${i}a00` },
+          { date: "2026-03-05", sessionHash: `hash${i}b00` },
+        ],
+      }),
+    );
+    await writeLearnings(maintenanceTestDir, entries);
+
+    const now = new Date("2026-03-30T12:00:00Z");
+    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, {
+      now,
+      provider: "opencode",
+    });
+
+    expect(seenProviders.length).toBeGreaterThan(0);
+    for (const p of seenProviders) {
+      expect(p).toBe("opencode");
+    }
   });
 });

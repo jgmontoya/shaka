@@ -227,6 +227,8 @@ async function classifyPrompt(prompt: string): Promise<ClassificationResult> {
     })),
   });
 
+  // inference() resolves the per-provider summarization_model internally
+  // based on which CLI actually wins dispatch — no manual resolution needed.
   const result = await inference({
     systemPrompt,
     userPrompt: `Classify this prompt:\n${prompt}`,

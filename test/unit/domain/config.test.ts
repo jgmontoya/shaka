@@ -442,16 +442,12 @@ describe("Config", () => {
       expect(isSubagent({ CLAUDE_PROJECT_DIR: "/home/user/project" })).toBe(false);
     });
 
-    test("returns true when OPENCODE_SUBAGENT is true", () => {
-      expect(isSubagent({ OPENCODE_SUBAGENT: "true" })).toBe(true);
+    test("returns true when SHAKA_OPENCODE_SUBAGENT is true", () => {
+      expect(isSubagent({ SHAKA_OPENCODE_SUBAGENT: "true" })).toBe(true);
     });
 
-    test("returns false when OPENCODE_SUBAGENT is not true", () => {
-      expect(isSubagent({ OPENCODE_SUBAGENT: "false" })).toBe(false);
-    });
-
-    test("returns true when OPENCODE_AGENT_ID is set", () => {
-      expect(isSubagent({ OPENCODE_AGENT_ID: "agent-123" })).toBe(true);
+    test("returns false when SHAKA_OPENCODE_SUBAGENT is not true", () => {
+      expect(isSubagent({ SHAKA_OPENCODE_SUBAGENT: "false" })).toBe(false);
     });
 
     test("detects Claude Agents path with Windows backslashes", () => {
@@ -460,12 +456,20 @@ describe("Config", () => {
       );
     });
 
-    test("returns true when CODEX_SUBAGENT is true", () => {
-      expect(isSubagent({ CODEX_SUBAGENT: "true" })).toBe(true);
+    test("returns true when SHAKA_CODEX_SUBAGENT is true", () => {
+      expect(isSubagent({ SHAKA_CODEX_SUBAGENT: "true" })).toBe(true);
     });
 
-    test("returns false when CODEX_SUBAGENT is not true", () => {
-      expect(isSubagent({ CODEX_SUBAGENT: "false" })).toBe(false);
+    test("returns false when SHAKA_CODEX_SUBAGENT is not true", () => {
+      expect(isSubagent({ SHAKA_CODEX_SUBAGENT: "false" })).toBe(false);
+    });
+
+    test("returns true for legacy CODEX_SUBAGENT (migration shim)", () => {
+      // Pre-v0.10.1 codex wrappers on disk still export CODEX_SUBAGENT.
+      // Users who upgrade the package without running `shaka reload` must
+      // continue to have subagent detection work during the upgrade window.
+      // Remove this test when the legacy shim is removed in v0.11.0.
+      expect(isSubagent({ CODEX_SUBAGENT: "true" })).toBe(true);
     });
   });
 

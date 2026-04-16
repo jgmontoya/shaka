@@ -245,7 +245,7 @@ export function createInitCommand(): Command {
 
       console.log("Initializing Shaka...\n");
 
-      const detected = await detectInstalledProviders();
+      const detected = detectInstalledProviders();
       const flagProviders = resolveProvidersFromFlags(options, detected);
       const selectedProviders = flagProviders ?? (await promptProviderSelection(detected));
 

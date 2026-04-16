@@ -117,10 +117,10 @@ else
 fi
 
 # Wrapper has subagent detection
-if grep -q "CODEX_SUBAGENT" "$WRAPPER"; then
+if grep -q "SHAKA_CODEX_SUBAGENT" "$WRAPPER"; then
   pass "Wrapper includes subagent detection"
 else
-  fail "Wrapper missing CODEX_SUBAGENT detection"
+  fail "Wrapper missing SHAKA_CODEX_SUBAGENT detection"
   exit 1
 fi
 

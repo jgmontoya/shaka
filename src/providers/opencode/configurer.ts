@@ -339,6 +339,22 @@ function shouldRunForTool(hook: ToolHookConfig, toolName: string): boolean {
 }
 
 /**
+ * Extract the user's prompt text from an opencode message part array.
+ * Filters to text parts only, skipping synthetic parts that opencode
+ * injects itself (not user-written). Joins with newlines if there are
+ * multiple text parts in a single message.
+ */
+function extractPromptText(
+  parts: Array<{ type: string; text?: string; synthetic?: boolean }>,
+): string {
+  return parts
+    .filter((p) => p.type === "text" && !p.synthetic)
+    .map((p) => p.text ?? "")
+    .join("\\n")
+    .trim();
+}
+
+/**
  * Shaka plugin entry point.
  * opencode calls this function once at load time;
  * it must return a Hooks object.
@@ -348,6 +364,17 @@ export const ShakaPlugin = async (ctx: { directory: string; [key: string]: unkno
   let sessionContext: string | null = null;
   let sessionId = \`opencode-\${Date.now()}\`;
 ${sessionEndHooks.length > 0 ? "  let idleTimer: Timer | null = null;" : ""}
+${
+  userPromptHooks.length > 0
+    ? `
+  // Cache of the most recent user prompt text, keyed by sessionID. Populated
+  // by the chat.message hook (which opencode fires in prompt.ts when a new
+  // user message is received — BEFORE experimental.chat.system.transform
+  // fires in llm.ts). Consumed by the transform handler below to run
+  // UserPromptSubmit hooks with { prompt } stdin in Claude Code's shape.
+  const latestUserPromptBySession = new Map<string, string>();`
+    : ""
+}
 
 ${
   sessionStartHooks.length > 0
@@ -375,6 +402,22 @@ ${
 
   return {
 ${
+  userPromptHooks.length > 0
+    ? `
+    // Cache the user's prompt text when a new message arrives. This fires
+    // in opencode's prompt.ts pipeline BEFORE experimental.chat.system.transform,
+    // so the cached text is available when the transform hook below wants to
+    // run UserPromptSubmit hooks with a Claude Code-shaped { prompt } stdin.
+    "chat.message": async (
+      input: { sessionID: string; [key: string]: unknown },
+      output: { parts: Array<{ type: string; text?: string; synthetic?: boolean }> }
+    ) => {
+      const text = extractPromptText(output.parts);
+      if (text) latestUserPromptBySession.set(input.sessionID, text);
+    },
+`
+    : ""
+}${
   userPromptHooks.length > 0 || sessionStartHooks.length > 0
     ? `
     // Context injection
@@ -390,14 +433,30 @@ ${
       ${
         userPromptHooks.length > 0
           ? `
-      // Run UserPromptSubmit hooks
-      const hooks = ${JSON.stringify(userPromptHooks.map((h) => h.path))};
-      for (const hookPath of hooks) {
-        const { output: hookOutput, rawOutput } = await runHookRaw(hookPath, input);
-        if (hookOutput?.hookSpecificOutput?.additionalContext) {
-          output.system.push(hookOutput.hookSpecificOutput.additionalContext);
-        } else if (rawOutput) {
-          output.system.push(rawOutput);
+      // Run UserPromptSubmit hooks with { prompt } stdin (Claude Code shape).
+      // Source the prompt from the cache populated by the chat.message hook —
+      // opencode's transform input doesn't expose the user's message text.
+      //
+      // Delete-on-consume: we drop the cache entry after running hooks so
+      // (a) long-lived processes (TUI/desktop) don't accumulate stale prompts
+      // across sessions, and (b) tool-call continuations that re-fire the
+      // transform in the same turn don't re-run classification — format-reminder
+      // should classify the user's intent once per turn, not once per LLM
+      // round trip.
+      const cachedPrompt = input.sessionID
+        ? latestUserPromptBySession.get(input.sessionID)
+        : undefined;
+      if (cachedPrompt && input.sessionID) {
+        latestUserPromptBySession.delete(input.sessionID);
+        const hooks = ${JSON.stringify(userPromptHooks.map((h) => h.path))};
+        const hookInput = { prompt: cachedPrompt };
+        for (const hookPath of hooks) {
+          const { output: hookOutput, rawOutput } = await runHookRaw(hookPath, hookInput);
+          if (hookOutput?.hookSpecificOutput?.additionalContext) {
+            output.system.push(hookOutput.hookSpecificOutput.additionalContext);
+          } else if (rawOutput) {
+            output.system.push(rawOutput);
+          }
         }
       }
       `

@@ -116,7 +116,7 @@ describe("CodexProviderConfigurer", () => {
       const content = await wrapperFile.text();
       // Wrapper should read stdin, detect subagent, and spawn child
       expect(content).toContain("Bun.stdin.text()");
-      expect(content).toContain("CODEX_SUBAGENT");
+      expect(content).toContain("SHAKA_CODEX_SUBAGENT");
       expect(content).toContain("transcript_path");
       expect(content).toContain("Bun.spawn");
     });

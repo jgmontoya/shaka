@@ -8,6 +8,7 @@
  */
 
 import { inference } from "../inference";
+import type { ProviderName } from "../providers/types";
 import type { Exposure, LearningEntry } from "./learnings";
 
 // --- Types ---
@@ -671,9 +672,12 @@ export function applyCondensation(
 const CONSOLIDATION_THRESHOLD = 20;
 
 /** Pass 1: Identify and merge duplicate entries via LLM. */
-export async function deduplicateEntries(entries: LearningEntry[]): Promise<LearningEntry[]> {
+export async function deduplicateEntries(
+  entries: LearningEntry[],
+  provider?: ProviderName,
+): Promise<LearningEntry[]> {
   const prompt = buildDuplicatePrompt(entries);
-  const result = await inference({ userPrompt: prompt, timeout: 30000 });
+  const result = await inference({ userPrompt: prompt, provider, timeout: 30000 });
 
   if (!result.success || !result.text) return entries;
 
@@ -684,9 +688,10 @@ export async function deduplicateEntries(entries: LearningEntry[]): Promise<Lear
 /** Pass 2: Identify and resolve contradicting entries via LLM. */
 export async function resolveEntryContradictions(
   entries: LearningEntry[],
+  provider?: ProviderName,
 ): Promise<LearningEntry[]> {
   const prompt = buildContradictionPrompt(entries);
-  const result = await inference({ userPrompt: prompt, timeout: 30000 });
+  const result = await inference({ userPrompt: prompt, provider, timeout: 30000 });
 
   if (!result.success || !result.text) return entries;
 
@@ -698,7 +703,10 @@ export async function resolveEntryContradictions(
  * Pass 3: Condensation. Groups high-exposure entries by CWD, asks the LLM
  * to cluster related entries, then merges each cluster into a compound entry.
  */
-export async function condenseEntries(entries: LearningEntry[]): Promise<CondensationResult> {
+export async function condenseEntries(
+  entries: LearningEntry[],
+  provider?: ProviderName,
+): Promise<CondensationResult> {
   const candidates = findCondensationCandidates(entries);
   if (candidates.length === 0) {
     return { entries, archived: [], compoundsCreated: 0 };
@@ -708,7 +716,7 @@ export async function condenseEntries(entries: LearningEntry[]): Promise<Condens
 
   for (const candidate of candidates) {
     const prompt = buildCondensationPrompt(candidate.entries);
-    const result = await inference({ userPrompt: prompt, timeout: 30000 });
+    const result = await inference({ userPrompt: prompt, provider, timeout: 30000 });
 
     if (!result.success || !result.text) {
       console.error(`Condensation inference failed for ${candidate.cwd}. Skipping.`);
@@ -748,22 +756,25 @@ export interface ConsolidationResult {
  * Callers must persist `result.archived` via `appendToArchive` before
  * writing the updated entries — omitting this step loses source entries.
  */
-export async function runFullConsolidation(entries: LearningEntry[]): Promise<ConsolidationResult> {
+export async function runFullConsolidation(
+  entries: LearningEntry[],
+  provider?: ProviderName,
+): Promise<ConsolidationResult> {
   let current = entries;
   let deduplicatedCount = 0;
   let contradictionsResolved = 0;
 
   if (current.length >= CONSOLIDATION_THRESHOLD) {
     const beforeDedup = current.length;
-    current = await deduplicateEntries(current);
+    current = await deduplicateEntries(current, provider);
     deduplicatedCount = beforeDedup - current.length;
 
     const beforeContra = current.length;
-    current = await resolveEntryContradictions(current);
+    current = await resolveEntryContradictions(current, provider);
     contradictionsResolved = beforeContra - current.length;
   }
 
-  const condensation = await condenseEntries(current);
+  const condensation = await condenseEntries(current, provider);
 
   return {
     entries: condensation.entries,
