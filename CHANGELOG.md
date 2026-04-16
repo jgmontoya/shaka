@@ -4,6 +4,26 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.10.1] — 2026-04-16
+
+### Fixed
+
+- **Session-end worker cost (opencode CPU/memory report).** Seven of ten `inference()` call sites silently ignored `summarization_model` — maintenance, consolidation, auto-prune, format-reminder, compile, and review all used the provider CLI's default model. Users who set `summarization_model: haiku` still saw expensive-model burn on the maintenance path. Model resolution now lives inside `inference()` via `resolveInferenceAttempts()`, so all call sites honor the config
+- **Multi-CLI model routing.** Session-end previously resolved the model for its host provider and passed that string to whichever CLI `inference()` dispatched to first — a format mismatch when the dispatch target was a different provider. Callers now pass a `provider` hint; `inference()` dispatches to the originating provider first and resolves its model internally
+- **Format-reminder classification in opencode.** The opencode plugin wrapper now caches the user's prompt via a `chat.message` hook and passes it as `{ prompt }` to format-reminder inside the transform handler. Previously, format-reminder received only `{ sessionID, model }` and exited early on the missing prompt field, so classification never ran in opencode sessions
+
+### Changed
+
+- **Inference recursion guard.** `callOpenCodeCLI` injects `SHAKA_OPENCODE_SUBAGENT=true` into the child env so `isSubagent()` short-circuits hooks in spawned children. This is load-bearing now that format-reminder receives valid prompts in opencode sessions
+- **Env var rename.** `OPENCODE_SUBAGENT` → `SHAKA_OPENCODE_SUBAGENT`, `CODEX_SUBAGENT` → `SHAKA_CODEX_SUBAGENT`. Both are Shaka-owned sentinels; the prefix prevents collision with user shell env. Legacy `CODEX_SUBAGENT` compat shim kept for one release cycle (remove in v0.11.0)
+- **`runMaintenance` signature.** Trailing positional params replaced with `opts?: { now?, provider? }`
+- **Injectable provider detection.** `inference()`, `hasInferenceProvider()`, and `runAgentStep()` accept an optional `detected` parameter for testability, replacing `Bun.which` monkey-patching in tests
+
+### Removed
+
+- Dead `OPENCODE_AGENT_ID` check from `isSubagent()` — upstream opencode source audit confirmed it was never set
+- Dead `await` on synchronous `detectInstalledProviders()` call in `init.ts`
+
 ## [0.10.0] — 2026-04-13
 
 ### Added
