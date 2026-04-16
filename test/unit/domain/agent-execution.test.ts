@@ -1,51 +1,25 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { clearDetectionCache } from "../../../src/services/provider-detection";
+import { describe, expect, test } from "bun:test";
+import { runAgentStep } from "../../../src/domain/agent-execution";
+
+const NO_PROVIDERS = { claude: false, opencode: false, codex: false } as const;
 
 describe("agent-execution", () => {
-  beforeEach(() => {
-    clearDetectionCache();
+  test("module exports runAgentStep", () => {
+    expect(typeof runAgentStep).toBe("function");
   });
 
-  afterEach(() => {
-    clearDetectionCache();
+  test("returns error when no provider is available", async () => {
+    const result = await runAgentStep({ prompt: "test" }, NO_PROVIDERS);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("No agent provider available");
   });
 
-  test("module exports runAgentStep", async () => {
-    const mod = await import("../../../src/domain/agent-execution");
-    expect(typeof mod.runAgentStep).toBe("function");
-  });
+  test("error message names all three providers when none are available", async () => {
+    const result = await runAgentStep({ prompt: "test" }, NO_PROVIDERS);
 
-  test("returns error when no provider available", async () => {
-    // Temporarily override Bun.which to return null for all providers
-    const originalWhich = Bun.which;
-    (Bun as Record<string, unknown>).which = () => null;
-    clearDetectionCache();
-
-    try {
-      const { runAgentStep } = await import("../../../src/domain/agent-execution");
-      const result = await runAgentStep({ prompt: "test" });
-
-      expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain("No agent provider available");
-    } finally {
-      (Bun as Record<string, unknown>).which = originalWhich;
-      clearDetectionCache();
-    }
-  });
-
-  test("error message mentions codex when no providers available", async () => {
-    const originalWhich = Bun.which;
-    (Bun as Record<string, unknown>).which = () => null;
-    clearDetectionCache();
-
-    try {
-      const { runAgentStep } = await import("../../../src/domain/agent-execution");
-      const result = await runAgentStep({ prompt: "test" });
-
-      expect(result.stderr).toContain("codex");
-    } finally {
-      (Bun as Record<string, unknown>).which = originalWhich;
-      clearDetectionCache();
-    }
+    expect(result.stderr).toContain("claude");
+    expect(result.stderr).toContain("opencode");
+    expect(result.stderr).toContain("codex");
   });
 });

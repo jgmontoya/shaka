@@ -331,7 +331,7 @@ export class CodexProviderConfigurer implements ProviderConfigurer {
    * 1. Reads stdin (Codex JSON payload)
    * 2. Detects subagent sessions via missing transcript_path
    * 3. On UserPromptSubmit: deletes pending debounce marker (cancel signal)
-   * 4. Spawns the child hook with CODEX_SUBAGENT=true if subagent
+   * 4. Spawns the child hook with SHAKA_CODEX_SUBAGENT=true if subagent
    * 5. Branches on event type for output handling:
    *    - PreToolUse/PostToolUse: pass through stdout + exit code verbatim
    *    - SessionStart/UserPromptSubmit: wrap stdout in hookSpecificOutput JSON
@@ -383,9 +383,9 @@ try {
 // Subagent detection: if transcript_path is absent, this is a subagent session
 const isSubagent = !stdinPayload.transcript_path;
 
-// Build child env - set CODEX_SUBAGENT if detected
+// Build child env - set SHAKA_CODEX_SUBAGENT if detected
 const childEnv = isSubagent
-  ? { ...process.env, CODEX_SUBAGENT: "true" }
+  ? { ...process.env, SHAKA_CODEX_SUBAGENT: "true" }
   : { ...process.env };
 ${markerDeletionBlock}
 // Spawn child hook

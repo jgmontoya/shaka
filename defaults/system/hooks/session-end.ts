@@ -20,10 +20,10 @@ import { mkdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import {
   type NormalizedMessage,
+  type ProviderName,
   type SessionMetadata,
   buildSummarizationPrompt,
   compileKnowledge,
-  getSummarizationModel,
   hashSessionId,
   inference,
   isSubagent,
@@ -62,6 +62,11 @@ interface SessionEndInput {
   reason?: string;
   cwd?: string;
   provider?: string;
+}
+
+/** Type guard narrowing the on-wire `provider` string to ProviderName. */
+function isProviderName(value: unknown): value is ProviderName {
+  return value === "claude" || value === "opencode" || value === "codex";
 }
 
 /**
@@ -241,7 +246,7 @@ async function worker(tmpPath: string) {
 
   const sessionId = input.session_id ?? "unknown";
   const cwd = input.cwd ?? process.cwd();
-  const provider = input.provider ?? "opencode";
+  const provider: ProviderName = isProviderName(input.provider) ? input.provider : "opencode";
 
   console.error(`Worker started: ${provider} session ${sessionId}`);
 
@@ -284,13 +289,14 @@ async function worker(tmpPath: string) {
   // Build prompt (single call produces summary + learnings + knowledge)
   const prompt = buildSummarizationPrompt(truncated, metadata, existingTitles, existingTopicTitles);
 
-  // Call inference
-  const model = await getSummarizationModel(provider);
-  console.error(`  Calling inference${model ? ` (model: ${model})` : ""}...`);
+  // Call inference — pass the session's originating provider as a hint so
+  // the dispatch target and the model string (resolved inside inference())
+  // are always the same CLI, by construction.
+  console.error(`  Calling inference (provider: ${provider})...`);
   t = performance.now();
   const result = await inference({
     userPrompt: prompt,
-    model,
+    provider,
     timeout: 60000,
   });
   mark("Inference complete", t, result.success ? "ok" : "failed");
@@ -330,7 +336,7 @@ async function worker(tmpPath: string) {
   // Update rolling summaries (fail-open: session summary already written)
   t = performance.now();
   const summaryText = `### ${summary.title}\n\n${summary.body}`;
-  await updateRollups(memoryDir, summaryText, cwd, model).catch((err: unknown) => {
+  await updateRollups(memoryDir, summaryText, cwd, provider).catch((err: unknown) => {
     console.error(`Rollups update failed: ${err instanceof Error ? err.message : String(err)}`);
   });
   mark("Rollups update", t);
@@ -340,7 +346,9 @@ async function worker(tmpPath: string) {
   try {
     const config = await loadConfig();
     if (config?.memory?.maintenance?.enabled !== false) {
-      const maintenanceResult = await runMaintenance(memoryDir, cwd, newLearningsCount);
+      const maintenanceResult = await runMaintenance(memoryDir, cwd, newLearningsCount, {
+        provider,
+      });
       if (maintenanceResult.skipped) {
         mark("Maintenance skipped", t, maintenanceResult.reason ?? "");
       } else {
@@ -364,9 +372,8 @@ async function worker(tmpPath: string) {
   try {
     const config = await loadConfig();
     if (config?.memory?.knowledge_enabled !== false) {
-      const compilationModel = await getSummarizationModel(provider);
       const inferFn = async (prompt: string): Promise<string> => {
-        const res = await inference({ userPrompt: prompt, model: compilationModel, timeout: 60000 });
+        const res = await inference({ userPrompt: prompt, provider, timeout: 60000 });
         if (!res.success || !res.text) throw new Error(res.error ?? "inference failed");
         return res.text;
       };

@@ -105,6 +105,35 @@ You are a text-only inference assistant.
       expect(content).toContain("experimental.chat.system.transform");
     });
 
+    test("plugin wires user-prompt hooks through chat.message → transform with cached prompt", async () => {
+      // Add a prompt.submit hook so the generated plugin emits the
+      // chat.message handler + user-prompt dispatch path.
+      await Bun.write(
+        `${testShakaHome}/system/hooks/format-reminder.ts`,
+        `export const TRIGGER = ["prompt.submit"] as const;\nconsole.log("format");\n`,
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+
+      // chat.message handler caches the user prompt text per session.
+      expect(content).toContain('"chat.message"');
+      expect(content).toContain("latestUserPromptBySession");
+      expect(content).toContain("extractPromptText");
+
+      // Transform handler reads the cached prompt and passes it as
+      // { prompt: cachedPrompt } to runHookRaw (Claude Code shape).
+      expect(content).toMatch(/cachedPrompt[\s\S]*?runHookRaw\(hookPath,\s*hookInput\)/);
+      expect(content).toContain("{ prompt: cachedPrompt }");
+
+      // Delete-on-consume: the cache entry is removed after the hooks run,
+      // so tool-call continuations in the same turn don't re-classify and
+      // long-lived processes (TUI/desktop) don't accumulate stale prompts.
+      expect(content).toContain("latestUserPromptBySession.delete(input.sessionID)");
+    });
+
     test("discovers multiple hook types", async () => {
       await Bun.write(
         `${testShakaHome}/system/hooks/format-reminder.ts`,

@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { inference } from "../inference";
+import type { ProviderName } from "../providers/types";
 import type { SummaryIndex } from "./storage";
 import { isPathRelated } from "./utils";
 
@@ -426,8 +427,8 @@ export async function withRollupLock<T>(projDir: string, fn: () => Promise<T>): 
 
 // --- Orchestrator helpers ---
 
-async function callInference(prompt: string, model?: string): Promise<string | null> {
-  const result = await inference({ userPrompt: prompt, model, timeout: 60000 });
+async function callInference(prompt: string, provider?: ProviderName): Promise<string | null> {
+  const result = await inference({ userPrompt: prompt, provider, timeout: 60000 });
   if (!result.success || !result.text) {
     console.error(`Rollup inference failed: ${result.error ?? "no response"}`);
     return null;
@@ -458,11 +459,11 @@ async function createFreshDaily(
   cwd: string,
   date: string,
   sessionTexts: string[],
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   if (sessionTexts.length === 0) return;
   const prompt = buildDailyUpdatePrompt(null, sessionTexts);
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(projDir, "daily", makeRollup("daily", cwd, date, body, sessionTexts.length));
 }
@@ -472,10 +473,10 @@ async function mergeDailySession(
   projDir: string,
   existing: Rollup,
   sessionText: string,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const prompt = buildDailyUpdatePrompt(existing.body, [sessionText]);
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(
     projDir,
@@ -489,7 +490,7 @@ async function foldDailyIntoWeekly(
   projDir: string,
   cwd: string,
   daily: Rollup,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const weeklyPath = join(projDir, "weekly.md");
   const existingWeekly = await loadRollup(weeklyPath);
@@ -498,13 +499,17 @@ async function foldDailyIntoWeekly(
   const prompt = buildFoldPrompt("weekly", existingWeekly?.body ?? null, [
     { label: daily.date, body: daily.body },
   ]);
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(projDir, "weekly", makeRollup("weekly", cwd, isoWeek, body));
 }
 
 /** Create a new weekly from all archived dailies for the current ISO week. */
-async function createNewWeekly(projDir: string, cwd: string, model?: string): Promise<void> {
+async function createNewWeekly(
+  projDir: string,
+  cwd: string,
+  provider?: ProviderName,
+): Promise<void> {
   const isoWeek = currentIsoWeek();
   const dailies = await gatherWeekDailies(projDir, isoWeek);
   if (dailies.length === 0) return;
@@ -514,7 +519,7 @@ async function createNewWeekly(projDir: string, cwd: string, model?: string): Pr
     null,
     dailies.map((d) => ({ label: d.date, body: d.body })),
   );
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(projDir, "weekly", makeRollup("weekly", cwd, isoWeek, body));
 }
@@ -524,7 +529,7 @@ async function foldWeeklyIntoMonthly(
   projDir: string,
   cwd: string,
   weekly: Rollup,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const monthlyPath = join(projDir, "monthly.md");
   const existingMonthly = await loadRollup(monthlyPath);
@@ -533,13 +538,17 @@ async function foldWeeklyIntoMonthly(
   const prompt = buildFoldPrompt("monthly", existingMonthly?.body ?? null, [
     { label: weekly.date, body: weekly.body },
   ]);
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(projDir, "monthly", makeRollup("monthly", cwd, month, body));
 }
 
 /** Create a new monthly from all archived weeklies for the current month. */
-async function createNewMonthly(projDir: string, cwd: string, model?: string): Promise<void> {
+async function createNewMonthly(
+  projDir: string,
+  cwd: string,
+  provider?: ProviderName,
+): Promise<void> {
   const month = currentMonth();
   const weeklies = await gatherMonthWeeklies(projDir, month);
   if (weeklies.length === 0) return;
@@ -549,7 +558,7 @@ async function createNewMonthly(projDir: string, cwd: string, model?: string): P
     null,
     weeklies.map((w) => ({ label: w.date, body: w.body })),
   );
-  const body = await callInference(prompt, model);
+  const body = await callInference(prompt, provider);
   if (!body) return;
   await writeRollup(projDir, "monthly", makeRollup("monthly", cwd, month, body));
 }
@@ -574,18 +583,18 @@ async function handleMonthlyRollover(
   projDir: string,
   cwd: string,
   weekly: Rollup,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const monthlyPath = join(projDir, "monthly.md");
 
   // Fold the outgoing weekly into its monthly first
-  await foldWeeklyIntoMonthly(projDir, cwd, weekly, model);
+  await foldWeeklyIntoMonthly(projDir, cwd, weekly, provider);
 
   // Re-read monthly after fold (may have just been created)
   const updatedMonthly = await loadRollup(monthlyPath);
   if (updatedMonthly && needsRollover(updatedMonthly)) {
     await archiveRollup(projDir, "monthly", updatedMonthly.date);
-    await createNewMonthly(projDir, cwd, model);
+    await createNewMonthly(projDir, cwd, provider);
   }
 }
 
@@ -594,22 +603,22 @@ async function processRolloverChain(
   projDir: string,
   cwd: string,
   daily: Rollup,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const weeklyPath = join(projDir, "weekly.md");
   const weekly = await loadRollup(weeklyPath);
 
   // Always fold the outgoing daily into its weekly before any archiving
-  await foldDailyIntoWeekly(projDir, cwd, daily, model);
+  await foldDailyIntoWeekly(projDir, cwd, daily, provider);
 
   if (weekly && needsRollover(weekly)) {
     // Weekly now contains the final daily — fold into monthly, then archive
     const updatedWeekly = await loadRollup(weeklyPath);
     if (updatedWeekly) {
-      await handleMonthlyRollover(projDir, cwd, updatedWeekly, model);
+      await handleMonthlyRollover(projDir, cwd, updatedWeekly, provider);
     }
     await archiveRollup(projDir, "weekly", weekly.date);
-    await createNewWeekly(projDir, cwd, model);
+    await createNewWeekly(projDir, cwd, provider);
   }
 
   await archiveRollup(projDir, "daily", daily.date);
@@ -625,7 +634,7 @@ export async function updateRollups(
   memoryDir: string,
   summaryText: string,
   cwd: string,
-  model?: string,
+  provider?: ProviderName,
 ): Promise<void> {
   const rollupsDir = join(memoryDir, "rollups");
   const projDir = projectDir(rollupsDir, cwd);
@@ -637,18 +646,18 @@ export async function updateRollups(
 
     if (!daily) {
       const sessionTexts = await gatherSessionTexts(memoryDir, cwd, today);
-      await createFreshDaily(projDir, cwd, today, sessionTexts, model);
+      await createFreshDaily(projDir, cwd, today, sessionTexts, provider);
       return;
     }
 
     if (!needsRollover(daily)) {
-      await mergeDailySession(projDir, daily, summaryText, model);
+      await mergeDailySession(projDir, daily, summaryText, provider);
       return;
     }
 
-    await processRolloverChain(projDir, cwd, daily, model);
+    await processRolloverChain(projDir, cwd, daily, provider);
     const sessionTexts = await gatherSessionTexts(memoryDir, cwd, today);
-    await createFreshDaily(projDir, cwd, today, sessionTexts, model);
+    await createFreshDaily(projDir, cwd, today, sessionTexts, provider);
   });
 
   if (result === null) {

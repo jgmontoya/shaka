@@ -148,11 +148,18 @@ export function isSubagent(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.CLAUDE_AGENT_TYPE !== undefined) return true;
   if (env.CLAUDE_PROJECT_DIR?.replace(/\\/g, "/").includes("/.claude/Agents/")) return true;
 
-  // opencode: check for subagent indicators
-  if (env.OPENCODE_SUBAGENT === "true") return true;
-  if (env.OPENCODE_AGENT_ID !== undefined) return true;
+  // opencode: Shaka-owned recursion guard for inference-triggered child runs
+  // (see src/inference.ts:callOpenCodeCLI). This is the only opencode
+  // subagent sentinel Shaka currently relies on here.
+  if (env.SHAKA_OPENCODE_SUBAGENT === "true") return true;
 
-  // Codex: set by the hook wrapper when transcript_path is absent
+  // Codex: Shaka-set sentinel (see src/providers/codex/configurer.ts wrapper).
+  if (env.SHAKA_CODEX_SUBAGENT === "true") return true;
+  // Legacy compat shim (remove in v0.11.0): the Codex wrapper is a generated
+  // file on disk, not a package symlink. Users who upgrade Shaka without
+  // running `shaka reload` keep the pre-v0.10.1 wrapper that still exports
+  // CODEX_SUBAGENT. Honor it so subagent detection stays correct across
+  // the upgrade window.
   if (env.CODEX_SUBAGENT === "true") return true;
 
   return false;

@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { detectInstalledProviders } from "../services/provider-detection";
+import { type DetectedProviders, detectInstalledProviders } from "../services/provider-detection";
 
 export interface AgentExecutionOptions {
   readonly prompt: string;
@@ -23,9 +23,18 @@ export interface AgentExecutionResult {
   readonly stderr: string;
 }
 
-/** Run an agent step using the first available provider CLI. */
-export async function runAgentStep(options: AgentExecutionOptions): Promise<AgentExecutionResult> {
-  const providers = detectInstalledProviders();
+/**
+ * Run an agent step using the first available provider CLI.
+ *
+ * `detected` is injectable so tests can pass a fake provider set without
+ * monkey-patching `Bun.which`. Production callers omit it and get live
+ * detection via `detectInstalledProviders()`.
+ */
+export async function runAgentStep(
+  options: AgentExecutionOptions,
+  detected: DetectedProviders = detectInstalledProviders(),
+): Promise<AgentExecutionResult> {
+  const providers = detected;
 
   if (providers.claude) {
     return runClaude(options.prompt, options.timeout);
