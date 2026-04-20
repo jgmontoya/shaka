@@ -138,7 +138,11 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // guard lets the plugin short-circuit, --pure prevents it from loading at all.
   // Also saves ~300ms of plugin-init overhead per classifier call. Requires
   // opencode ≥ 2026-03-27 (PR #19347); errors out on older versions.
-  const args = ["run", "--pure", "--agent", "shaka/inference", prompt];
+  //
+  // --format json: emit newline-delimited JSON events on stdout. First event is
+  // step_start with the created session's ID (which we use to fire-and-forget a
+  // cleanup subprocess after this call returns — see parseOpencodeJsonStream).
+  const args = ["run", "--pure", "--format", "json", "--agent", "shaka/inference", prompt];
   // opencode expects provider/model format (e.g., "anthropic/claude-haiku-4-5")
   // Skip bare aliases like "haiku" which are Claude CLI-specific
   if (options.model?.includes("/")) args.push("--model", options.model);
@@ -162,6 +166,22 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
     .quiet()
     .nothrow();
 
+  const { sessionId, text } = parseOpencodeJsonStream(result.stdout.toString());
+
+  // Fire-and-forget cleanup: `opencode run` persists a session on every
+  // invocation (no upstream --ephemeral; issue #4489). We delegate deletion
+  // to opencode's own `session delete` subcommand rather than reaching into
+  // its sqlite DB — safer against schema drift. --pure skips plugin loading
+  // (recursion safety + speed). No await: the ~1.2s subprocess runs off
+  // the caller's critical path. If it fails the session becomes an orphan,
+  // same outcome as pre-fix.
+  if (sessionId) {
+    Bun.spawn(["opencode", "--pure", "session", "delete", sessionId], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+  }
+
   if (result.exitCode !== 0) {
     return {
       success: false,
@@ -170,7 +190,6 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
     };
   }
 
-  const text = result.stdout.toString().trim();
   return parseResponse(text, options.expectJson, "opencode-cli");
 }
 
@@ -279,6 +298,37 @@ function spawnCLI(
 // ---------------------------------------------------------------------------
 // Response Parsing
 // ---------------------------------------------------------------------------
+
+/**
+ * Parse the newline-delimited JSON event stream emitted by
+ * `opencode run --format json`. Returns the session ID from the first
+ * `step_start` event (for cleanup) and — in future cycles — the
+ * concatenated response text. Malformed lines are skipped silently;
+ * the parser is best-effort and never throws.
+ */
+export function parseOpencodeJsonStream(stdout: string): {
+  sessionId: string | null;
+  text: string;
+} {
+  const lines = stdout.split("\n");
+  let sessionId: string | null = null;
+  const textParts: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const evt = JSON.parse(line);
+      if (sessionId === null && evt.type === "step_start" && typeof evt.sessionID === "string") {
+        sessionId = evt.sessionID;
+      }
+      if (evt.type === "text" && typeof evt.part?.text === "string") {
+        textParts.push(evt.part.text);
+      }
+    } catch {
+      // skip malformed line
+    }
+  }
+  return { sessionId, text: textParts.join("") };
+}
 
 function parseResponse(text: string, expectJson?: boolean, provider?: string): InferenceResult {
   if (!expectJson) {

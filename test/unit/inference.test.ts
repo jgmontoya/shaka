@@ -26,6 +26,28 @@ describe("inference", () => {
     });
   });
 
+  describe("parseOpencodeJsonStream", () => {
+    test("extracts session ID from the first step_start event", async () => {
+      const { parseOpencodeJsonStream } = await import("../../src/inference");
+      const stream =
+        '{"type":"step_start","sessionID":"ses_abc123","part":{}}\n' +
+        '{"type":"text","part":{"text":"hello"}}\n';
+      const result = parseOpencodeJsonStream(stream);
+      expect(result.sessionId).toBe("ses_abc123");
+    });
+
+    test("concatenates text from all type:text events in stream order", async () => {
+      const { parseOpencodeJsonStream } = await import("../../src/inference");
+      const stream =
+        '{"type":"step_start","sessionID":"ses_abc"}\n' +
+        '{"type":"text","part":{"text":"hello "}}\n' +
+        '{"type":"text","part":{"text":"world"}}\n' +
+        '{"type":"step_finish"}\n';
+      const result = parseOpencodeJsonStream(stream);
+      expect(result.text).toBe("hello world");
+    });
+  });
+
   describe("inference()", () => {
     test("error message names all three providers when none are available", async () => {
       const { inference } = await import("../../src/inference");
