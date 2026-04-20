@@ -129,7 +129,13 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // The agent is installed by shaka via symlink: ~/.config/opencode/agents/shaka/ → source.
   // NOTE: Requires `shaka init` to have been run. This is intentional — inference is only
   // called from hooks, which already require shaka installation to function.
-  const args = ["run", "--agent", "shaka/inference", prompt];
+  //
+  // --pure: skip loading external plugins in the child process (including our own
+  // opencode plugin). Belt-and-suspenders with SHAKA_OPENCODE_SUBAGENT — the env
+  // guard lets the plugin short-circuit, --pure prevents it from loading at all.
+  // Also saves ~300ms of plugin-init overhead per classifier call. Requires
+  // opencode ≥ 2026-03-27 (PR #19347); errors out on older versions.
+  const args = ["run", "--pure", "--agent", "shaka/inference", prompt];
   // opencode expects provider/model format (e.g., "anthropic/claude-haiku-4-5")
   // Skip bare aliases like "haiku" which are Claude CLI-specific
   if (options.model?.includes("/")) args.push("--model", options.model);

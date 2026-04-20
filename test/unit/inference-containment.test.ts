@@ -22,3 +22,13 @@ test("every inference CLI call contains its host runtime", async () => {
   // Opencode: injects SHAKA_OPENCODE_SUBAGENT=true into child env (no CLI flag exists)
   expect(src).toMatch(/callOpenCodeCLI[\s\S]*?SHAKA_OPENCODE_SUBAGENT[\s\S]*?true/);
 });
+
+// Invariant: opencode inference calls pass --pure so the child process does
+// not load external plugins — including shaka's own opencode plugin. This is
+// belt-and-suspenders with SHAKA_OPENCODE_SUBAGENT: the env guard lets the
+// plugin short-circuit, --pure prevents it from loading at all. Also cuts
+// ~300ms of plugin-init overhead from every classifier call.
+test("callOpenCodeCLI disables external plugins via --pure", async () => {
+  const src = await Bun.file("src/inference.ts").text();
+  expect(src).toMatch(/callOpenCodeCLI[\s\S]*?"--pure"/);
+});
