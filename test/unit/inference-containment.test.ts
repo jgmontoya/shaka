@@ -32,3 +32,13 @@ test("callOpenCodeCLI disables external plugins via --pure", async () => {
   const src = await Bun.file("src/inference.ts").text();
   expect(src).toMatch(/callOpenCodeCLI[\s\S]*?"--pure"/);
 });
+
+// Invariant: claude inference calls pass --no-session-persistence so the
+// child process does not leave entries under ~/.claude/projects/<cwd>/.
+// Sibling to codex's --ephemeral: hook-triggered classifier calls must
+// not pollute the user's session picker. Flag only works with --print,
+// which callClaudeCLI already uses (-p).
+test("callClaudeCLI disables session persistence via --no-session-persistence", async () => {
+  const src = await Bun.file("src/inference.ts").text();
+  expect(src).toMatch(/callClaudeCLI[\s\S]*?"--no-session-persistence"/);
+});

@@ -98,10 +98,13 @@ export async function resolveInferenceAttempts(
  * Uses spawn (not Bun.$) because Bun.$ drops empty string arguments.
  * --setting-sources "" disables hooks (prevents recursion).
  * --tools "" disables tool use (pure text inference).
+ * --no-session-persistence keeps the hook-triggered classifier out of
+ *   ~/.claude/projects/<cwd>/ so it doesn't clutter the session picker.
+ *   Only works with --print (which we always pass via -p below).
  * Prompt is piped via stdin to avoid argument length limits.
  */
 async function callClaudeCLI(options: InferenceOptions): Promise<InferenceResult> {
-  const args = ["--setting-sources", "", "--tools", ""];
+  const args = ["--setting-sources", "", "--tools", "", "--no-session-persistence"];
   if (options.model) args.push("--model", options.model);
   if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
   args.push("-p");
