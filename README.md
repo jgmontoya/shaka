@@ -498,15 +498,43 @@ Persistent context that survives sessions. The memory system captures what happe
 
 **Planned:** Semantic retrieval via vector search (likely sqlite-vec).
 
+## Autoresearch
+
+Autoresearch is a stateful optimization loop: an agent proposes a change, a scripted benchmark measures it, winners get committed, losers get reverted, and an append-only log accumulates across context resets. The "research" is algorithmic — hypothesize, test, keep or discard — not web research. Inspired by [Shopify's Autoresearch post](https://shopify.engineering/autoresearch).
+
+```bash
+shaka autoresearch start "cut bun test from 45s to <20s"
+shaka autoresearch status
+shaka autoresearch resume            # continue the unique active experiment
+shaka autoresearch resume <slug>     # continue a specific one from anywhere
+```
+
+`start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (untracked; preserved across reverts).
+
+**State files** written into the worktree on setup:
+
+| File                     | Purpose                                                             |
+| ------------------------ | ------------------------------------------------------------------- |
+| `autoresearch.md`        | Run spec: objective, metric, direction, files in scope, constraints |
+| `autoresearch.sh`        | Benchmark script. Must print `METRIC name=<n> value=<v> unit=<u>`   |
+| `autoresearch.checks.sh` | Optional correctness gate. Exit 0 = acceptable candidate            |
+| `autoresearch.jsonl`     | Append-only per-iteration log. Untracked, resume-safe               |
+
+**Verdict classes:** `keep` (improved + checks pass), `discard` (didn't improve), `incorrect` (checks failed or commit hook rejected), `crash` (benchmark errored), `timeout` (agent timed out).
+
+**Flags:** `--provider <claude|opencode|codex>` forces a provider. `--max-iterations <N>` stops after N iterations. `--stop-after <N>` stops after N consecutive discards. Ctrl+C pauses between iterations; `resume` picks up where you left off.
+
+See [docs/autoresearch-walkthrough.md](docs/autoresearch-walkthrough.md) for an end-to-end example.
+
 ## Provider Support
 
 Shaka integrates with three AI coding assistants:
 
-| Provider    | Tools                          | Hooks                       | Context    |
-| ----------- | ------------------------------ | --------------------------- | ---------- |
-| Claude Code | MCP server (`shaka mcp serve`) | Subprocess in `~/.claude/`  | CLAUDE.md  |
-| opencode    | Native (`.opencode/tools/`)    | In-process plugin           | .opencode/ |
-| Codex       | MCP server (`shaka mcp serve`) | Subprocess in `~/.codex/`   | AGENTS.md  |
+| Provider    | Tools                          | Hooks                      | Context    |
+| ----------- | ------------------------------ | -------------------------- | ---------- |
+| Claude Code | MCP server (`shaka mcp serve`) | Subprocess in `~/.claude/` | CLAUDE.md  |
+| opencode    | Native (`.opencode/tools/`)    | In-process plugin          | .opencode/ |
+| Codex       | MCP server (`shaka mcp serve`) | Subprocess in `~/.codex/`  | AGENTS.md  |
 
 You write hooks once — provider-specific adapters handle the translation. For details on hook abstraction, event mapping, and tool integration, see [Providers](docs/providers.md).
 

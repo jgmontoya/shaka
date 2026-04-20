@@ -4,6 +4,15 @@ All notable changes to Shaka are documented in this file.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. An interactive wizard captures the benchmark command, metric direction and unit, files in scope, constraints, and an optional correctness gate, then generates `autoresearch.md` and `autoresearch.sh` as the run contract. Works with Claude Code, opencode, and Codex; pick one with `--provider` or let Shaka detect what's installed
+- **Resume and inspect** — `shaka autoresearch resume` continues the current experiment from any directory inside its worktree (pass a slug to disambiguate across multiple actives). `shaka autoresearch status` lists active, locked, and prunable experiments with their latest metric
+- **Live progress widget** — TTY sessions show a one-line in-place status (iteration, kept/discarded, current best). Ctrl+C pauses between iterations and exits with code 130 so shell wrappers can distinguish interruption from clean completion
+- **Stop conditions** — `--max-iterations` and `--stop-after` (consecutive discards) bound the loop; otherwise it runs until you interrupt
+
 ## [0.10.1] — 2026-04-16
 
 ### Fixed

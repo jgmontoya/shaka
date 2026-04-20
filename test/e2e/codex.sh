@@ -9,11 +9,8 @@ if [ ! -f /.dockerenv ]; then
   exit 1
 fi
 
-pass() { echo "  ✅ $1"; }
-fail() { echo "  ❌ $1"; }
-warn() { echo "  ⚠️  $1"; }
-skip() { echo "  ⏭️  $1"; }
-section() { echo; echo "── $1 ──"; }
+# shellcheck source=lib/common.sh
+source "$(dirname "$0")/lib/common.sh"
 
 echo "E2E: codex hooks"
 
@@ -528,6 +525,12 @@ else
   else
     warn "Knowledge directory not created (session-end worker may not have triggered compilation)"
   fi
+
+  # ── Autoresearch ──────────────────────────────────────────────────
+
+  # shellcheck source=lib/autoresearch.sh
+  source "$(dirname "$0")/lib/autoresearch.sh"
+  run_autoresearch_e2e codex
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────

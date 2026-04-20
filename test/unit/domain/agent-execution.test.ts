@@ -22,4 +22,18 @@ describe("agent-execution", () => {
     expect(result.stderr).toContain("opencode");
     expect(result.stderr).toContain("codex");
   });
+
+  test("no-provider result exposes provider=null and timedOut=false", async () => {
+    const result = await runAgentStep({ prompt: "test" }, NO_PROVIDERS);
+
+    expect(result.provider).toBeNull();
+    expect(result.timedOut).toBe(false);
+  });
+
+  test("options accept cwd without breaking no-provider path", async () => {
+    const result = await runAgentStep({ prompt: "test", cwd: "/tmp" }, NO_PROVIDERS);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.provider).toBeNull();
+  });
 });

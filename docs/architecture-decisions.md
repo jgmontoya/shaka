@@ -93,3 +93,27 @@ A file at `customizations/base-reasoning-framework.md` replaces `system/base-rea
 Since hooks run at `~/.config/shaka/` (not in the repo), any code they import must travel with them. Putting `inference.ts` in `src/` would break hooks because `src/` isn't deployed.
 
 **Consequences:** `inference.ts` lives at `defaults/system/tools/inference.ts`. Hooks import via relative path or the `shaka` package name (resolved by `bun link`).
+
+---
+
+## ADR-010: Autoresearch is a Command, not a Workflow
+
+**Status:** Accepted
+
+**Context:** The autoresearch pattern (hypothesize → benchmark → keep/discard, looped) is a long-running orchestration. Shaka already has workflows — yaml pipelines that chain steps with git commits between them. Should autoresearch be a workflow?
+
+**Decision:** Autoresearch is a top-level command (`shaka autoresearch start|status|resume`), not a workflow.
+
+**Rationale:** Workflows and autoresearch are different execution models:
+
+|               | Workflow               | Autoresearch                   |
+| ------------- | ---------------------- | ------------------------------ |
+| Shape         | Finite step pipeline   | Unbounded optimization loop    |
+| State         | Fresh context per step | Stateful across iterations     |
+| Exit          | Last step completes    | User stops (Ctrl+C / `resume`) |
+| Commits       | One per step           | One per keep verdict           |
+| Context needs | Independent steps      | Reads prior iterations         |
+
+Forcing autoresearch into workflow shape would mean inheriting branch-per-step commits, step-scoped variables, and one-shot semantics — all wrong. It reuses backend primitives (`runAgentStep`, git helpers from `src/services/git.ts`, `Bun.spawn` for the benchmark) without wearing the workflow-runner's clothes.
+
+**Consequences:** `src/commands/autoresearch.ts` + `src/services/autoresearch.ts` are their own files. `listWorktrees`, `commitAllExcept`, `isCleanExcept`, and `revertWorkingTree` live in `src/services/git.ts` so future loop-shaped features can reuse them. A separate skill (`defaults/system/skills/Autoresearch/SKILL.md`) carries the agent-facing protocol; the runner carries the mechanics.

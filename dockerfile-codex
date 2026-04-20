@@ -9,9 +9,11 @@ FROM debian:trixie-slim
 LABEL org.opencontainers.image.title="shaka-codex" \
       org.opencontainers.image.description="Shaka dev/test environment with Codex provider"
 
-# Install curl, jq (needed for installers + test assertions), then clean up
+# curl/unzip for the bun + codex installers; jq for test assertions;
+# git for the autoresearch e2e (worktrees, commits, reverts). Clean up apt
+# cache to keep the image small.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates unzip jq && \
+    apt-get install -y --no-install-recommends curl ca-certificates unzip jq git && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root user

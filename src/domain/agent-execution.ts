@@ -10,17 +10,27 @@
  */
 
 import { spawn } from "node:child_process";
-import { type DetectedProviders, detectInstalledProviders } from "../services/provider-detection";
+import {
+  type DetectedProviders,
+  type ProviderName,
+  detectInstalledProviders,
+} from "../services/provider-detection";
 
 export interface AgentExecutionOptions {
   readonly prompt: string;
   readonly timeout?: number;
+  /** Working directory forwarded to the provider CLI subprocess. */
+  readonly cwd?: string;
 }
 
 export interface AgentExecutionResult {
   readonly exitCode: number;
   readonly stdout: string;
   readonly stderr: string;
+  /** The provider that executed the step, or null when none were available. */
+  readonly provider: ProviderName | null;
+  /** True iff the internal timeout fired before the subprocess exited. */
+  readonly timedOut: boolean;
 }
 
 /**
@@ -34,64 +44,65 @@ export async function runAgentStep(
   options: AgentExecutionOptions,
   detected: DetectedProviders = detectInstalledProviders(),
 ): Promise<AgentExecutionResult> {
-  const providers = detected;
-
-  if (providers.claude) {
-    return runClaude(options.prompt, options.timeout);
-  }
-
-  if (providers.opencode) {
-    return runOpencode(options.prompt, options.timeout);
-  }
-
-  if (providers.codex) {
-    return runCodex(options.prompt, options.timeout);
-  }
+  if (detected.claude) return runClaude(options);
+  if (detected.opencode) return runOpencode(options);
+  if (detected.codex) return runCodex(options);
 
   return {
     exitCode: 1,
     stdout: "",
     stderr: "No agent provider available. Install claude, opencode, or codex CLI.",
+    provider: null,
+    timedOut: false,
   };
 }
 
-/** Run via Claude CLI — prompt piped via stdin after -p flag. */
-function runClaude(prompt: string, timeout?: number): Promise<AgentExecutionResult> {
-  return spawnWithStdin("claude", ["-p"], prompt, timeout);
+function runClaude(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
+  return spawnWithStdin("claude", "claude", ["-p"], opts.prompt, opts);
 }
 
-/** Run via opencode CLI — prompt passed as positional argument. */
-function runOpencode(prompt: string, timeout?: number): Promise<AgentExecutionResult> {
-  return spawnWithStdin("opencode", ["run", "--agent", "coder", prompt], "", timeout);
+function runOpencode(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
+  // `--` terminates option parsing so prompts starting with `-` (e.g. the
+  // Autoresearch SKILL.md's leading `---` frontmatter) aren't misread as
+  // flags. No `--agent` flag: let opencode pick its default.
+  return spawnWithStdin("opencode", "opencode", ["run", "--", opts.prompt], "", opts);
 }
 
 /** Run via Codex CLI — --full-auto enables autonomous tool use for workflow steps. */
-function runCodex(prompt: string, timeout?: number): Promise<AgentExecutionResult> {
-  return spawnWithStdin("codex", ["exec", "--full-auto", prompt], "", timeout);
+function runCodex(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
+  // `--` terminates option parsing; see runOpencode for rationale.
+  return spawnWithStdin("codex", "codex", ["exec", "--full-auto", "--", opts.prompt], "", opts);
 }
 
 /** Spawn a CLI process, optionally piping stdin. */
 function spawnWithStdin(
+  provider: ProviderName,
   command: string,
   args: string[],
   stdin: string,
-  timeout?: number,
+  opts: AgentExecutionOptions,
 ): Promise<AgentExecutionResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
 
-    const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], cwd: opts.cwd });
 
-    const timer = timeout
+    const timer = opts.timeout
       ? setTimeout(() => {
           if (!settled) {
             settled = true;
             proc.kill("SIGTERM");
-            resolve({ exitCode: 1, stdout, stderr: `Timeout after ${timeout}ms` });
+            resolve({
+              exitCode: 1,
+              stdout,
+              stderr: `Timeout after ${opts.timeout}ms`,
+              provider,
+              timedOut: true,
+            });
           }
-        }, timeout)
+        }, opts.timeout)
       : undefined;
 
     if (stdin) {
@@ -108,14 +119,20 @@ function spawnWithStdin(
       clearTimeout(timer);
       if (!settled) {
         settled = true;
-        resolve({ exitCode: code ?? 1, stdout, stderr });
+        resolve({ exitCode: code ?? 1, stdout, stderr, provider, timedOut: false });
       }
     });
     proc.on("error", (err) => {
       clearTimeout(timer);
       if (!settled) {
         settled = true;
-        resolve({ exitCode: 1, stdout: "", stderr: err.message });
+        resolve({
+          exitCode: 1,
+          stdout: "",
+          stderr: err.message,
+          provider,
+          timedOut: false,
+        });
       }
     });
   });
