@@ -155,12 +155,6 @@ export function isSubagent(env: NodeJS.ProcessEnv = process.env): boolean {
 
   // Codex: Shaka-set sentinel (see src/providers/codex/configurer.ts wrapper).
   if (env.SHAKA_CODEX_SUBAGENT === "true") return true;
-  // Legacy compat shim (remove in v0.11.0): the Codex wrapper is a generated
-  // file on disk, not a package symlink. Users who upgrade Shaka without
-  // running `shaka reload` keep the pre-v0.10.1 wrapper that still exports
-  // CODEX_SUBAGENT. Honor it so subagent detection stays correct across
-  // the upgrade window.
-  if (env.CODEX_SUBAGENT === "true") return true;
 
   return false;
 }

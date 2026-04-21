@@ -253,7 +253,7 @@ describe("InitService", () => {
       }
 
       const content = await Bun.file(join(testHome, "config.json")).json();
-      expect(content.version).toBe("0.10.1");
+      expect(content.version).toBe("0.11.0");
     });
 
     test("creates config.json with personalized names", async () => {
@@ -365,7 +365,7 @@ describe("InitService", () => {
       if (result.ok) {
         expect(result.value.providers.claude.detected).toBe(true);
         expect(result.value.providers.claude.installed).toBe(true);
-        expect(result.value.currentVersion).toBe("0.10.1");
+        expect(result.value.currentVersion).toBe("0.11.0");
         expect(result.value.directories.length).toBeGreaterThan(0);
         expect(result.value.files.length).toBeGreaterThan(0);
       }
@@ -389,7 +389,7 @@ describe("InitService", () => {
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.value.currentVersion).toBe("0.10.1");
+        expect(result.value.currentVersion).toBe("0.11.0");
       }
     });
 

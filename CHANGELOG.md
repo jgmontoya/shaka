@@ -6,12 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-04-20
+
 ### Added
 
 - **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. An interactive wizard captures the benchmark command, metric direction and unit, files in scope, constraints, and an optional correctness gate, then generates `autoresearch.md` and `autoresearch.sh` as the run contract. Works with Claude Code, opencode, and Codex; pick one with `--provider` or let Shaka detect what's installed
 - **Resume and inspect** — `shaka autoresearch resume` continues the current experiment from any directory inside its worktree (pass a slug to disambiguate across multiple actives). `shaka autoresearch status` lists active, locked, and prunable experiments with their latest metric
 - **Live progress widget** — TTY sessions show a one-line in-place status (iteration, kept/discarded, current best). Ctrl+C pauses between iterations and exits with code 130 so shell wrappers can distinguish interruption from clean completion
 - **Stop conditions** — `--max-iterations` and `--stop-after` (consecutive discards) bound the loop; otherwise it runs until you interrupt
+
+### Fixed
+
+- **Hook-triggered classifier calls no longer clutter provider session pickers.** Every `inference()` call from a Shaka hook (prompt classifier, format-reminder, etc.) was persisting a session in whichever CLI dispatched. Claude left entries under `~/.claude/projects/<cwd>/`; opencode left rows in its sqlite DB. Codex already suppressed persistence via `--ephemeral`. Claude now passes `--no-session-persistence`. Opencode sessions are auto-deleted after each classifier call via a fire-and-forget `opencode --pure session delete <sid>` subprocess that runs off the user's critical path, so no user-visible latency is added
+- **Opencode inference is hardened against plugin recursion.** The `opencode run` call now passes `--pure` to skip loading external plugins in the child subprocess. This prevents Shaka's own opencode plugin from being loaded inside a Shaka-spawned subprocess, reinforcing the existing `SHAKA_OPENCODE_SUBAGENT` env-guard. Side benefit: saves ~300ms of plugin-init per classifier call. Requires opencode ≥ 2026-03-27 (upstream PR [#19347](https://github.com/anomalyco/opencode/pull/19347))
+
+### Removed
+
+- **Legacy `CODEX_SUBAGENT` env-var compat shim.** v0.10.1 renamed the sentinel to `SHAKA_CODEX_SUBAGENT` and kept the old name readable for one release cycle so users who upgrade the package without running `shaka reload` kept working. That window has closed. Users on wrappers older than v0.10.1 should run `shaka reload` once after upgrading to v0.11.0 to regenerate the Codex wrapper
 
 ## [0.10.1] — 2026-04-16
 
