@@ -5,7 +5,7 @@
  * this module runs the AI CLI with tools enabled and hooks active —
  * the agent can read/write files, run commands, etc.
  *
- * Claude: prompt piped via stdin to avoid ARG_MAX limits.
+ * Claude/Codex: prompt piped via stdin to avoid ARG_MAX limits.
  * opencode: prompt passed as positional argument (stdin not supported for `run`).
  */
 
@@ -70,8 +70,8 @@ function runOpencode(opts: AgentExecutionOptions): Promise<AgentExecutionResult>
 
 /** Run via Codex CLI — --full-auto enables autonomous tool use for workflow steps. */
 function runCodex(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
-  // `--` terminates option parsing; see runOpencode for rationale.
-  return spawnWithStdin("codex", "codex", ["exec", "--full-auto", "--", opts.prompt], "", opts);
+  // `-` tells `codex exec` to read the prompt from stdin.
+  return spawnWithStdin("codex", "codex", ["exec", "--full-auto", "-"], opts.prompt, opts);
 }
 
 /** Spawn a CLI process, optionally piping stdin. */
@@ -86,29 +86,38 @@ function spawnWithStdin(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
 
     const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], cwd: opts.cwd });
 
     const timer = opts.timeout
       ? setTimeout(() => {
           if (!settled) {
-            settled = true;
+            timedOut = true;
             proc.kill("SIGTERM");
-            resolve({
-              exitCode: 1,
-              stdout,
-              stderr: `Timeout after ${opts.timeout}ms`,
-              provider,
-              timedOut: true,
-            });
+            stderr = stderr
+              ? `${stderr}\nTimeout after ${opts.timeout}ms`
+              : `Timeout after ${opts.timeout}ms`;
+            killTimer = setTimeout(() => {
+              if (!settled) proc.kill("SIGKILL");
+            }, 500);
+            killTimer.unref?.();
           }
         }, opts.timeout)
       : undefined;
 
-    if (stdin) {
-      proc.stdin.write(stdin);
+    proc.stdin.on("error", () => {
+      // The provider may exit before consuming stdin; process close/error still decides the result.
+    });
+    try {
+      if (stdin) {
+        proc.stdin.write(stdin);
+      }
+      proc.stdin.end();
+    } catch {
+      // Keep the runner alive if the pipe closes between spawn and write.
     }
-    proc.stdin.end();
     proc.stdout.on("data", (d) => {
       stdout += d;
     });
@@ -117,13 +126,15 @@ function spawnWithStdin(
     });
     proc.on("close", (code) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       if (!settled) {
         settled = true;
-        resolve({ exitCode: code ?? 1, stdout, stderr, provider, timedOut: false });
+        resolve({ exitCode: timedOut ? 1 : (code ?? 1), stdout, stderr, provider, timedOut });
       }
     });
     proc.on("error", (err) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       if (!settled) {
         settled = true;
         resolve({

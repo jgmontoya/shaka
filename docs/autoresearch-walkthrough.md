@@ -88,7 +88,7 @@ Create an optional correctness gate at `autoresearch.checks.sh`:
 bun run slow.ts | grep -q "Primes found: 5133"
 ```
 
-Make them executable (`chmod +x autoresearch.*.sh`) and resume:
+Make them executable (`chmod +x autoresearch.sh autoresearch.checks.sh`) and resume:
 
 ```bash
 $ shaka autoresearch resume
@@ -106,7 +106,7 @@ Each iteration, Shaka builds a prompt that contains:
 
 The agent edits `slow.ts` and emits something like:
 
-```
+```pseudocode
 HYPOTHESIS: replace O(n²) trial division with a sieve of Eratosthenes
 ASI: #algorithm #structural
 ```
@@ -119,7 +119,7 @@ Shaka runs `./autoresearch.sh`, parses the `METRIC` line, runs `./autoresearch.c
 
 The status widget on your terminal redraws in place:
 
-```
+```pseudocode
 iter 1 | kept 1 | disc 0 | best 3.20 (base 80.00) | cur 3.20
 ```
 
@@ -142,7 +142,7 @@ cut-prime-count-from-80ms  [active]
 Ctrl+C at any point pauses the loop between iterations — the in-flight iteration finishes its cleanup (commit or revert), then the process exits with code 130.
 
 ```bash
-$ shaka autoresearch resume
+shaka autoresearch resume
 ```
 
 Resume picks up at `max(iter) + 1`, reads the jsonl for prior hypotheses, and keeps going. If the previous run was killed mid-write and the last jsonl line is truncated, Shaka warns, drops the bad tail, and continues from the last valid entry.
@@ -150,13 +150,13 @@ Resume picks up at `max(iter) + 1`, reads the jsonl for prior hypotheses, and ke
 From the source repo (not the worktree), you can resume by slug:
 
 ```bash
-$ shaka autoresearch resume cut-prime-count-from-80ms
+shaka autoresearch resume cut-prime-count-from-80ms
 ```
 
 Or with no args if there's exactly one active experiment:
 
 ```bash
-$ shaka autoresearch resume
+shaka autoresearch resume
 ```
 
 ## Bounded runs
@@ -175,8 +175,8 @@ Both accepted by `resume` too.
 Autoresearch never auto-deletes the worktree. When you're done reviewing the experiment branch, clean up yourself:
 
 ```bash
-$ git worktree remove /path/to/project.ar-cut-prime-count-from-80ms
-$ git branch -d autoresearch/cut-prime-count-from-80ms
+git worktree remove /path/to/project.ar-cut-prime-count-from-80ms
+git branch -d autoresearch/cut-prime-count-from-80ms
 ```
 
 If the experiment produced commits you want to keep, cherry-pick or rebase them into your main branch before removing.

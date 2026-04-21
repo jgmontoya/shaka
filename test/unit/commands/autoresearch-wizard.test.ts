@@ -51,9 +51,22 @@ describe("runWizard", () => {
     expect(answers.constraints).toBe("");
   });
 
-  test("treats any direction other than 'maximize' as 'minimize' (fuzzy by default)", async () => {
+  test("accepts 'maximize' case-insensitively", async () => {
     const ask = scriptedAsk(["cmd", "MAXIMIZE", "ms", "", "", ""]);
     expect((await runWizard({ objective: "x", ask })).direction).toBe("maximize");
+  });
+
+  test("reprompts invalid directions instead of silently minimizing", async () => {
+    const ask = scriptedAsk(["cmd", "maxmize", "maximize", "ms", "", "", ""]);
+    expect((await runWizard({ objective: "x", ask })).direction).toBe("maximize");
+  });
+
+  test("reprompts metric units that are not a single token", async () => {
+    const ask = scriptedAsk(["cmd", "minimize", "milliseconds per op", "ms/op", "", "", ""]);
+
+    const answers = await runWizard({ objective: "x", ask });
+
+    expect(answers.unit).toBe("ms/op");
   });
 
   test("requires a non-empty benchmark command", async () => {

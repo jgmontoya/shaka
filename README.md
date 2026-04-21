@@ -509,16 +509,16 @@ shaka autoresearch resume            # continue the unique active experiment
 shaka autoresearch resume <slug>     # continue a specific one from anywhere
 ```
 
-`start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (untracked; preserved across reverts).
+`start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (excluded from runner commits; preserved across reverts).
 
-**State files** written into the worktree on setup:
+**State files** used in the worktree:
 
 | File                     | Purpose                                                             |
 | ------------------------ | ------------------------------------------------------------------- |
 | `autoresearch.md`        | Run spec: objective, metric, direction, files in scope, constraints |
 | `autoresearch.sh`        | Benchmark script. Must print `METRIC name=<n> value=<v> unit=<u>`   |
-| `autoresearch.checks.sh` | Optional correctness gate. Exit 0 = acceptable candidate            |
-| `autoresearch.jsonl`     | Append-only per-iteration log. Untracked, resume-safe               |
+| `autoresearch.checks.sh` | Optional setup artifact. Exit 0 = acceptable candidate              |
+| `autoresearch.jsonl`     | Created/appended during iterations. Excluded from runner commits    |
 
 **Verdict classes:** `keep` (improved + checks pass), `discard` (didn't improve), `incorrect` (checks failed or commit hook rejected), `crash` (benchmark errored), `timeout` (agent timed out).
 

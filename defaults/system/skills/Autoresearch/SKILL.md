@@ -19,13 +19,13 @@ You are inside an autoresearch loop. Each iteration you propose **one** targeted
 
 ### Verdicts
 
-| Verdict | Trigger | What happens |
-| --- | --- | --- |
-| `keep` | Metric improved AND checks passed | Your change is committed on the experiment branch. Next iteration starts from it. |
-| `discard` | Metric didn't improve | Your change is reverted. Next iteration starts from the prior best. |
-| `incorrect` | Checks failed OR the commit hook rejected it | Reverted. Track distinctly — usually means a real correctness regression. |
-| `crash` | Benchmark exited non-zero or emitted no `METRIC` line | Reverted. Usually means you broke the build. |
-| `timeout` | You timed out before producing a hypothesis | Reverted. |
+| Verdict     | Trigger                                               | What happens                                                                      |
+| ----------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `keep`      | Metric improved AND checks passed                     | Your change is committed on the experiment branch. Next iteration starts from it. |
+| `discard`   | Metric didn't improve                                 | Your change is reverted. Next iteration starts from the prior best.               |
+| `incorrect` | Checks failed OR the commit hook rejected it          | Reverted. Track distinctly — usually means a real correctness regression.         |
+| `crash`     | Benchmark exited non-zero or emitted no `METRIC` line | Reverted. Usually means you broke the build.                                      |
+| `timeout`   | You timed out before producing a hypothesis           | Reverted.                                                                         |
 
 You can't influence the verdict directly. You can only improve your probability of `keep` by proposing changes that are **well-targeted, safe, and different from what's already been tried**.
 
@@ -71,7 +71,7 @@ Never touch these — the runner relies on them and editing them will either bre
 
 Respond in exactly this shape. Nothing else:
 
-```
+```pseudocode
 HYPOTHESIS: <one-line description of the change you made>
 ASI: <optional space-separated tags>
 ```

@@ -16,6 +16,7 @@ export interface WidgetState {
 }
 
 function fmt(n: number): string {
+  if (!Number.isFinite(n)) return "—";
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 

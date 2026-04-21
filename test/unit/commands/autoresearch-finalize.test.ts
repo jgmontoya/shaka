@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { commitFinalizeIfDirty } from "../../../src/commands/autoresearch";
@@ -61,7 +61,7 @@ describe("commitFinalizeIfDirty", () => {
     const dir = await makeRepo();
     // Install a pre-commit hook that always fails
     const hookPath = join(dir, ".git", "hooks", "pre-commit");
-    await writeFile(hookPath, "#!/bin/sh\nexit 1\n");
+    await Bun.write(hookPath, "#!/bin/sh\nexit 1\n");
     await chmod(hookPath, 0o755);
 
     // User edits the benchmark
@@ -76,7 +76,14 @@ describe("commitFinalizeIfDirty", () => {
     expect(contents).toContain("METRIC name=t value=1 unit=ms");
   });
 
-  test("commits a newly created untracked setup artifact as part of finalize", async () => {
+  // Skipped on Windows: this test asserts the Unix executable bit (git mode
+  // 100755) and spawns `./autoresearch.checks.sh` directly — both are Unix-
+  // only concerns. Windows can't set the exec bit from a plain Bun.write and
+  // can't execute a shebang script by path. The autoresearch feature itself
+  // is Unix-shaped at runtime, so skipping here mirrors feature reality.
+  test.skipIf(process.platform === "win32")(
+    "commits a newly created untracked setup artifact as part of finalize",
+    async () => {
     // The wizard may have skipped `autoresearch.checks.sh`; the user could
     // still add one via $EDITOR. That untracked file should ride into the
     // finalize commit, executable so the loop's checks gate can spawn it.

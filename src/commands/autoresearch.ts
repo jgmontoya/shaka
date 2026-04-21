@@ -21,6 +21,7 @@ import {
   runLoop,
   runResume,
   setupWorkspace,
+  summarizeHypothesis,
 } from "../services/autoresearch";
 import { renderStatus, shouldRenderWidget } from "../services/autoresearch-widget";
 import { commitAllExcept, listDirtyPaths } from "../services/git";
@@ -119,30 +120,36 @@ export async function commitFinalizeIfDirty(worktreePath: string): Promise<void>
 
 /**
  * Open `$EDITOR` on `autoresearch.sh` so the user can finish the benchmark
- * before the loop starts. Silently no-ops when `$EDITOR` is unset or stdin
- * isn't a TTY — those users hit the familiar "edit and resume" message from
- * the baseline validation instead.
+ * before the loop starts. Returns `true` when the setup was finalized in this
+ * call (editor ran and its edits were committed) and the caller may proceed
+ * into the loop. Returns `false` when the user still needs to edit manually
+ * (no `$EDITOR` set, or not a TTY) — the caller must exit and wait for a
+ * subsequent `shaka autoresearch resume`, which finalizes on its own.
  */
-async function maybeOpenEditorOnBench(worktreePath: string): Promise<void> {
-  if (process.stdin.isTTY !== true) return;
+async function maybeOpenEditorOnBench(worktreePath: string): Promise<boolean> {
+  if (process.stdin.isTTY !== true) return false;
   const editor = process.env.EDITOR;
   if (!editor) {
     const shPath = `${worktreePath}/autoresearch.sh`;
     console.log(
       `\nFinish the benchmark by editing: ${shPath}\nThen run \`shaka autoresearch resume\` to continue.\nTip: set $EDITOR and Shaka will open it for you next time.`,
     );
-    return;
+    return false;
   }
 
-  const proc = Bun.spawn([editor, "autoresearch.sh"], {
+  const proc = Bun.spawn(["sh", "-c", `exec ${editor} "$1"`, "sh", "autoresearch.sh"], {
     cwd: worktreePath,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
   });
-  await proc.exited;
+  const exitCode = await proc.exited;
+  if (exitCode !== 0) {
+    throw new Error(`Editor exited with code ${exitCode}; benchmark finalization aborted.`);
+  }
 
   await commitFinalizeIfDirty(worktreePath);
+  return true;
 }
 
 async function currentBranch(cwd: string): Promise<string | null> {
@@ -220,7 +227,14 @@ export async function withSigintAbort(
   message: string,
   fn: () => Promise<void>,
 ): Promise<void> {
+  let sawFirstSigint = false;
   const handler = (): void => {
+    if (sawFirstSigint) {
+      console.log("\nSecond SIGINT — forcing exit.");
+      process.exit(130);
+      return;
+    }
+    sawFirstSigint = true;
     console.log(`\n${message}`);
     process.exitCode = 130;
     controller.abort();
@@ -286,7 +300,11 @@ async function runStart(objective: string, opts: LoopFlags): Promise<void> {
   console.log(`Branch:   ${setup.branch}`);
 
   if (answers !== undefined) {
-    await maybeOpenEditorOnBench(setup.worktreePath);
+    const finalized = await maybeOpenEditorOnBench(setup.worktreePath);
+    // When `$EDITOR` isn't set the user is told to edit `autoresearch.sh`
+    // manually and run `resume` — don't then silently enter the loop here
+    // and run the TODO-marker'd benchmark for no reason.
+    if (!finalized) return;
   }
 
   const skillContent = await loadAutoresearchSkill();
@@ -325,6 +343,13 @@ async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Prom
 
   console.log(`Resuming: ${targetCwd}`);
 
+  // Commit any user edits to the setup artifacts (autoresearch.sh, .md,
+  // .checks.sh) before handing off to the loop. This handles the no-$EDITOR
+  // workflow: user edits `autoresearch.sh` manually, then runs `resume`.
+  // If unrelated files are dirty, this throws with an actionable message
+  // before the loop gets a chance to silently commit or revert them.
+  await commitFinalizeIfDirty(targetCwd);
+
   const skillContent = await loadAutoresearchSkill();
   const controller = new AbortController();
   const widget = buildOnTick();
@@ -350,8 +375,8 @@ async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Prom
 }
 
 function describeState(exp: ExperimentWorktree): string {
-  if (exp.prunable) return `prunable (${exp.prunable})`;
-  if (exp.locked) return `locked (${exp.locked})`;
+  if (exp.prunable !== null) return exp.prunable === "" ? "prunable" : `prunable (${exp.prunable})`;
+  if (exp.locked !== null) return exp.locked === "" ? "locked" : `locked (${exp.locked})`;
   return "active";
 }
 
@@ -367,7 +392,9 @@ async function lastJsonlEntries(worktreePath: string, limit: number): Promise<st
       const e = JSON.parse(line);
       const metric = e.metric ?? "?";
       const commit = e.commit ?? "-";
-      return [`iter ${e.iter} [${e.verdict}] metric=${metric} commit=${commit} — ${e.hypothesis}`];
+      return [
+        `iter ${e.iter} [${e.verdict}] metric=${metric} commit=${commit} — ${summarizeHypothesis(e.hypothesis ?? "")}`,
+      ];
     } catch {
       return [];
     }

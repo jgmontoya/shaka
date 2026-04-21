@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type {
   AgentExecutionOptions,
   AgentExecutionResult,
 } from "../../../src/domain/agent-execution";
-import type { DetectedProviders } from "../../../src/services/provider-detection";
 import {
   type BenchResult,
   type Direction,
@@ -17,6 +16,7 @@ import {
   buildPrompt,
   classifyVerdict,
   extractAsi,
+  extractHypothesis,
   findExperimentWorktree,
   improvesBest,
   parseMetricLine,
@@ -27,8 +27,10 @@ import {
   runResume,
   setupWorkspace,
   slugify,
+  summarizeHypothesis,
 } from "../../../src/services/autoresearch";
 import { isCleanExcept } from "../../../src/services/git";
+import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false };
 
@@ -47,6 +49,17 @@ async function run(args: string[], cwd: string): Promise<void> {
     proc.exited,
   ]);
   if (code !== 0) throw new Error(`${args.join(" ")} failed (exit ${code}): ${stderr}`);
+}
+
+async function gitOutput(args: string[], cwd: string): Promise<string> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`git ${args.join(" ")} failed (exit ${code}): ${stderr}`);
+  return stdout;
 }
 
 async function setupExperimentRepo(opts: { direction: Direction }): Promise<string> {
@@ -377,6 +390,44 @@ describe("runLoop", () => {
     expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
   });
 
+  test("commit hook failures are recorded in jsonl diagnostics", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    await mkdir(join(cwd, ".git", "hooks"), { recursive: true });
+    await Bun.write(
+      join(cwd, ".git", "hooks", "pre-commit"),
+      "#!/bin/sh\necho 'blocked by hook' >&2\nexit 1\n",
+    );
+    await run(["chmod", "+x", join(cwd, ".git", "hooks", "pre-commit")], cwd);
+    await Bun.write(join(cwd, "slow.ts"), "export const x = 1;\n");
+    await run(["git", "add", "-A"], cwd);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "--no-verify", "-q", "-m", "add slow"], cwd);
+
+    const editingAgent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "slow.ts"), "export const x = 2;\n");
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: commit hook should be visible",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 50 }]);
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent: editingAgent, benchmark },
+    );
+
+    const [entry] = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entry.verdict).toBe("incorrect");
+    expect(entry.commit).toBeNull();
+    expect(entry.commitError).toContain("blocked by hook");
+  });
+
   test("resumes from existing jsonl: next iter continues numbering, no baseline re-measurement", async () => {
     cwd = await setupExperimentRepo({ direction: "minimize" });
 
@@ -435,6 +486,36 @@ describe("runLoop", () => {
     expect(entries[0].hypothesis).toBe("prior run win");
     expect(entries[1].iter).toBe(2);
     expect(entries[1].verdict).toBe("keep"); // 70 beat prior best of 80
+  });
+
+  test("resume drops an entirely truncated jsonl tail before appending", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    await Bun.write(join(cwd, "autoresearch.jsonl"), '{"iter":1,"hypothesis":"cut off');
+
+    const editingAgent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "patch.txt"), "fresh");
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: fresh start after truncated log",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 90 }]);
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent: editingAgent, benchmark },
+    );
+
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].iter).toBe(1);
+    expect(entries[0].hypothesis).toBe("fresh start after truncated log");
   });
 
   test("agent exiting non-zero (not a timeout) aborts the loop with a clear error", async () => {
@@ -560,6 +641,61 @@ describe("runLoop", () => {
     // HEAD is unchanged and the worktree is back to clean-except-jsonl.
     expect(await headSha(cwd)).toBe(headBefore);
     expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+  });
+
+  test("agent tampering with jsonl is restored and classified incorrect", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const prior = {
+      iter: 1,
+      ts: "2026-04-18T00:00:00.000Z",
+      provider: "claude",
+      hypothesis: "prior",
+      metric: 80,
+      verdict: "keep",
+      commit: "abc1234",
+      asi: [],
+      duration_ms: 100,
+    };
+    await Bun.write(join(cwd, "autoresearch.jsonl"), `${JSON.stringify(prior)}\n`);
+
+    let benchCalls = 0;
+    const tamperingAgent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "candidate.txt"), "should be reverted");
+      await Bun.write(join(cwd, "autoresearch.jsonl"), "agent-owned history\n");
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: tamper with history",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+    const benchmark = async (): Promise<BenchResult> => {
+      benchCalls++;
+      return {
+        exitCode: 0,
+        stdout: "METRIC name=t value=70 unit=ms",
+        stderr: "",
+        measurement: { name: "t", value: 70, unit: "ms" },
+      };
+    };
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 2 },
+      { agent: tamperingAgent, benchmark },
+    );
+
+    expect(benchCalls).toBe(0);
+    expect(await Bun.file(join(cwd, "candidate.txt")).exists()).toBe(false);
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toEqual(prior);
+    expect(entries[1].iter).toBe(2);
+    expect(entries[1].verdict).toBe("incorrect");
+    expect(entries[1].hypothesis).toBe("tamper with history");
   });
 
   test("resume with only reverted (discard/incorrect) history re-measures baseline against HEAD", async () => {
@@ -742,10 +878,6 @@ describe("runLoop", () => {
   test("onTick is called once per iteration with the up-to-date state", async () => {
     cwd = await setupExperimentRepo({ direction: "minimize" });
 
-    const agent = scriptedAgent([
-      { stdout: "HYPOTHESIS: first" },
-      { stdout: "HYPOTHESIS: second" },
-    ]);
     // baseline=100, iter1=150 (worse → discard), iter2=60 (better → keep)
     const benchmark = scriptedBenchmark([{ value: 100 }, { value: 150 }, { value: 60 }]);
     const editingAgent = async () => {
@@ -758,7 +890,6 @@ describe("runLoop", () => {
         timedOut: false,
       };
     };
-    void agent; // use editingAgent so keep verdict can commit
 
     const ticks: WidgetState[] = [];
     await runLoop(
@@ -917,9 +1048,27 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("crash");
   });
 
+  test("summarizes long recent hypotheses without changing stored history", () => {
+    const longHypothesis = `${"a".repeat(220)}tail`;
+    const entry = makeEntry({ hypothesis: longHypothesis });
+    const prompt = buildPrompt({ skill: "", spec: "", recent: [entry], iter: 2 });
+
+    expect(summarizeHypothesis(longHypothesis)).toHaveLength(200);
+    expect(prompt).toContain(`${"a".repeat(197)}...`);
+    expect(prompt).not.toContain("tail");
+  });
+
   test("instructs the agent to respond with HYPOTHESIS: line", () => {
     const prompt = buildPrompt({ skill: "", spec: "", recent: [], iter: 1 });
     expect(prompt).toContain("HYPOTHESIS:");
+  });
+});
+
+describe("extractHypothesis", () => {
+  test("preserves long one-line hypotheses for durable history", () => {
+    const longHypothesis = `preserve ${"detail ".repeat(40)}because this explains the actual change`;
+
+    expect(extractHypothesis(`HYPOTHESIS: ${longHypothesis}\n`)).toBe(longHypothesis);
   });
 });
 
@@ -1020,6 +1169,27 @@ describe("renderTemplates", () => {
     expect(out.sh.startsWith("#!/usr/bin/env sh")).toBe(true);
     // Objective lands in a comment; quotes are allowed there. No exploit path.
     expect(out.sh).toContain("tricky");
+  });
+
+  test("normalizes shell-comment fields without changing markdown objective", () => {
+    const out = renderTemplates({
+      ...fullAnswers,
+      objective: "safe objective\nwhoami `touch nope` \\",
+      unit: "ms",
+    });
+
+    expect(out.md).toContain("safe objective\nwhoami `touch nope` \\");
+    expect(out.sh).toContain("# Benchmark for: safe objective whoami touch nope");
+    expect(out.sh).not.toContain("# Benchmark for: safe objective\nwhoami");
+  });
+
+  test("rejects metric units that are not a single safe token", () => {
+    expect(() =>
+      renderTemplates({
+        ...fullAnswers,
+        unit: "ms\nwhoami",
+      }),
+    ).toThrow(/metric unit/i);
   });
 });
 
@@ -1134,6 +1304,28 @@ describe("setupWorkspace", () => {
       /already exists/i,
     );
   });
+
+  test("validates rendered templates before creating a worktree", async () => {
+    const repo = await makeSourceRepo();
+    const answers: WizardAnswers = {
+      objective: "invalid unit",
+      benchmarkCommand: "bun test",
+      direction: "minimize",
+      unit: "ms\nwhoami",
+      checksCommand: "",
+      filesInScope: "",
+      constraints: "",
+    };
+
+    await expect(
+      setupWorkspace({ repoRoot: repo, objective: answers.objective, answers }),
+    ).rejects.toThrow(/metric unit/i);
+
+    expect(await gitOutput(["worktree", "list", "--porcelain"], repo)).not.toContain(
+      "autoresearch/invalid-unit",
+    );
+    expect(await gitOutput(["branch", "--list", "autoresearch/invalid-unit"], repo)).toBe("");
+  });
 });
 
 describe("runResume (in-worktree)", () => {
@@ -1242,30 +1434,6 @@ describe("runResume (in-worktree)", () => {
     ).rejects.toThrow(/autoresearch\.md/i);
   });
 
-  // `runIteration` either folds *all* non-excluded tracked changes into a
-  // keep commit, or wipes them on a non-keep revert. Resuming on top of a
-  // user's in-progress edits would silently steal or erase them — so resume
-  // must refuse to start unless the worktree is clean aside from the
-  // runner-owned autoresearch.jsonl.
-  test("rejects a worktree with unrelated dirty state", async () => {
-    const repo = await makeSourceRepo();
-    const setup = await setupWorkspace({ repoRoot: repo, objective: "dirty resume" });
-
-    // Commit a file, then locally edit it — mimics a user tweaking the
-    // worktree between iterations.
-    await Bun.write(join(setup.worktreePath, "src.txt"), "committed");
-    await run(["git", "add", "-A"], setup.worktreePath);
-    await run(
-      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "seed"],
-      setup.worktreePath,
-    );
-    await Bun.write(join(setup.worktreePath, "src.txt"), "locally edited");
-
-    await expect(
-      runResume({ cwd: setup.worktreePath, providers: NO_PROVIDERS }, {}),
-    ).rejects.toThrow(/dirty|unrelated|clean/i);
-  });
-
   test("rejects a worktree where autoresearch.md is untracked (only on disk, not at HEAD)", async () => {
     // Regression: runResume's docstring requires the spec to be TRACKED at HEAD
     // — an untracked file on disk must not count as a valid experiment.
@@ -1286,6 +1454,59 @@ describe("runResume (in-worktree)", () => {
     await expect(
       runResume({ cwd: setup.worktreePath, providers: NO_PROVIDERS }, {}),
     ).rejects.toThrow(/autoresearch\.md/i);
+  });
+
+  test("rejects a main checkout masquerading as an autoresearch branch", async () => {
+    const repo = await makeSourceRepo();
+    await run(["git", "checkout", "-b", "autoresearch/fake"], repo);
+    await Bun.write(join(repo, "autoresearch.md"), "# Autoresearch\n\n## Metric\n- direction: minimize\n");
+    await run(["git", "add", "-A"], repo);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "fake spec"], repo);
+
+    await expect(runResume({ cwd: repo, providers: NO_PROVIDERS }, {})).rejects.toThrow(
+      /linked worktree|autoresearch worktree/i,
+    );
+  });
+
+  test("rejects a submodule checkout masquerading as an autoresearch worktree", async () => {
+    const repo = await makeSourceRepo();
+    const subSource = join(repo, "..", "sub-source");
+    await mkdir(subSource, { recursive: true });
+    await run(["git", "init", "-q", "-b", "main"], subSource);
+    await run(["git", "config", "user.email", "t@t"], subSource);
+    await run(["git", "config", "user.name", "t"], subSource);
+    await Bun.write(join(subSource, ".gitkeep"), "");
+    await run(["git", "add", "-A"], subSource);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], subSource);
+
+    await run(
+      ["git", "-c", "protocol.file.allow=always", "submodule", "add", "../sub-source", "sub"],
+      repo,
+    );
+    const submodule = join(repo, "sub");
+    await run(["git", "config", "user.email", "t@t"], submodule);
+    await run(["git", "config", "user.name", "t"], submodule);
+    await run(["git", "checkout", "-b", "autoresearch/fake"], submodule);
+    await Bun.write(
+      join(submodule, "autoresearch.md"),
+      "# Submodule decoy\n\n## Metric\n- direction: minimize\n",
+    );
+    await Bun.write(
+      join(submodule, "autoresearch.sh"),
+      "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n",
+    );
+    await run(["git", "add", "-A"], submodule);
+    await run(
+      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"],
+      submodule,
+    );
+
+    await expect(
+      runResume(
+        { cwd: submodule, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 0 },
+        { benchmark: scriptedBenchmark([{ value: 1 }]) },
+      ),
+    ).rejects.toThrow(/linked worktree|autoresearch worktree/i);
   });
 });
 
@@ -1330,8 +1551,10 @@ describe("experiment worktree discovery", () => {
     await setupWorkspace({ repoRoot: repo, objective: "beta" });
 
     const resolved = await resolveExperimentWorktree(repo, "alpha");
-    const realAlpha = await (await import("node:fs/promises")).realpath(alpha.worktreePath);
-    expect(resolved.worktreePath).toBe(realAlpha);
+    const realAlpha = await realpath(alpha.worktreePath);
+    // path.resolve normalizes separators on both sides (forward slashes from
+    // `git worktree list --porcelain`, OS-native from realpath).
+    expect(resolve(resolved.worktreePath)).toBe(resolve(realAlpha));
   });
 
   test("resolveExperimentWorktree with no slug picks the unique experiment", async () => {
@@ -1339,8 +1562,8 @@ describe("experiment worktree discovery", () => {
     const only = await setupWorkspace({ repoRoot: repo, objective: "solo" });
 
     const resolved = await resolveExperimentWorktree(repo, undefined);
-    const realOnly = await (await import("node:fs/promises")).realpath(only.worktreePath);
-    expect(resolved.worktreePath).toBe(realOnly);
+    const realOnly = await realpath(only.worktreePath);
+    expect(resolve(resolved.worktreePath)).toBe(resolve(realOnly));
   });
 
   test("resolveExperimentWorktree errors clearly when slug is ambiguous", async () => {
@@ -1367,8 +1590,8 @@ describe("experiment worktree discovery", () => {
 
     // Inside the alpha worktree — even with no slug specified, we should get alpha.
     const target = await resolveResumeTarget(alpha.worktreePath, repo, undefined);
-    const realAlpha = await (await import("node:fs/promises")).realpath(alpha.worktreePath);
-    expect(target).toBe(realAlpha);
+    const realAlpha = await realpath(alpha.worktreePath);
+    expect(resolve(target)).toBe(resolve(realAlpha));
   });
 
   test("resolveResumeTarget resolves from a nested cwd inside the worktree", async () => {
@@ -1380,9 +1603,20 @@ describe("experiment worktree discovery", () => {
     await mkdir(nested, { recursive: true });
 
     const target = await resolveResumeTarget(nested, repo, undefined);
-    const realAlpha = await (await import("node:fs/promises")).realpath(alpha.worktreePath);
-    expect(target).toBe(realAlpha);
+    const realAlpha = await realpath(alpha.worktreePath);
+    expect(resolve(target)).toBe(resolve(realAlpha));
   });
+
+  test("resolveResumeTarget honors an explicit slug over the current worktree", async () => {
+    const repo = await makeSourceRepo();
+    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha" });
+    const beta = await setupWorkspace({ repoRoot: repo, objective: "beta" });
+
+    const target = await resolveResumeTarget(alpha.worktreePath, repo, "beta");
+    const realBeta = await realpath(beta.worktreePath);
+    expect(resolve(target)).toBe(resolve(realBeta));
+  });
+
 
   test("resolveResumeTarget rejects a main repo on an autoresearch/* branch with no matching experiment", async () => {
     // Regression: the command-layer short-circuit used to trust the branch

@@ -7,7 +7,7 @@
  * workflow.
  */
 
-import { realpath, stat } from "node:fs/promises";
+import { chmod, realpath, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   type AgentExecutionOptions,
@@ -55,6 +55,8 @@ export interface LogEntry {
   readonly metric: number | null;
   readonly verdict: Verdict;
   readonly commit: string | null;
+  /** Diagnostic for a failed keep commit, e.g. pre-commit hook rejection. */
+  readonly commitError?: string;
   readonly asi: readonly string[];
   readonly duration_ms: number;
 }
@@ -173,10 +175,17 @@ export function parseSpec(md: string): { readonly direction: Direction } {
 }
 
 const HYPOTHESIS_PATTERN = /^HYPOTHESIS:\s*(.+?)\s*$/m;
+const HYPOTHESIS_SUMMARY_CHARS = 200;
 
 /** Pull the one-line hypothesis the agent is asked to emit; empty string if missing. */
 export function extractHypothesis(stdout: string): string {
-  return stdout.match(HYPOTHESIS_PATTERN)?.[1]?.slice(0, 200) ?? "";
+  return stdout.match(HYPOTHESIS_PATTERN)?.[1] ?? "";
+}
+
+/** Bound hypotheses for prompts, commit subjects, and terminal display without changing jsonl history. */
+export function summarizeHypothesis(hypothesis: string): string {
+  if (hypothesis.length <= HYPOTHESIS_SUMMARY_CHARS) return hypothesis;
+  return `${hypothesis.slice(0, HYPOTHESIS_SUMMARY_CHARS - 3)}...`;
 }
 
 const ASI_PATTERN = /^ASI:\s*(.+?)\s*$/m;
@@ -196,7 +205,7 @@ export function extractAsi(stdout: string): readonly string[] {
 function renderRecentEntry(e: LogEntry): string {
   const metricPart = e.metric === null ? "" : ` ${e.metric.toFixed(2)}`;
   const asiPart = e.asi.length > 0 ? `  [asi: ${e.asi.join(" ")}]` : "";
-  return `- iter ${e.iter} [${e.verdict}]${metricPart} — ${e.hypothesis}${asiPart}`;
+  return `- iter ${e.iter} [${e.verdict}]${metricPart} — ${summarizeHypothesis(e.hypothesis)}${asiPart}`;
 }
 
 export interface BuildPromptInput {
@@ -384,6 +393,10 @@ function parseJsonlEntries(raw: string): {
   return { entries, droppedTail };
 }
 
+function renderJsonlEntries(entries: readonly LogEntry[]): string {
+  return entries.length === 0 ? "" : `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+}
+
 /**
  * Pick the best metric represented by `HEAD` — i.e. the min/max across `keep`
  * entries only. Returns null when there are no keeps; the caller then
@@ -421,12 +434,10 @@ async function loadPriorState(cwd: string, direction: Direction): Promise<PriorR
   if (raw.trim() === "") return null;
 
   const { entries, droppedTail } = parseJsonlEntries(raw);
-  if (entries.length === 0) return null;
-
   if (droppedTail) {
-    const cleaned = `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
-    await Bun.write(path, cleaned);
+    await Bun.write(path, renderJsonlEntries(entries));
   }
+  if (entries.length === 0) return null;
 
   const iter = Math.max(...entries.map((e) => e.iter));
   const kept = entries.filter((e) => e.verdict === "keep").length;
@@ -448,6 +459,76 @@ interface IterationOutcome {
   readonly entry: LogEntry;
 }
 
+interface JsonlSnapshot {
+  readonly path: string;
+  readonly content: string | null;
+}
+
+async function snapshotJsonl(cwd: string): Promise<JsonlSnapshot> {
+  const path = join(cwd, JSONL_FILE);
+  const file = Bun.file(path);
+  return { path, content: (await file.exists()) ? await file.text() : null };
+}
+
+async function restoreJsonlIfChanged(snapshot: JsonlSnapshot): Promise<boolean> {
+  const file = Bun.file(snapshot.path);
+  const current = (await file.exists()) ? await file.text() : null;
+  if (current === snapshot.content) return false;
+  if (snapshot.content === null) {
+    await rm(snapshot.path, { force: true });
+  } else {
+    await Bun.write(snapshot.path, snapshot.content);
+  }
+  return true;
+}
+
+function incorrectOutcome(args: {
+  readonly iter: number;
+  readonly deps: ResolvedDeps;
+  readonly agentResult: AgentExecutionResult;
+  readonly hypothesis: string;
+  readonly asi: readonly string[];
+  readonly iterStart: number;
+}): IterationOutcome {
+  return {
+    verdict: "incorrect",
+    metric: null,
+    commit: null,
+    entry: {
+      iter: args.iter,
+      ts: args.deps.now().toISOString(),
+      provider: args.agentResult.provider,
+      hypothesis: args.hypothesis,
+      metric: null,
+      verdict: "incorrect",
+      commit: null,
+      asi: args.asi,
+      duration_ms: Date.now() - args.iterStart,
+    },
+  };
+}
+
+async function tryCommitKeep(
+  iter: number,
+  hypothesis: string,
+  cwd: string,
+): Promise<{
+  readonly commit: string | null;
+  readonly commitError?: string;
+}> {
+  try {
+    return {
+      commit: await commitAllExcept(JSONL_EXCLUDES, commitMessage(iter, hypothesis), cwd),
+    };
+  } catch (err) {
+    const commitError = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `autoresearch iter ${iter}: commit failed (${commitError}); classifying as incorrect`,
+    );
+    return { commit: null, commitError };
+  }
+}
+
 /** Decide verdict + side-effect (commit or revert) for one iteration. */
 async function runIteration(args: {
   readonly cwd: string;
@@ -461,6 +542,7 @@ async function runIteration(args: {
   const { cwd, iter, direction, best, providers, deps, prompt } = args;
   const iterStart = Date.now();
 
+  const jsonlSnapshot = await snapshotJsonl(cwd);
   const agentResult = await deps.agent({ prompt, cwd }, providers);
 
   // Infrastructure failures (no provider, spawn error, CLI crash) are not
@@ -474,6 +556,11 @@ async function runIteration(args: {
   const hypothesis = extractHypothesis(agentResult.stdout);
   const asi = extractAsi(agentResult.stdout);
 
+  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
+    await revertWorkingTree(JSONL_EXCLUDES, cwd);
+    return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
+  }
+
   // Skipping benchmark on tampered iterations: (a) the spec/bench may no
   // longer measure what we claim, and (b) we don't want to commit the agent's
   // edits to setup files as part of a legitimate keep. Tamper wins over
@@ -481,22 +568,7 @@ async function runIteration(args: {
   // than simply running out of time.
   if (await setupArtifactsDirty(cwd)) {
     await revertWorkingTree(JSONL_EXCLUDES, cwd);
-    return {
-      verdict: "incorrect",
-      metric: null,
-      commit: null,
-      entry: {
-        iter,
-        ts: deps.now().toISOString(),
-        provider: agentResult.provider,
-        hypothesis,
-        metric: null,
-        verdict: "incorrect",
-        commit: null,
-        asi,
-        duration_ms: Date.now() - iterStart,
-      },
-    };
+    return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
   }
 
   // Skipping benchmark on timed-out iterations: the agent's edits are, by
@@ -544,11 +616,13 @@ async function runIteration(args: {
 
   let verdict = classifyVerdict({ ...baseInput, commitSucceeded: true });
   let commit: string | null = null;
+  let commitError: string | undefined;
 
   if (verdict === "keep") {
-    try {
-      commit = await commitAllExcept(JSONL_EXCLUDES, commitMessage(iter, hypothesis), cwd);
-    } catch {
+    const result = await tryCommitKeep(iter, hypothesis, cwd);
+    commit = result.commit;
+    commitError = result.commitError;
+    if (commitError !== undefined) {
       // Hook failure or similar — classifier downgrades keep → incorrect.
       verdict = classifyVerdict({ ...baseInput, commitSucceeded: false });
     }
@@ -566,6 +640,7 @@ async function runIteration(args: {
     metric,
     verdict,
     commit,
+    commitError,
     asi,
     duration_ms: Date.now() - iterStart,
   };
@@ -676,7 +751,7 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
 
 function commitMessage(iter: number, hypothesis: string): string {
   const trimmed = hypothesis.trim() || "(no hypothesis)";
-  return `autoresearch(iter ${iter}): ${trimmed}`;
+  return `autoresearch(iter ${iter}): ${summarizeHypothesis(trimmed)}`;
 }
 
 // ─── Workspace setup ───────────────────────────────────────────────────────
@@ -752,19 +827,39 @@ function renderBulletList(text: string): string {
     .join("\n");
 }
 
+function normalizeCommentText(text: string): string {
+  return text
+    .replace(/[\r\n]+/g, " ")
+    .replace(/[`\\]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function validateUnitToken(unit: string): string {
+  const trimmed = unit.trim();
+  if (!/^[A-Za-z0-9_.%/+:-]+$/.test(trimmed)) {
+    throw new Error(
+      "Metric unit must be a single token using letters, digits, _, ., %, /, +, :, or -",
+    );
+  }
+  return trimmed;
+}
+
 /**
  * Produce the three setup files from a set of wizard answers. Pure — no file
  * I/O. The caller writes the bytes. `checks` is null when the user opted out
  * of a correctness gate; the caller should skip writing the file in that case.
  */
 export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
+  const shellObjective = normalizeCommentText(answers.objective);
+  const unit = validateUnitToken(answers.unit);
   const checksSection = answers.checksCommand.trim()
     ? "\n## Checks\n\n- command: `./autoresearch.checks.sh`\n"
     : "";
 
-  const md = `# Autoresearch: ${answers.objective}\n\n## Objective\n\n${answers.objective}\n\n## Metric\n\n- command: \`./autoresearch.sh\`\n- unit: ${answers.unit}\n- direction: ${answers.direction}\n- baseline: measured at setup\n\n## Files in scope\n\n${renderBulletList(answers.filesInScope)}\n\n## Off-limits\n\n- \`autoresearch.*\` (run config; never modify)\n\n## Constraints\n\n${renderBulletList(answers.constraints)}\n${checksSection}`;
+  const md = `# Autoresearch: ${answers.objective}\n\n## Objective\n\n${answers.objective}\n\n## Metric\n\n- command: \`./autoresearch.sh\`\n- unit: ${unit}\n- direction: ${answers.direction}\n- baseline: measured at setup\n\n## Files in scope\n\n${renderBulletList(answers.filesInScope)}\n\n## Off-limits\n\n- \`autoresearch.*\` (run config; never modify)\n\n## Constraints\n\n${renderBulletList(answers.constraints)}\n${checksSection}`;
 
-  const sh = `#!/usr/bin/env sh\n# Benchmark for: ${answers.objective}\n# Metric: ${answers.direction} ${answers.unit}\n#\n# This script must emit a single line on stdout of the form:\n#   METRIC name=<name> value=<number> unit=${answers.unit}\n# Non-zero exit OR missing METRIC line = crash verdict.\nset -e\n\n# Your command:\n${answers.benchmarkCommand}\n\n# TODO: replace the two lines below with your METRIC emission, e.g.:\n#   echo "METRIC name=runtime value=<value> unit=${answers.unit}"\necho "autoresearch.sh has a TODO marker — edit it and run \\\`shaka autoresearch resume\\\`." >&2\nexit 1\n`;
+  const sh = `#!/usr/bin/env sh\n# Benchmark for: ${shellObjective}\n# Metric: ${answers.direction} ${unit}\n#\n# This script must emit a single line on stdout of the form:\n#   METRIC name=<name> value=<number> unit=${unit}\n# Non-zero exit OR missing METRIC line = crash verdict.\nset -e\n\n# Your command:\n${answers.benchmarkCommand}\n\n# TODO: replace the two lines below with your METRIC emission, e.g.:\n#   echo "METRIC name=runtime value=<value> unit=${unit}"\necho "autoresearch.sh has a TODO marker — edit it and run \\\`shaka autoresearch resume\\\`." >&2\nexit 1\n`;
 
   const checks = answers.checksCommand.trim()
     ? `#!/usr/bin/env sh\n# Correctness gate — exit 0 when the candidate is acceptable.\n# Non-zero exit = 'incorrect' verdict even if the metric improved.\nset -e\n\n${answers.checksCommand.trim()}\n`
@@ -817,6 +912,8 @@ export async function setupWorkspace(args: {
     );
   }
 
+  const answers = args.answers ?? { ...TODO_ANSWERS, objective: args.objective };
+  const rendered = renderTemplates(answers);
   const slug = slugify(args.objective);
   const branch = `autoresearch/${slug}`;
   const worktreePath = join(dirname(args.repoRoot), `${basename(args.repoRoot)}.ar-${slug}`);
@@ -840,17 +937,14 @@ export async function setupWorkspace(args: {
   const shExists = await Bun.file(shPath).exists();
   const checksExisted = await Bun.file(checksPath).exists();
 
-  const answers = args.answers ?? { ...TODO_ANSWERS, objective: args.objective };
-  const rendered = renderTemplates(answers);
-
   if (!mdExists) await Bun.write(mdPath, rendered.md);
   if (!shExists) {
     await Bun.write(shPath, rendered.sh);
-    await Bun.spawn(["chmod", "+x", shPath]).exited;
+    await chmod(shPath, 0o755);
   }
   if (!checksExisted && rendered.checks !== null) {
     await Bun.write(checksPath, rendered.checks);
-    await Bun.spawn(["chmod", "+x", checksPath]).exited;
+    await chmod(checksPath, 0o755);
   }
 
   const wroteAnything = !mdExists || !shExists || (!checksExisted && rendered.checks !== null);
@@ -863,7 +957,8 @@ export async function setupWorkspace(args: {
 
 // ─── Discovery + resume ────────────────────────────────────────────────────
 
-const AUTORESEARCH_BRANCH_PREFIX = "refs/heads/autoresearch/";
+const AUTORESEARCH_SLUG_PREFIX = "autoresearch/";
+const AUTORESEARCH_BRANCH_PREFIX = `refs/heads/${AUTORESEARCH_SLUG_PREFIX}`;
 
 export interface ExperimentWorktree {
   readonly slug: string;
@@ -875,18 +970,40 @@ export interface ExperimentWorktree {
 }
 
 /**
- * True iff `worktreePath` is a linked worktree (created via `git worktree add`)
- * rather than the main worktree. In linked worktrees `.git` is a regular
- * file pointing at the common dir; in the main worktree it's a directory.
- * This is stable across git versions and doesn't rely on list ordering.
+ * True iff `worktreePath` is a linked worktree created via `git worktree add`.
+ * A `.git` file alone is not enough: submodules and separate-git-dir checkouts
+ * use one too. Linked worktree git dirs live under the common dir's
+ * `worktrees/<id>` metadata directory.
  */
 async function isLinkedWorktree(worktreePath: string): Promise<boolean> {
-  try {
-    const gitMeta = await stat(join(worktreePath, ".git"));
-    return !gitMeta.isDirectory();
-  } catch {
+  const proc = Bun.spawn(["git", "rev-parse", "--git-dir", "--git-common-dir"], {
+    cwd: worktreePath,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, , code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
     return false;
   }
+
+  const [gitDirRaw, commonDirRaw] = out
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (!gitDirRaw || !commonDirRaw) return false;
+
+  const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(worktreePath, gitDirRaw);
+  const commonDir = isAbsolute(commonDirRaw) ? commonDirRaw : join(worktreePath, commonDirRaw);
+  const [realGitDir, realCommonDir] = await Promise.all([
+    realpath(gitDir).catch(() => gitDir),
+    realpath(commonDir).catch(() => commonDir),
+  ]);
+  const rel = relative(join(realCommonDir, "worktrees"), realGitDir);
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**
@@ -981,9 +1098,23 @@ export async function resolveResumeTarget(
   slug: string | undefined,
 ): Promise<string> {
   const experiments = await findExperimentWorktree(repoRoot);
+  if (slug !== undefined) {
+    return (await resolveExperimentWorktree(repoRoot, slug)).worktreePath;
+  }
+  // Realpath both sides of the comparison: `cwd` can arrive via user-accessible
+  // symlinks (e.g. macOS exposes /tmp, but git worktree list reports the
+  // canonical /private/tmp). Without symmetric resolution, a textual mismatch
+  // between the two otherwise-equal paths makes the in-worktree check fail and
+  // falls through to the by-slug resolver, which throws on ambiguity.
   const realCwd = await realpath(cwd);
-  const inside = experiments.find((e) => {
-    const rel = relative(e.worktreePath, realCwd);
+  const realExperiments = await Promise.all(
+    experiments.map(async (e) => ({
+      ...e,
+      realPath: await realpath(e.worktreePath).catch(() => e.worktreePath),
+    })),
+  );
+  const inside = realExperiments.find((e) => {
+    const rel = relative(e.realPath, realCwd);
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   });
   if (inside) return inside.worktreePath;
@@ -996,13 +1127,20 @@ export async function resolveResumeTarget(
  * `autoresearch/`). Both checks rule out the common false positive of a random
  * repo that happens to carry a similarly-named file.
  *
- * Also refuses to proceed if the worktree has unrelated local edits. The first
- * iteration will either `commitAllExcept(JSONL_EXCLUDES, ...)` — folding any
- * dirty tracked edit into the agent's commit — or `revertWorkingTree(...)` —
- * silently discarding it. Both outcomes steal/erase the user's work, so resume
- * must refuse until the worktree is clean aside from the runner-owned jsonl.
+ * Caller contract: the worktree must be clean except for `autoresearch.jsonl`.
+ * The command layer enforces this by calling `commitFinalizeIfDirty` (which
+ * auto-commits legitimate setup edits and throws on unrelated dirty state)
+ * before handing control here. Duplicating that check at this layer would
+ * conflict with the command-layer policy that setup-artifact edits are
+ * expected and should be committed rather than rejected.
  */
 export async function runResume(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promise<void> {
+  if (!(await isLinkedWorktree(cfg.cwd))) {
+    throw new Error(
+      `Not inside an autoresearch worktree: ${cfg.cwd} is not a linked worktree. Use \`shaka autoresearch resume <slug>\` from the source repo instead.`,
+    );
+  }
+
   if (!(await specTrackedAtHead(cfg.cwd))) {
     throw new Error(
       `autoresearch.md not tracked at HEAD in ${cfg.cwd} — not inside an autoresearch worktree. Run \`shaka autoresearch start\` first.`,
@@ -1019,15 +1157,9 @@ export async function runResume(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Pro
     branchProc.exited,
   ]);
   const branch = branchOut.trim();
-  if (branchExit !== 0 || !branch.startsWith("autoresearch/")) {
+  if (branchExit !== 0 || !branch.startsWith(AUTORESEARCH_SLUG_PREFIX)) {
     throw new Error(
       `Not inside an autoresearch worktree (current branch: '${branch}'). Use \`shaka autoresearch resume <slug>\` from the source repo instead.`,
-    );
-  }
-
-  if (!(await isCleanExcept(JSONL_EXCLUDES, cfg.cwd))) {
-    throw new Error(
-      `Worktree has unrelated local edits — refusing to resume because the next iteration would either commit them as the agent's work or revert them. Commit, stash, or discard them first, then retry.`,
     );
   }
 

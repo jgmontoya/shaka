@@ -45,6 +45,21 @@ describe("renderStatus", () => {
     };
     expect(renderStatus(state)).toBe(renderStatus(state));
   });
+
+  // Defensive: the type says `number` but before the first benchmark completes,
+  // runtime drift could put NaN into baseline/best/currentMetric. Rendering
+  // "best NaN (base NaN)" would be embarrassing. Use a sentinel instead.
+  test("renders a sentinel for non-finite metric values", () => {
+    const out = renderStatus({
+      iter: 0,
+      kept: 0,
+      discarded: 0,
+      baseline: Number.NaN,
+      best: Number.POSITIVE_INFINITY,
+      currentMetric: Number.NEGATIVE_INFINITY,
+    });
+    expect(out).toContain("best — (base —) | cur —");
+  });
 });
 
 describe("shouldRenderWidget", () => {

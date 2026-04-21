@@ -20,14 +20,15 @@ test("callOpenCodeCLI requests JSON output via --format json", async () => {
 });
 
 test("callOpenCodeCLI fires-and-forgets opencode session delete with --pure", async () => {
-  // Regex asserts three aspects of the cleanup invariant in one shot:
-  //   1. Bun.spawn (not awaited Bun.$) → fire-and-forget shape
-  //   2. --pure in the cleanup args → recursion safety + speed
-  //   3. "session", "delete" → native subcommand, not direct sqlite
-  // If any of the three regresses, the shape that protects the user
-  // from cluttered sessions AND from plugin recursion is broken.
+  // Two assertions for one behavior (fire-and-forget native cleanup):
+  //   1. The spawn has the exact argument shape — opencode, --pure, session,
+  //      delete, and sessionId (the variable, not a literal). A looser regex
+  //      would accept `Bun.spawn([..., "ses_abc"])` which regresses correctness.
+  //   2. The spawned child is unref'ed. Without that, the caller's process stays
+  //      alive until cleanup exits, even though we don't await .exited.
   const src = await Bun.file("src/inference.ts").text();
   expect(src).toMatch(
-    /callOpenCodeCLI[\s\S]*?Bun\.spawn[\s\S]*?"--pure"[\s\S]*?"session"[\s\S]*?"delete"/,
+    /Bun\.spawn\(\s*\[\s*"opencode",\s*"--pure",\s*"session",\s*"delete",\s*sessionId\s*\][\s\S]*?\)\.unref\(\)/,
   );
+  expect(src).not.toMatch(/await\s+Bun\.spawn\(\s*\[\s*"opencode"/);
 });
