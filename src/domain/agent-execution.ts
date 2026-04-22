@@ -68,10 +68,23 @@ function runOpencode(opts: AgentExecutionOptions): Promise<AgentExecutionResult>
   return spawnWithStdin("opencode", "opencode", ["run", "--", opts.prompt], "", opts);
 }
 
-/** Run via Codex CLI — --full-auto enables autonomous tool use for workflow steps. */
+/**
+ * Run via Codex CLI — --full-auto enables autonomous tool use for workflow steps.
+ *
+ * When `SHAKA_CODEX_BYPASS_SANDBOX=1` is set, swap --full-auto (which is
+ * `--sandbox workspace-write` under the hood) for `--dangerously-bypass-
+ * approvals-and-sandbox`. This is the opt-in for environments that are ALREADY
+ * externally sandboxed (Docker CI, VMs) where codex's internal Landlock-based
+ * sandbox can't coexist with the outer layer and ends up silently blocking all
+ * file writes. Codex's own help documents the flag's intent: "Intended solely
+ * for running in environments that are externally sandboxed." Never set the
+ * env var on a real user machine.
+ */
 function runCodex(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
+  const bypass = process.env.SHAKA_CODEX_BYPASS_SANDBOX === "1";
+  const sandboxFlag = bypass ? "--dangerously-bypass-approvals-and-sandbox" : "--full-auto";
   // `-` tells `codex exec` to read the prompt from stdin.
-  return spawnWithStdin("codex", "codex", ["exec", "--full-auto", "-"], opts.prompt, opts);
+  return spawnWithStdin("codex", "codex", ["exec", sandboxFlag, "-"], opts.prompt, opts);
 }
 
 /** Spawn a CLI process, optionally piping stdin. */
