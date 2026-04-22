@@ -13,6 +13,7 @@ import {
   type VerdictInput,
   type WidgetState,
   type WizardAnswers,
+  assertOnlySetupDirty,
   buildPrompt,
   classifyVerdict,
   extractAsi,
@@ -1689,5 +1690,61 @@ describe.skipIf(process.platform === "win32")("runBenchmark", () => {
     expect(result.exitCode).toBe(3);
     expect(result.stderr).toContain("boom");
     expect(result.measurement).toBeNull();
+  });
+});
+
+describe("assertOnlySetupDirty", () => {
+  const createdDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const d of createdDirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  async function makeRepo(): Promise<string> {
+    const dir = join(
+      tmpdir(),
+      `shaka-assert-dirty-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    await mkdir(dir, { recursive: true });
+    createdDirs.push(dir);
+    await run(["git", "init", "-q", "-b", "main"], dir);
+    await run(["git", "config", "user.email", "t@t"], dir);
+    await run(["git", "config", "user.name", "t"], dir);
+    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\nexit 1\n");
+    await run(["git", "add", "-A"], dir);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], dir);
+    return dir;
+  }
+
+  test("resolves silently on a clean worktree", async () => {
+    const dir = await makeRepo();
+    await expect(assertOnlySetupDirty(dir)).resolves.toBeUndefined();
+  });
+
+  test("resolves silently when only setup artifacts are dirty", async () => {
+    const dir = await makeRepo();
+    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(
+      join(dir, "autoresearch.md"),
+      "# spec\n\n## Metric\n- direction: minimize\n",
+    );
+    await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
+
+    await expect(assertOnlySetupDirty(dir)).resolves.toBeUndefined();
+  });
+
+  test("throws naming the unrelated path when a non-setup file is dirty", async () => {
+    const dir = await makeRepo();
+    await Bun.write(join(dir, "unrelated.ts"), "export const x = 1;\n");
+
+    await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/unrelated\.ts/);
+  });
+
+  test("throws when unrelated paths coexist with legitimate setup edits", async () => {
+    const dir = await makeRepo();
+    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(join(dir, "rogue.js"), "// rogue\n");
+
+    await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/rogue\.js/);
   });
 });

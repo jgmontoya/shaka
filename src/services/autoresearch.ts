@@ -20,6 +20,7 @@ import {
   commitAll,
   commitAllExcept,
   isCleanExcept,
+  listDirtyPaths,
   listWorktrees,
   revertWorkingTree,
 } from "./git";
@@ -261,6 +262,28 @@ export const SETUP_ARTIFACTS = [
   "autoresearch.sh",
   "autoresearch.checks.sh",
 ] as const;
+
+/**
+ * Ensure the only dirty paths in `worktreePath` are setup artifacts
+ * (`autoresearch.md` / `.sh` / `.checks.sh`). Throws an Error naming every
+ * unrelated path when any other file is dirty; resolves silently when the
+ * worktree is clean or only setup artifacts have changed.
+ *
+ * Delegates porcelain parsing to `listDirtyPaths` so the command and service
+ * layers share one source of truth for dirty-path partitioning.
+ */
+export async function assertOnlySetupDirty(worktreePath: string): Promise<void> {
+  const dirty = await listDirtyPaths(worktreePath);
+  if (dirty.length === 0) return;
+
+  const setupSet = new Set<string>(SETUP_ARTIFACTS);
+  const unrelated = dirty.filter((path) => !setupSet.has(path));
+  if (unrelated.length > 0) {
+    throw new Error(
+      `Unrelated changes in worktree after editor session: ${unrelated.join(", ")}. Commit or stash them before continuing, then run \`shaka autoresearch resume\`.`,
+    );
+  }
+}
 
 /**
  * Return true iff the agent touched any setup artifact this iteration — whether

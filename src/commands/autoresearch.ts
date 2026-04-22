@@ -15,6 +15,7 @@ import {
   type LoopState,
   SETUP_ARTIFACTS,
   type WizardAnswers,
+  assertOnlySetupDirty,
   findExperimentWorktree,
   resolveResumeTarget,
   runLoop,
@@ -83,13 +84,7 @@ export async function commitFinalizeIfDirty(worktreePath: string): Promise<void>
   const dirty = await listDirtyPaths(worktreePath);
   if (dirty.length === 0) return;
 
-  const setupSet = new Set<string>(SETUP_ARTIFACTS);
-  const unrelated = dirty.filter((path) => !setupSet.has(path));
-  if (unrelated.length > 0) {
-    throw new Error(
-      `Unrelated changes in worktree after editor session: ${unrelated.join(", ")}. Commit or stash them before continuing, then run \`shaka autoresearch resume\`.`,
-    );
-  }
+  await assertOnlySetupDirty(worktreePath);
 
   for (const artifact of SETUP_ARTIFACTS) {
     if (!artifact.endsWith(".sh")) continue;
