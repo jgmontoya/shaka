@@ -272,7 +272,9 @@ async function runStart(objective: string, opts: LoopFlags): Promise<void> {
   const providers = resolveProviders(detectInstalledProviders(), opts.provider);
 
   const answers = await maybeRunWizard(objective, repoRoot);
-  const setup = await setupWorkspace({ repoRoot, objective, answers });
+  const setup = answers
+    ? await setupWorkspace({ repoRoot, objective, templateMode: "wizard", answers })
+    : await setupWorkspace({ repoRoot, objective, templateMode: "todo" });
   console.log(`\nWorktree: ${setup.worktreePath}`);
   console.log(`Branch:   ${setup.branch}`);
 

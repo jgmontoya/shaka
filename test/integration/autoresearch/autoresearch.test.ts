@@ -53,7 +53,11 @@ describe("autoresearch walking skeleton", () => {
     const sourceBranch = await sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo);
 
     // ── Setup: creates worktree + templates + setup commit ───────────────
-    const setup = await setupWorkspace({ repoRoot: repo, objective: "make tests fast" });
+    const setup = await setupWorkspace({
+      repoRoot: repo,
+      objective: "make tests fast",
+      templateMode: "todo",
+    });
 
     // Overwrite the TODO template with one that has a real direction so runLoop
     // can parse it — real users edit the template or let the wizard populate it.

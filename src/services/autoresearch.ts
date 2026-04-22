@@ -916,30 +916,66 @@ async function sourceIsCleanEnough(repoRoot: string): Promise<boolean> {
 }
 
 /**
+ * Controls whether `setupWorkspace` renders setup templates and, if so, from
+ * which source.
+ *
+ * - `"wizard"`: render from caller-supplied `WizardAnswers` (interactive
+ *   six-question path).
+ * - `"todo"`: render from the built-in TODO_ANSWERS stencil (non-TTY
+ *   placeholder path — the user finalizes the `METRIC` emission by hand).
+ * - `"defer"`: skip template rendering and file writing entirely. The worktree
+ *   is created with inherited HEAD contents only. Used by full-auto setup
+ *   where an interactive agent produces the files after the worktree exists.
+ */
+export type SetupWorkspaceArgs =
+  | {
+      readonly repoRoot: string;
+      readonly objective: string;
+      readonly templateMode: "wizard";
+      readonly answers: WizardAnswers;
+    }
+  | {
+      readonly repoRoot: string;
+      readonly objective: string;
+      readonly templateMode: "todo" | "defer";
+    };
+
+/**
  * Prepare a worktree for a new autoresearch experiment.
  *
  * Aborts if the source repo has tracked modifications — those would be
  * invisible inside the worktree and the user would likely lose track of
  * them. Untracked files are tolerated (they're already self-evident in the
  * user's `git status`).
+ *
+ * Template handling is controlled by `templateMode`:
+ * - `"wizard"` renders from `args.answers`.
+ * - `"todo"` renders from the TODO stencil using `args.objective`.
+ * - `"defer"` skips template rendering and the `autoresearch: setup` commit
+ *   entirely. Any `autoresearch.{md,sh,checks.sh}` inherited from the source
+ *   repo's HEAD survives untouched; the caller is responsible for authoring
+ *   missing files before the loop runs.
  */
-export async function setupWorkspace(args: {
-  readonly repoRoot: string;
-  readonly objective: string;
-  /** Wizard answers. When absent, generated files carry TODO markers. */
-  readonly answers?: WizardAnswers;
-}): Promise<SetupResult> {
+export async function setupWorkspace(args: SetupWorkspaceArgs): Promise<SetupResult> {
   if (!(await sourceIsCleanEnough(args.repoRoot))) {
     throw new Error(
       "Source repo has uncommitted changes. Commit or stash before starting autoresearch.",
     );
   }
 
-  const answers = args.answers ?? { ...TODO_ANSWERS, objective: args.objective };
-  const rendered = renderTemplates(answers);
   const slug = slugify(args.objective);
   const branch = `autoresearch/${slug}`;
   const worktreePath = join(dirname(args.repoRoot), `${basename(args.repoRoot)}.ar-${slug}`);
+
+  // Render templates up-front (outside the try/catch) when needed, so invalid
+  // wizard answers fail before we mutate the repo with a worktree we'd then
+  // have to clean up.
+  const rendered =
+    args.templateMode === "defer"
+      ? null
+      : args.templateMode === "wizard"
+        ? renderTemplates(args.answers)
+        : renderTemplates({ ...TODO_ANSWERS, objective: args.objective });
 
   try {
     await addWorktree(worktreePath, branch, args.repoRoot);
@@ -948,6 +984,13 @@ export async function setupWorkspace(args: {
       `An experiment worktree at '${worktreePath}' already exists. Use \`shaka autoresearch resume\` to continue it, or \`git worktree remove\` if abandoned.`,
       { cause: err },
     );
+  }
+
+  // Defer mode: worktree only. The setup agent authors files afterwards; any
+  // templates already tracked at HEAD are inherited into the worktree and
+  // left alone by the caller's dirty-gate discipline.
+  if (rendered === null) {
+    return { slug, branch, worktreePath };
   }
 
   // Auto-generate templates when absent. When they already exist (e.g. user

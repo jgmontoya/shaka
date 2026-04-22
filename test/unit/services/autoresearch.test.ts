@@ -1253,7 +1253,11 @@ describe("setupWorkspace", () => {
   test("happy path: creates worktree, branch, auto-gen templates, setup commit", async () => {
     const repo = await makeSourceRepo();
 
-    const result = await setupWorkspace({ repoRoot: repo, objective: "speed up tests" });
+    const result = await setupWorkspace({
+      repoRoot: repo,
+      objective: "speed up tests",
+      templateMode: "todo",
+    });
 
     expect(result.slug).toBe("speed-up-tests");
     expect(result.branch).toBe("autoresearch/speed-up-tests");
@@ -1285,26 +1289,30 @@ describe("setupWorkspace", () => {
     // Modify the tracked file
     await Bun.write(join(repo, ".gitkeep"), "modified");
 
-    await expect(setupWorkspace({ repoRoot: repo, objective: "whatever" })).rejects.toThrow(
-      /uncommitted changes/i,
-    );
+    await expect(
+      setupWorkspace({ repoRoot: repo, objective: "whatever", templateMode: "todo" }),
+    ).rejects.toThrow(/uncommitted changes/i);
   });
 
   test("tolerates untracked files in the source repo", async () => {
     const repo = await makeSourceRepo();
     await Bun.write(join(repo, "scratch.txt"), "untracked fine");
 
-    const result = await setupWorkspace({ repoRoot: repo, objective: "ok" });
+    const result = await setupWorkspace({
+      repoRoot: repo,
+      objective: "ok",
+      templateMode: "todo",
+    });
     expect(await Bun.file(join(result.worktreePath, "autoresearch.md")).exists()).toBe(true);
   });
 
   test("rejects a collision when the branch already exists", async () => {
     const repo = await makeSourceRepo();
-    await setupWorkspace({ repoRoot: repo, objective: "dupe" });
+    await setupWorkspace({ repoRoot: repo, objective: "dupe", templateMode: "todo" });
 
-    await expect(setupWorkspace({ repoRoot: repo, objective: "dupe" })).rejects.toThrow(
-      /already exists/i,
-    );
+    await expect(
+      setupWorkspace({ repoRoot: repo, objective: "dupe", templateMode: "todo" }),
+    ).rejects.toThrow(/already exists/i);
   });
 
   test("validates rendered templates before creating a worktree", async () => {
@@ -1320,13 +1328,77 @@ describe("setupWorkspace", () => {
     };
 
     await expect(
-      setupWorkspace({ repoRoot: repo, objective: answers.objective, answers }),
+      setupWorkspace({
+        repoRoot: repo,
+        objective: answers.objective,
+        templateMode: "wizard",
+        answers,
+      }),
     ).rejects.toThrow(/metric unit/i);
 
     expect(await gitOutput(["worktree", "list", "--porcelain"], repo)).not.toContain(
       "autoresearch/invalid-unit",
     );
     expect(await gitOutput(["branch", "--list", "autoresearch/invalid-unit"], repo)).toBe("");
+  });
+
+  test("defer mode creates the worktree but writes no setup templates", async () => {
+    const repo = await makeSourceRepo();
+
+    const result = await setupWorkspace({
+      repoRoot: repo,
+      objective: "deferred setup",
+      templateMode: "defer",
+    });
+
+    // Worktree + branch exist
+    expect(result.slug).toBe("deferred-setup");
+    expect(result.branch).toBe("autoresearch/deferred-setup");
+    expect(await Bun.file(join(result.worktreePath, ".git")).exists()).toBe(true);
+
+    // No setup templates were authored
+    expect(await Bun.file(join(result.worktreePath, "autoresearch.md")).exists()).toBe(false);
+    expect(await Bun.file(join(result.worktreePath, "autoresearch.sh")).exists()).toBe(false);
+    expect(await Bun.file(join(result.worktreePath, "autoresearch.checks.sh")).exists()).toBe(
+      false,
+    );
+
+    // No "autoresearch: setup" commit landed — the worktree's HEAD is the
+    // inherited init commit, not a setup commit. Nothing was written so there
+    // is nothing to commit.
+    const lastMsg = (await gitOutput(["log", "-1", "--format=%s"], result.worktreePath)).trim();
+    expect(lastMsg).toBe("init");
+  });
+
+  test("defer mode preserves pre-existing tracked templates at HEAD", async () => {
+    // Corner case per full-auto Phase 0: if the source repo already tracks
+    // autoresearch.md / .sh / .checks.sh, the worktree inherits them and
+    // defer mode must leave them alone (no overwrite, no extra commit).
+    const repo = await makeSourceRepo();
+
+    const trackedSpec = "# Inherited\n\n## Metric\n- direction: minimize\n- unit: s\n";
+    const trackedSh = "#!/usr/bin/env sh\necho 'METRIC name=x value=1 unit=s'\n";
+    await Bun.write(join(repo, "autoresearch.md"), trackedSpec);
+    await Bun.write(join(repo, "autoresearch.sh"), trackedSh);
+    await run(["git", "add", "-A"], repo);
+    await run(
+      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "seed templates"],
+      repo,
+    );
+
+    const result = await setupWorkspace({
+      repoRoot: repo,
+      objective: "inherit please",
+      templateMode: "defer",
+    });
+
+    // Inherited templates survive byte-for-byte
+    expect(await Bun.file(join(result.worktreePath, "autoresearch.md")).text()).toBe(trackedSpec);
+    expect(await Bun.file(join(result.worktreePath, "autoresearch.sh")).text()).toBe(trackedSh);
+
+    // Still no setup commit — nothing was written
+    const lastMsg = (await gitOutput(["log", "-1", "--format=%s"], result.worktreePath)).trim();
+    expect(lastMsg).toBe("seed templates");
   });
 });
 
@@ -1356,7 +1428,11 @@ describe("runResume (in-worktree)", () => {
 
   test("continues from a worktree with prior jsonl state", async () => {
     const repo = await makeSourceRepo();
-    const setup = await setupWorkspace({ repoRoot: repo, objective: "continue me" });
+    const setup = await setupWorkspace({
+      repoRoot: repo,
+      objective: "continue me",
+      templateMode: "todo",
+    });
 
     // Replace template md with a parseable spec
     await Bun.write(
@@ -1422,7 +1498,11 @@ describe("runResume (in-worktree)", () => {
 
   test("rejects a worktree missing autoresearch.md", async () => {
     const repo = await makeSourceRepo();
-    const setup = await setupWorkspace({ repoRoot: repo, objective: "missing md" });
+    const setup = await setupWorkspace({
+      repoRoot: repo,
+      objective: "missing md",
+      templateMode: "todo",
+    });
     // Remove autoresearch.md — simulates a broken setup
     await rm(join(setup.worktreePath, "autoresearch.md"), { force: true });
     await run(["git", "add", "-A"], setup.worktreePath);
@@ -1440,7 +1520,11 @@ describe("runResume (in-worktree)", () => {
     // Regression: runResume's docstring requires the spec to be TRACKED at HEAD
     // — an untracked file on disk must not count as a valid experiment.
     const repo = await makeSourceRepo();
-    const setup = await setupWorkspace({ repoRoot: repo, objective: "untracked md" });
+    const setup = await setupWorkspace({
+      repoRoot: repo,
+      objective: "untracked md",
+      templateMode: "todo",
+    });
     // Remove the file from HEAD, then drop it back on disk as untracked
     await rm(join(setup.worktreePath, "autoresearch.md"), { force: true });
     await run(["git", "add", "-A"], setup.worktreePath);
@@ -1538,8 +1622,8 @@ describe("experiment worktree discovery", () => {
 
   test("findExperimentWorktree enumerates autoresearch/* worktrees only", async () => {
     const repo = await makeSourceRepo();
-    await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const experiments = await findExperimentWorktree(repo);
     expect(experiments.map((e) => e.slug).sort()).toEqual(["alpha", "beta"]);
@@ -1549,8 +1633,8 @@ describe("experiment worktree discovery", () => {
 
   test("resolveExperimentWorktree finds a worktree by slug", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const resolved = await resolveExperimentWorktree(repo, "alpha");
     const realAlpha = await realpath(alpha.worktreePath);
@@ -1561,7 +1645,11 @@ describe("experiment worktree discovery", () => {
 
   test("resolveExperimentWorktree with no slug picks the unique experiment", async () => {
     const repo = await makeSourceRepo();
-    const only = await setupWorkspace({ repoRoot: repo, objective: "solo" });
+    const only = await setupWorkspace({
+      repoRoot: repo,
+      objective: "solo",
+      templateMode: "todo",
+    });
 
     const resolved = await resolveExperimentWorktree(repo, undefined);
     const realOnly = await realpath(only.worktreePath);
@@ -1570,8 +1658,8 @@ describe("experiment worktree discovery", () => {
 
   test("resolveExperimentWorktree errors clearly when slug is ambiguous", async () => {
     const repo = await makeSourceRepo();
-    await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     await expect(resolveExperimentWorktree(repo, undefined)).rejects.toThrow(
       /multiple autoresearch experiments/i,
@@ -1580,15 +1668,15 @@ describe("experiment worktree discovery", () => {
 
   test("resolveExperimentWorktree errors when slug doesn't exist", async () => {
     const repo = await makeSourceRepo();
-    await setupWorkspace({ repoRoot: repo, objective: "alpha" });
+    await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
 
     await expect(resolveExperimentWorktree(repo, "nope")).rejects.toThrow(/no autoresearch/i);
   });
 
   test("resolveResumeTarget returns the worktree path when cwd is inside it", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     // Inside the alpha worktree — even with no slug specified, we should get alpha.
     const target = await resolveResumeTarget(alpha.worktreePath, repo, undefined);
@@ -1598,8 +1686,8 @@ describe("experiment worktree discovery", () => {
 
   test("resolveResumeTarget resolves from a nested cwd inside the worktree", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const nested = join(alpha.worktreePath, "src", "deep");
     await mkdir(nested, { recursive: true });
@@ -1611,8 +1699,8 @@ describe("experiment worktree discovery", () => {
 
   test("resolveResumeTarget honors an explicit slug over the current worktree", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha" });
-    const beta = await setupWorkspace({ repoRoot: repo, objective: "beta" });
+    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    const beta = await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const target = await resolveResumeTarget(alpha.worktreePath, repo, "beta");
     const realBeta = await realpath(beta.worktreePath);
