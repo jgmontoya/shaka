@@ -10,10 +10,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
-- **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. An interactive wizard captures the benchmark command, metric direction and unit, files in scope, constraints, and an optional correctness gate, then generates `autoresearch.md` and `autoresearch.sh` as the run contract. Works with Claude Code, opencode, and Codex; pick one with `--provider` or let Shaka detect what's installed
+- **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. By default, Shaka hands your terminal to your installed provider CLI's interactive TUI (Claude Code, opencode, or Codex) with a setup agent seeded by the new `AutoresearchSetup` skill; the agent authors `autoresearch.md` + `autoresearch.sh` + optional `autoresearch.checks.sh` while you watch, Shaka validates the result on disk, and the loop starts when you `/exit` (or Ctrl-D). Pick a backend with `--provider <name>` (claude / opencode / codex) or let Shaka use the first it detects
+  - `--oneshot` — run the setup agent non-interactively (no TUI handoff). Useful for unattended queues, CI, or unambiguous objectives; bypasses the TTY requirement
+  - `--dry-run` — generate + validate the setup but stop before committing or entering the loop. Prints the worktree path and the generated `autoresearch.sh` for review; pick up later with `shaka autoresearch resume <slug>`
+  - `--wizard` — opt out of the agent-driven default and use the original six-question hand-fill wizard + TODO-template flow. Handy if no provider is installed or you'd rather author the setup manually
 - **Resume and inspect** — `shaka autoresearch resume` continues the current experiment from any directory inside its worktree (pass a slug to disambiguate across multiple actives). `shaka autoresearch status` lists active, locked, and prunable experiments with their latest metric
 - **Live progress widget** — TTY sessions show a one-line in-place status (iteration, kept/discarded, current best). Ctrl+C pauses between iterations and exits with code 130 so shell wrappers can distinguish interruption from clean completion
-- **Stop conditions** — `--max-iterations` and `--stop-after` (consecutive discards) bound the loop; otherwise it runs until you interrupt
+- **Stop conditions** — `--max-iterations` and `--stop-after` (consecutive discards) bound the loop; otherwise it runs until you interrupt. Both caps are cumulative across `start` + `resume`
+- **Experiment skill** — Default skill packaging the hypothesis → method → findings structure so the assistant uses a consistent shape for spikes, A/B tests, and uncertainty-reducing work. Installed alongside the other system skills on `shaka init`
+
+### Changed
+
+- **`SHAKA_CODEX_BYPASS_SANDBOX=1`** — opt-in env var the codex shim in `runAgentStep` now honors. When set, swaps codex's `--full-auto` (`--sandbox workspace-write`) for `--dangerously-bypass-approvals-and-sandbox`. Intended solely for environments that are ALREADY externally sandboxed (Docker CI, VMs) where codex's internal Landlock layer silently blocks file writes when nested. Leave unset on a real user machine
 
 ### Fixed
 
