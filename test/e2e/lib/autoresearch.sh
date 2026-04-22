@@ -205,3 +205,153 @@ EOF
   # Cleanup
   cleanup_autoresearch
 }
+
+# Autoresearch --oneshot e2e — exercises the full-auto non-interactive path.
+#
+# Unlike run_autoresearch_e2e (which pre-commits a finalized spec and uses
+# --wizard to bypass the TTY guard), this test ships ONLY the target file at
+# HEAD and lets the setup agent author autoresearch.md + autoresearch.sh via
+# --oneshot. Covers the entire full-auto contract: objective → agent-authored
+# setup → validation gate → commit → loop.
+#
+# Real LLM cost: one setup call + one loop iteration per invocation. Bounded
+# to --max-iterations 1 so providers don't rack up a big token bill in CI.
+#
+# Usage (mirrors run_autoresearch_e2e):
+#   source test/e2e/lib/autoresearch.sh
+#   run_autoresearch_oneshot_e2e <expected-provider-name>
+
+run_autoresearch_oneshot_e2e() {
+  local provider="$1"
+  local ar_root="/tmp/ar-e2e-oneshot-${provider}"
+  local ar_wt="${ar_root}.ar-measure-slow-sh-runtime-in-ms"
+  local prev_pwd="$PWD"
+
+  cleanup_oneshot() {
+    cd "$prev_pwd" >/dev/null 2>&1 || true
+    git -C "$ar_root" worktree remove "$ar_wt" --force >/dev/null 2>&1 || true
+    git -C "$ar_root" branch -D autoresearch/measure-slow-sh-runtime-in-ms >/dev/null 2>&1 || true
+    rm -rf "$ar_root" "$ar_wt"
+  }
+
+  fail_oneshot() {
+    cleanup_oneshot
+    return 1
+  }
+
+  section "Autoresearch (--oneshot)"
+
+  # Scratch repo with ONLY the target file — no spec, no harness. The agent
+  # authors them from the objective.
+  rm -rf "$ar_root" "$ar_wt"
+  mkdir "$ar_root"
+  cd "$ar_root" || { fail "cannot cd to $ar_root"; fail_oneshot; return $?; }
+
+  git init -q -b main
+  git config user.email ar@shaka
+  git config user.name ar
+
+  # Optimization target — an obvious sleep the agent can remove or shorten.
+  cat > slow.sh <<'EOF'
+#!/bin/sh
+sleep 0.3
+EOF
+  chmod +x slow.sh
+
+  git add -A
+  git -c commit.gpgSign=false commit -q -m "target"
+
+  echo "  Running: shaka autoresearch start 'Measure slow.sh runtime in ms' --oneshot --provider $provider --max-iterations 1"
+  # --oneshot bypasses the non-TTY guard and invokes the setup agent via
+  # runAgentStep (no TUI handoff). The agent authors autoresearch.md + .sh
+  # from the objective; validateSetup gates commit; loop runs 1 iteration.
+  #
+  # Capture the exit status so real failures don't get masked by `|| true`.
+  local ar_status=0
+  shaka autoresearch start "Measure slow.sh runtime in ms" \
+    --oneshot --provider "$provider" --max-iterations 1 >/tmp/ar-oneshot.log 2>&1 || ar_status=$?
+  if [ "$ar_status" -ne 0 ]; then
+    fail "autoresearch --oneshot failed (exit $ar_status)"
+    tail -40 /tmp/ar-oneshot.log
+    fail_oneshot
+    return $?
+  fi
+
+  if [ -d "$ar_wt" ]; then
+    pass "experiment worktree created at $ar_wt"
+  else
+    fail "experiment worktree missing"
+    tail -40 /tmp/ar-oneshot.log
+    fail_oneshot
+    return $?
+  fi
+
+  # Setup artifacts — the agent authored these. We assert they exist and
+  # are non-empty; content quality is enforced by validateSetup (which
+  # already ran; if it had failed, shaka would have exited non-zero above).
+  if [ -s "$ar_wt/autoresearch.md" ]; then
+    pass "autoresearch.md authored by agent"
+  else
+    fail "autoresearch.md missing or empty"
+    fail_oneshot
+    return $?
+  fi
+
+  if [ -x "$ar_wt/autoresearch.sh" ]; then
+    pass "autoresearch.sh authored and executable"
+  else
+    fail "autoresearch.sh missing or not executable"
+    fail_oneshot
+    return $?
+  fi
+
+  # Setup should have been committed by commitFinalizeIfDirty with the
+  # agent-generated message. Presence of that subject is the provenance
+  # check — distinguishes agent-authored setups from wizard-finalized ones.
+  local setup_commit_subject
+  setup_commit_subject=$(git -C "$ar_wt" log --format=%s --all \
+    --grep="autoresearch: finalize agent-generated setup" -1 2>/dev/null || true)
+  if [ -n "$setup_commit_subject" ]; then
+    pass "agent-generated setup committed"
+  else
+    fail "no commit with 'autoresearch: finalize agent-generated setup' subject in worktree"
+    git -C "$ar_wt" log --oneline -5
+    fail_oneshot
+    return $?
+  fi
+
+  # Loop ran — jsonl has at least one entry, attributed to the forced provider.
+  local ar_jsonl="$ar_wt/autoresearch.jsonl"
+  if [ ! -f "$ar_jsonl" ]; then
+    fail "autoresearch.jsonl not created (loop never ran?)"
+    tail -40 /tmp/ar-oneshot.log
+    fail_oneshot
+    return $?
+  fi
+
+  local entries
+  entries=$(wc -l < "$ar_jsonl" | tr -d ' ')
+  if [ "$entries" -ge 1 ]; then
+    pass "at least one loop iteration recorded ($entries)"
+  else
+    fail "expected ≥1 jsonl entry, got $entries"
+    cat "$ar_jsonl"
+    fail_oneshot
+    return $?
+  fi
+
+  local first_entry attributed_provider
+  first_entry=$(sed -n '1p' "$ar_jsonl")
+  attributed_provider=$(echo "$first_entry" | jq -r '.provider' 2>/dev/null)
+  if [ "$attributed_provider" = "$provider" ]; then
+    pass "loop iteration attributed to $provider"
+  else
+    # Hard fail: --provider forced the backend. A mismatch is a routing bug.
+    fail "iteration 1 provider is $attributed_provider (expected '$provider')"
+    fail_oneshot
+    return $?
+  fi
+
+  # Cleanup
+  cleanup_oneshot
+}

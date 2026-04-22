@@ -531,6 +531,7 @@ else
   # shellcheck source=lib/autoresearch.sh
   source "$(dirname "$0")/lib/autoresearch.sh"
   run_autoresearch_e2e codex
+  run_autoresearch_oneshot_e2e codex
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────
