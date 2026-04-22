@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { loadSkill } from "../../../src/services/skills";
 
 describe("loadSkill", () => {
@@ -50,5 +50,18 @@ describe("loadSkill", () => {
     const body = await loadSkill("NonExistent");
 
     expect(body).toBe("");
+  });
+
+  test("resolves shipped AutoresearchSetup skill with expected markers", async () => {
+    // Point SHAKA_HOME at the repo's defaults/ so loadSkill resolves the
+    // committed SKILL.md — verifies the file exists and has stable shape.
+    const defaultsDir = resolve(import.meta.dir, "..", "..", "..", "defaults");
+    process.env.SHAKA_HOME = defaultsDir;
+
+    const body = await loadSkill("AutoresearchSetup");
+
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("Output contract");
+    expect(body).toContain("What's Been Tried");
   });
 });
