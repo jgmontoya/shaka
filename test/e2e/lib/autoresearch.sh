@@ -56,9 +56,11 @@ sleep 0.3
 EOF
   chmod +x slow.sh
 
-  # Finalized spec + benchmark. setupWorkspace sees them tracked at HEAD and
-  # uses them verbatim — no wizard (non-TTY stdin can't drive readline), no
-  # TODO-template abort.
+  # Finalized spec + benchmark. With --wizard (below), setupWorkspace runs in
+  # its non-TTY todo-template mode, inherits these files tracked at HEAD, and
+  # doesn't overwrite — the worktree gets the finalized spec verbatim and the
+  # loop runs. Without --wizard, full-auto's interactive default would hard-
+  # error on the non-TTY guard before touching the worktree.
   cat > autoresearch.md <<'EOF'
 # Autoresearch: drop the sleep
 
@@ -93,7 +95,13 @@ EOF
   git add -A
   git -c commit.gpgSign=false commit -q -m "spec"
 
-  echo "  Running: shaka autoresearch start 'drop the sleep' --provider $provider --max-iterations 2"
+  echo "  Running: shaka autoresearch start 'drop the sleep' --wizard --provider $provider --max-iterations 2"
+  # `--wizard` opts out of the interactive full-auto default — this test ships
+  # a finalized spec at HEAD and just wants to exercise the loop, not author
+  # setup via a provider TUI. Without the flag, `runFullAutoStart` hard-errors
+  # on the non-TTY guard (bash-script stdin isn't a TTY) before the loop ever
+  # runs.
+  #
   # Force the provider under test. Without --provider, Shaka auto-detects,
   # which on multi-CLI boxes (the common user) can silently exercise the
   # wrong backend and turn the per-entry provider check below into a false
@@ -104,7 +112,7 @@ EOF
   # artifacts. Fail loudly with the log so real regressions don't slip
   # through the post-condition checks below.
   local ar_status=0
-  shaka autoresearch start "drop the sleep" --provider "$provider" --max-iterations 2 >/tmp/ar.log 2>&1 || ar_status=$?
+  shaka autoresearch start "drop the sleep" --wizard --provider "$provider" --max-iterations 2 >/tmp/ar.log 2>&1 || ar_status=$?
   if [ "$ar_status" -ne 0 ]; then
     fail "autoresearch start failed (exit $ar_status)"
     tail -30 /tmp/ar.log
