@@ -10,7 +10,6 @@
 import { chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
-import { resolveShakaHome } from "../domain/config";
 import {
   type ExperimentWorktree,
   type LoopState,
@@ -30,25 +29,8 @@ import {
   type ProviderName,
   detectInstalledProviders,
 } from "../services/provider-detection";
+import { loadSkill } from "../services/skills";
 import { readlineAsk, runWizard } from "./autoresearch-wizard";
-
-/**
- * Load the Autoresearch skill body. Customization wins over the shipped
- * default, matching Shaka's resolution order everywhere else. Empty string
- * when neither exists — the runner tolerates an empty skill.
- */
-async function loadAutoresearchSkill(): Promise<string> {
-  const shakaHome = resolveShakaHome();
-  const candidates = [
-    join(shakaHome, "customizations", "skills", "Autoresearch", "SKILL.md"),
-    join(shakaHome, "system", "skills", "Autoresearch", "SKILL.md"),
-  ];
-  for (const path of candidates) {
-    const file = Bun.file(path);
-    if (await file.exists()) return file.text();
-  }
-  return "";
-}
 
 async function resolveRepoRoot(cwd: string): Promise<string | null> {
   const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
@@ -307,7 +289,7 @@ async function runStart(objective: string, opts: LoopFlags): Promise<void> {
     if (!finalized) return;
   }
 
-  const skillContent = await loadAutoresearchSkill();
+  const skillContent = await loadSkill("Autoresearch");
   const controller = new AbortController();
   const widget = buildOnTick();
   try {
@@ -350,7 +332,7 @@ async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Prom
   // before the loop gets a chance to silently commit or revert them.
   await commitFinalizeIfDirty(targetCwd);
 
-  const skillContent = await loadAutoresearchSkill();
+  const skillContent = await loadSkill("Autoresearch");
   const controller = new AbortController();
   const widget = buildOnTick();
   try {
