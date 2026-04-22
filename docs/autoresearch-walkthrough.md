@@ -38,62 +38,27 @@ Worktree: /path/to/project.ar-cut-prime-count-from-80ms
 Branch:   autoresearch/cut-prime-count-from-80ms
 ```
 
-Shaka creates a git worktree next to your repo and switches to a new branch. Your main checkout is untouched.
+Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, or codex) with a setup agent seeded by the `AutoresearchSetup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
 
-Because we started fresh, the runner auto-generates `autoresearch.md` and `autoresearch.sh` as templates with TODO markers. The first iteration can't run yet — the template `autoresearch.sh` exits with `# TODO: replace with real benchmark` and exit code 1, which triggers a `crash` and aborts with:
+- `autoresearch.md` — the spec (metric name, direction, unit, which benchmark is being wrapped)
+- `autoresearch.sh` — the executable harness that emits one `METRIC name=... value=... unit=...` line on stdout
+- `autoresearch.checks.sh` — optional correctness gate
 
-> Baseline benchmark failed (exit 1). `autoresearch.sh` has a TODO marker — edit it and run `shaka autoresearch resume`.
+If your objective is ambiguous (e.g. "make it faster" in a repo with two plausible benchmarks), the agent asks you in the TUI. When it's done, type `/exit` or Ctrl-D and control returns to Shaka.
 
-Edit `autoresearch.md` to describe the run:
+Shaka then **validates the setup independently** — agent success text is never enough. The validation gate checks that `autoresearch.md` parses, `./autoresearch.sh` exits 0 and emits a parseable METRIC line, any `autoresearch.checks.sh` passes against the baseline, and only setup artifacts are dirty. If validation passes, Shaka commits the setup with message `autoresearch: finalize agent-generated setup` and enters the optimization loop. If it fails, Shaka prints a diagnostic naming the failing phase (`spec` / `benchmark` / `checks` / `dirty`), leaves the worktree on disk, and exits — you can inspect, fix by hand if you like, or re-run with a more specific objective.
 
-```markdown
-# Autoresearch: cut prime count from 80ms to <5ms
+### Opt-outs and overrides
 
-## Objective
+- `--wizard` — skip the agent-driven path entirely and use the original six-question wizard + TODO-template flow. Useful in environments without an installed agent provider, or if you prefer to author the setup by hand.
+- `--dry-run` — run the interactive setup + validation but don't commit and don't enter the loop. Prints the worktree path and the generated `autoresearch.sh` for review; pick up later with `shaka autoresearch resume <slug>`. Rejected in combination with `--wizard`.
+- `--provider <name>` — force a specific provider (`claude`, `opencode`, or `codex`) when multiple are installed. Default resolution: claude → opencode → codex.
 
-Speed up countPrimesUpTo(50000) while preserving the exact answer (5133).
+### When the default can't run
 
-## Metric
+The full-auto default needs a TTY (interactive handoff to the provider CLI). If you run `shaka autoresearch start` in a non-TTY context — CI, a bash pipeline with redirected stdin, `ssh -T` — it fails with an actionable error pointing at `--wizard`. The loop itself still runs unattended once setup is done; only setup is interactive.
 
-- command: `./autoresearch.sh`
-- unit: ms
-- direction: minimize
-- baseline: 80.0
-
-## Files in scope
-
-- slow.ts
-
-## Off-limits
-
-- autoresearch.*
-
-## Constraints
-
-- must print `Primes found: 5133`
-```
-
-Edit `autoresearch.sh` so it actually runs the benchmark:
-
-```sh
-#!/usr/bin/env sh
-set -e
-bun run slow.ts
-```
-
-Create an optional correctness gate at `autoresearch.checks.sh`:
-
-```sh
-#!/usr/bin/env sh
-bun run slow.ts | grep -q "Primes found: 5133"
-```
-
-Make them executable (`chmod +x autoresearch.sh autoresearch.checks.sh`) and resume:
-
-```bash
-$ shaka autoresearch resume
-Resuming: /path/to/project.ar-cut-prime-count-from-80ms
-```
+If no provider CLI is installed, the default fails the same way. Run `shaka init` to install one, or use `--wizard` to author the setup by hand.
 
 ## The loop
 
