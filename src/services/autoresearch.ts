@@ -7,7 +7,7 @@
  * workflow.
  */
 
-import { chmod, realpath, rm } from "node:fs/promises";
+import { appendFile, chmod, realpath, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   type AgentExecutionOptions,
@@ -293,22 +293,26 @@ export async function assertOnlySetupDirty(worktreePath: string): Promise<void> 
  * only sees tracked changes and silently misses new untracked files.
  */
 async function setupArtifactsDirty(cwd: string): Promise<boolean> {
-  const proc = Bun.spawn(["git", "status", "--porcelain", "--", ...SETUP_ARTIFACTS], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
+  // `--ignored=matching` so a setup artifact matching a .gitignore pattern
+  // (e.g. the user's repo ignores `*.sh`) is still reported as dirty —
+  // otherwise defaultChecks would keep running autoresearch.checks.sh while
+  // tamper detection silently missed edits to it.
+  const proc = Bun.spawn(
+    ["git", "status", "--porcelain", "--ignored=matching", "--", ...SETUP_ARTIFACTS],
+    { cwd, stdout: "pipe", stderr: "pipe" },
+  );
   const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
   if (code !== 0) throw new Error(`git status failed in ${cwd} while checking setup artifacts`);
   return out.trim().length > 0;
 }
 
 async function defaultAppendLog(cwd: string, entry: LogEntry): Promise<void> {
+  // Append via POSIX O_APPEND (atomic up to PIPE_BUF for a single line) so
+  // a mid-write crash can't truncate the existing log. The prior read-
+  // modify-write via Bun.write truncated the file on open, which meant an
+  // interrupted write lost all history, not just the in-flight line.
   const line = `${JSON.stringify(entry)}\n`;
-  const path = join(cwd, JSONL_FILE);
-  const file = Bun.file(path);
-  const prev = (await file.exists()) ? await file.text() : "";
-  await Bun.write(path, prev + line);
+  await appendFile(join(cwd, JSONL_FILE), line, "utf8");
 }
 
 /** Run the benchmark script at `<cwd>/autoresearch.sh` and parse its METRIC output. */
@@ -1187,34 +1191,40 @@ export interface ExperimentWorktree {
  * `worktrees/<id>` metadata directory.
  */
 async function isLinkedWorktree(worktreePath: string): Promise<boolean> {
-  const proc = Bun.spawn(["git", "rev-parse", "--git-dir", "--git-common-dir"], {
-    cwd: worktreePath,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [out, , code] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-  if (code !== 0) {
+  // Bun.spawn throws ENOENT when cwd points to a deleted/invalid directory
+  // (stale git worktree metadata pointing at a path the user rm-rf'd). Without
+  // the try/catch, one stale entry rejects findExperimentWorktree's
+  // Promise.all and blocks discovery/resume for every OTHER experiment.
+  try {
+    const proc = Bun.spawn(["git", "rev-parse", "--git-dir", "--git-common-dir"], {
+      cwd: worktreePath,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [out, , code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    if (code !== 0) return false;
+
+    const [gitDirRaw, commonDirRaw] = out
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!gitDirRaw || !commonDirRaw) return false;
+
+    const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(worktreePath, gitDirRaw);
+    const commonDir = isAbsolute(commonDirRaw) ? commonDirRaw : join(worktreePath, commonDirRaw);
+    const [realGitDir, realCommonDir] = await Promise.all([
+      realpath(gitDir).catch(() => gitDir),
+      realpath(commonDir).catch(() => commonDir),
+    ]);
+    const rel = relative(join(realCommonDir, "worktrees"), realGitDir);
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  } catch {
     return false;
   }
-
-  const [gitDirRaw, commonDirRaw] = out
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!gitDirRaw || !commonDirRaw) return false;
-
-  const gitDir = isAbsolute(gitDirRaw) ? gitDirRaw : join(worktreePath, gitDirRaw);
-  const commonDir = isAbsolute(commonDirRaw) ? commonDirRaw : join(worktreePath, commonDirRaw);
-  const [realGitDir, realCommonDir] = await Promise.all([
-    realpath(gitDir).catch(() => gitDir),
-    realpath(commonDir).catch(() => commonDir),
-  ]);
-  const rel = relative(join(realCommonDir, "worktrees"), realGitDir);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 /**
