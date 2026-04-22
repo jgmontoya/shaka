@@ -154,4 +154,4 @@ If the experiment produced commits you want to keep, cherry-pick or rebase them 
 - **Propose real headroom.** Bun's JIT already does loop unrolling, bit tricks, and inlining. Micro-optimizations usually lose. The skill nudges the agent toward algorithmic and structural changes; prefer those when you're reviewing hypotheses.
 - **Keep the benchmark fast.** Under ~30s per run is good; longer and each iteration becomes expensive. If your real workload is slower, run a small representative slice.
 - **Use the correctness gate.** Without it, the loop can "optimize" by breaking behavior. `autoresearch.checks.sh` catches hacks the metric alone can't.
-- **The jsonl is local.** It's kept out of commits (pathspec exclude at stage time) and out of revert cleanup (`git clean -e`). Don't commit it by hand — future reverts will drop it.
+- **The jsonl is local.** It's kept out of commits (pathspec exclude at stage time) and out of revert cleanup (`git clean -e`). Reverts preserve it; you don't need to hand-commit it.

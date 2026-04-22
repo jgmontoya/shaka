@@ -7,14 +7,20 @@
 name: autoresearch-setup
 description: Interactive setup agent — produces autoresearch.md + autoresearch.sh + optional autoresearch.checks.sh from a natural-language objective so the loop can run.
 
-# Claude Code — deny network reach only; setup is repo-local.
+# Claude Code — deny the provider's web tools (WebFetch / WebSearch). Note:
+# this does NOT prevent network access via shell (curl, wget, git fetch,
+# package managers remain available under Bash). Shell network use stays
+# possible and is intentional: the agent may need to `bun install` a dep to
+# get a benchmark running. The web-tool denial is about limiting the
+# provider's own browsing surface for setup.
 permissions:
   deny:
     - "WebFetch(domain:*)"
     - "WebSearch"
 
 # OpenCode — primary (not sub-agent); grant edit + bash so the agent can
-# author and self-verify the script. Network denied; setup is repo-local.
+# author and self-verify the script. Provider web tools denied (same scope
+# note as above: shell-based network use is unrestricted).
 mode: primary
 permission:
   edit: allow

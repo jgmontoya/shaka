@@ -1,6 +1,6 @@
 # Full-auto autoresearch setup (default)
 
-**Status:** planning, no code yet
+**Status:** implemented in PR #28; retained as design notes
 **Started:** 2026-04-21
 
 ## Problem
