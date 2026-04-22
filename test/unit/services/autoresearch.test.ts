@@ -1393,9 +1393,13 @@ describe("setupWorkspace", () => {
       templateMode: "defer",
     });
 
-    // Inherited templates survive byte-for-byte
-    expect(await Bun.file(join(result.worktreePath, "autoresearch.md")).text()).toBe(trackedSpec);
-    expect(await Bun.file(join(result.worktreePath, "autoresearch.sh")).text()).toBe(trackedSh);
+    // Inherited templates survive — normalize CRLF on Windows since git's
+    // default core.autocrlf turns LF→CRLF on checkout. The semantic claim
+    // ("defer mode does not rewrite inherited files") holds cross-platform;
+    // only the byte-encoding of line endings differs.
+    const norm = (s: string): string => s.replace(/\r\n/g, "\n");
+    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.md")).text())).toBe(trackedSpec);
+    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.sh")).text())).toBe(trackedSh);
 
     // Still no setup commit — nothing was written
     const lastMsg = (await gitOutput(["log", "-1", "--format=%s"], result.worktreePath)).trim();
