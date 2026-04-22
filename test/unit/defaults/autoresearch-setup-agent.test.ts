@@ -47,5 +47,6 @@ describe("autoresearch-setup agent file", () => {
     expect(ocPerms?.edit).toBe("allow");
     expect(ocPerms?.bash).toBe("allow");
     expect(ocPerms?.webfetch).toBe("deny");
+    expect(ocPerms?.websearch).toBe("deny");
   });
 });

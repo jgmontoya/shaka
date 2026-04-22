@@ -113,3 +113,32 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
     sessionId: null,
   });
 });
+
+test("runSetupOneshot forces the selected provider via DetectedProviders override", async () => {
+  // Regression guard: without the override, runAgentStep falls back to
+  // detectInstalledProviders() and can silently pick a different backend.
+  // Using a non-claude provider makes an unforced routing bug observable —
+  // the captured DetectedProviders should have exactly one true flag.
+  const captured: { detected?: { claude: boolean; opencode: boolean; codex: boolean } }[] = [];
+  const fakeRunAgent = (async (
+    _opts: { prompt: string; cwd?: string; timeout?: number },
+    detected?: { claude: boolean; opencode: boolean; codex: boolean },
+  ) => {
+    captured.push({ detected });
+    return {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      provider: "codex" as const,
+      timedOut: false,
+    };
+  }) as unknown as Parameters<typeof runSetupOneshot>[4] extends infer D
+    ? D extends { readonly runAgent?: infer F }
+      ? F
+      : never
+    : never;
+
+  await runSetupOneshot("/tmp/wt", "obj", "codex", "skill", { runAgent: fakeRunAgent });
+
+  expect(captured[0]?.detected).toEqual({ claude: false, opencode: false, codex: true });
+});

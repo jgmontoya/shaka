@@ -16,10 +16,12 @@ const STUB = resolve(__dirname, "../../fixtures/stub-setup-provider.sh");
 test.skipIf(process.platform === "win32")("runSetupInteractive hands stdio to a real subprocess and leaves artifacts on disk", async () => {
   const dir = await mkdtemp(join(tmpdir(), "shaka-setup-session-"));
   try {
-    // Inject a spawn that redirects any argv to the stub fixture. The orchestrator
-    // still exercises the real Bun.spawn + stdio:inherit + await exited path.
+    // Inject a spawn that redirects any argv to the stub fixture. Invoking
+    // via `sh` removes the dependency on the stub's file-mode bit surviving
+    // in a contributor's checkout — the orchestrator still exercises the
+    // real Bun.spawn + stdio:inherit + await exited path.
     const spawn: typeof Bun.spawn = ((_argv: string[], opts: Parameters<typeof Bun.spawn>[1]) =>
-      Bun.spawn([STUB], opts)) as typeof Bun.spawn;
+      Bun.spawn(["sh", STUB], opts)) as typeof Bun.spawn;
 
     const result = await runSetupInteractive(dir, "test objective", "claude", "skill", { spawn });
 
