@@ -8,6 +8,7 @@
  * 1.14.19, and codex v0.122.0 in Experiment 39.
  */
 
+import { runAgentStep } from "../domain/agent-execution";
 import type { ProviderName } from "../providers/types";
 
 /**
@@ -86,4 +87,45 @@ export async function runSetupInteractive(
   });
   const exitCode = await proc.exited;
   return { exitCode, provider, resumeHint: null, sessionId: null };
+}
+
+/**
+ * Run the setup agent non-interactively as a single `runAgentStep` call.
+ *
+ * Opt-in alternative to `runSetupInteractive` for unattended overnight queues,
+ * CI, scripted invocations, or unambiguous objectives where the TTY round-trip
+ * buys nothing. No TTY handoff — Shaka awaits the agent subprocess with a
+ * 15-minute ceiling (generous enough for realistic setup work; exp 36 median
+ * was ~125 s per cell).
+ *
+ * The skill body is prepended to the objective and paired with an explicit
+ * "no user to ask" directive so the agent doesn't stall waiting for
+ * clarification it can't receive. Self-verification (running
+ * `./autoresearch.sh`) remains the agent's job; Shaka's `validateSetup`
+ * re-runs it from the outside as the authoritative gate.
+ *
+ * Symmetric return shape with `runSetupInteractive` so the command layer can
+ * dispatch trivially on `opts.oneshot`. Resume-hint parsing is irrelevant here
+ * (no TUI session to resume) — returns `resumeHint: null, sessionId: null`
+ * unconditionally.
+ */
+export async function runSetupOneshot(
+  worktreePath: string,
+  objective: string,
+  provider: ProviderName,
+  skillBody: string,
+  deps?: { readonly runAgent?: typeof runAgentStep },
+): Promise<SetupSessionResult> {
+  const prompt = `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
+  const result = await (deps?.runAgent ?? runAgentStep)({
+    prompt,
+    cwd: worktreePath,
+    timeout: 15 * 60 * 1000,
+  });
+  return {
+    exitCode: result.exitCode,
+    provider: result.provider ?? provider,
+    resumeHint: null,
+    sessionId: null,
+  };
 }

@@ -5,6 +5,7 @@ import {
   buildCodexArgs,
   buildOpencodeArgs,
   runSetupInteractive,
+  runSetupOneshot,
 } from "../../../src/services/setup-session";
 
 test("buildClaudeArgs returns claude argv with positional objective and --append-system-prompt", () => {
@@ -63,6 +64,50 @@ test("runSetupInteractive returns exit code, provider, and null resume fields", 
   const result = await runSetupInteractive("/tmp/wt", "obj", "claude", "skill", { spawn });
   expect(result).toEqual({
     exitCode: 42,
+    provider: "claude",
+    resumeHint: null,
+    sessionId: null,
+  });
+});
+
+test("runSetupOneshot composes prompt with skill body, objective, and the no-user directive", async () => {
+  const captured: { prompt?: string; cwd?: string; timeout?: number }[] = [];
+  const fakeRunAgent = (async (opts: {
+    prompt: string;
+    cwd?: string;
+    timeout?: number;
+  }) => {
+    captured.push({ prompt: opts.prompt, cwd: opts.cwd, timeout: opts.timeout });
+    return {
+      exitCode: 0,
+      stdout: "",
+      stderr: "",
+      provider: "claude" as const,
+      timedOut: false,
+    };
+  }) as unknown as Parameters<typeof runSetupOneshot>[4] extends infer D
+    ? D extends { readonly runAgent?: infer F }
+      ? F
+      : never
+    : never;
+
+  const result = await runSetupOneshot(
+    "/tmp/wt",
+    "make it fast",
+    "claude",
+    "SKILL BODY CONTENT",
+    { runAgent: fakeRunAgent },
+  );
+
+  expect(captured).toHaveLength(1);
+  const prompt = captured[0]?.prompt ?? "";
+  expect(prompt).toContain("SKILL BODY CONTENT");
+  expect(prompt).toContain("make it fast");
+  expect(prompt).toContain("do NOT have a user to ask");
+  expect(captured[0]?.cwd).toBe("/tmp/wt");
+
+  expect(result).toEqual({
+    exitCode: 0,
     provider: "claude",
     resumeHint: null,
     sessionId: null,
