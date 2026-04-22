@@ -51,12 +51,15 @@ Shaka then **validates the setup independently** — agent success text is never
 ### Opt-outs and overrides
 
 - `--wizard` — skip the agent-driven path entirely and use the original six-question wizard + TODO-template flow. Useful in environments without an installed agent provider, or if you prefer to author the setup by hand.
+- `--oneshot` — run the setup agent non-interactively (no TUI handoff). Useful for unattended queues, CI, or when your objective is unambiguous and you don't want the TTY round-trip. Combines with `--dry-run`; rejected in combination with `--wizard`.
 - `--dry-run` — run the interactive setup + validation but don't commit and don't enter the loop. Prints the worktree path and the generated `autoresearch.sh` for review; pick up later with `shaka autoresearch resume <slug>`. Rejected in combination with `--wizard`.
 - `--provider <name>` — force a specific provider (`claude`, `opencode`, or `codex`) when multiple are installed. Default resolution: claude → opencode → codex.
 
 ### When the default can't run
 
 The full-auto default needs a TTY (interactive handoff to the provider CLI). If you run `shaka autoresearch start` in a non-TTY context — CI, a bash pipeline with redirected stdin, `ssh -T` — it fails with an actionable error pointing at `--wizard`. The loop itself still runs unattended once setup is done; only setup is interactive.
+
+Non-TTY contexts now have two options: `--oneshot` runs the setup agent non-interactively (agent authors the setup artifacts end-to-end, no TUI) and `--wizard` uses the hand-filled wizard + TODO template. Pick `--oneshot` when you trust the agent to pick sensible defaults from the objective alone; pick `--wizard` when you want to dictate every field yourself.
 
 If no provider CLI is installed, the default fails the same way. Run `shaka init` to install one, or use `--wizard` to author the setup by hand.
 

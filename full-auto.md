@@ -17,7 +17,7 @@ Both (1) and (2) are pain, for different reasons. Step 2 forces the user to writ
 
 **Full-auto is the default**, not an opt-in flag. `shaka autoresearch start "<objective>"` uses the agent-driven setup path. The original interactive wizard is still available behind an explicit `--wizard` opt-out for users who prefer to fill in each field by hand, environments that can't run an agent, or CI/non-TTY contexts where interactive handoff isn't possible. The release story is "we made setup work from a conversation with the agent, in your terminal"; a `--full-auto` flag would bury that behind a discovery problem.
 
-**What this costs (make-or-break trade-off to know upfront):** full-auto requires a TTY. If stdin isn't a TTY (CI, scripted `shaka autoresearch start` in a bash pipeline, ssh with `-T`), the command fails with an actionable error pointing at `--wizard`. There is no one-shot non-interactive fallback — keeping one would reintroduce a parallel code path with all its sync cost, and experiments 36/40 showed the interactive session is strictly higher-quality than one-shot for semantic ambiguity. The loop itself still runs unattended after setup; only setup is interactive.
+**What this costs (make-or-break trade-off to know upfront):** full-auto requires a TTY by default. If stdin isn't a TTY (CI, scripted `shaka autoresearch start` in a bash pipeline, ssh with `-T`), the command fails with an actionable error pointing at `--wizard`. Default is interactive. A `--oneshot` opt-in runs non-interactively via `runAgentStep` (no TTY required) — useful for unattended queues, CI, or unambiguous objectives. The loop itself still runs unattended after setup regardless of path.
 
 ## Design
 
@@ -238,7 +238,8 @@ Cleanup never blocks commit or loop entry. A failed cleanup logs and continues. 
 
 - Orchestration in `src/services/autoresearch.ts` alongside `setupWorkspace`, `runLoop`, `runResume`.
 - Per-provider invocation shims in a new `src/services/setup-session.ts`. Three pure functions: `buildClaudeArgs(objective, skillBody): string[]`, `buildOpencodeArgs(objective): string[]`, `buildCodexArgs(objective): string[]`. Each returns the `argv` passed to `Bun.spawn`. `runSetupInteractive` dispatches on provider, builds argv, spawns with `stdio: "inherit"`, awaits exit, triggers hygiene.
-- CLI printing, flags, `--dry-run` handling, exit behavior in `src/commands/autoresearch.ts`.
+- `runSetupOneshot` lives alongside `runSetupInteractive` in the same file. It shares the `SetupSessionResult` return type so the command layer dispatches on `opts.oneshot` with identical downstream handling. Internally it composes the skill body + objective + a "no user to ask" task directive and calls `runAgentStep` (non-interactive, 15-minute ceiling); no `Bun.spawn` stdio-inherit handoff and no session-hygiene path.
+- CLI printing, flags, `--dry-run` / `--oneshot` handling, exit behavior in `src/commands/autoresearch.ts`.
 
 `runSetupInteractive` accepts an optional `deps?: { spawn?: typeof Bun.spawn }` parameter so integration tests can inject a fake spawn without touching real CLIs. The stub-provider smoke test (Step 6) uses the real `Bun.spawn` against a deterministic sh script.
 
@@ -290,16 +291,17 @@ Cleanup never blocks commit or loop entry. A failed cleanup logs and continues. 
 
 - `shaka autoresearch start "<objective>"` takes the agent-driven interactive path by default.
 - Add `--wizard` opt-out flag. When set, skip the setup agent entirely and use today's interactive wizard + TODO-template flow. Kept for three reasons: (a) environments without an installed agent provider, (b) non-TTY contexts (CI, scripted starts, `-T` ssh), (c) users who prefer to fill fields by hand.
+- Add `--oneshot` flag. Runs the setup agent non-interactively via `runAgentStep` (no TTY handoff); bypasses the non-TTY guard. Rejected when combined with `--wizard` (orthogonal escape hatches); combines cleanly with `--dry-run`.
 - Add `--dry-run` flag. Useful with the default path; rejected when combined with `--wizard` (the wizard doesn't produce a loop-entry step to skip).
 - Add `--provider <name>` flag to force a specific provider when multiple are installed. Default resolution order matches `runAgentStep`: claude → opencode → codex.
 - **No agent provider installed** → the default fails with an actionable error pointing at `shaka init` / `shaka doctor` AND suggesting `--wizard`. We do NOT auto-fall-back to the wizard — silent fallback turns a clear provider-setup issue into confusing flow drift.
 - **Non-TTY** (`process.stdin.isTTY !== true`) → the default fails with an error that names `--wizard` as the fallback and explains why (interactive handoff requires a TTY). We do NOT auto-fall-back. Same reasoning as no-provider.
 - Command flow:
   1. If `--wizard`: `setupWorkspace({ templateMode: "wizard" })`, then existing wizard path unchanged. Exit via resume.
-  2. If non-TTY (no `--wizard`): print error naming `--wizard`, exit non-zero. No worktree created.
-  3. If no provider detected (no `--wizard`, TTY present): print error naming `--wizard` and `shaka init`, exit non-zero. No worktree created.
-  4. Default (TTY, provider available, no `--wizard`): `setupWorkspace({ templateMode: "defer" })` → `runSetupInteractive(worktreePath, objective, provider)` → `validateSetup(worktreePath)`.
-  5. If `--dry-run`: after validation passes (which sets `+x` defensively — see Step 3), print the worktree path + `autoresearch.sh` contents, then exit without commit or loop.
+  2. If non-TTY and no `--oneshot` (no `--wizard`): print error naming `--wizard`, exit non-zero. No worktree created. (`--oneshot` bypasses this check by design.)
+  3. If no provider detected (no `--wizard`): print error naming `--wizard` and `shaka init`, exit non-zero. No worktree created. Applies to both default and `--oneshot` paths.
+  4. Default (TTY or `--oneshot`, provider available, no `--wizard`): `setupWorkspace({ templateMode: "defer" })` → dispatch on `opts.oneshot` to either `runSetupOneshot(worktreePath, objective, provider, skill)` or `runSetupInteractive(worktreePath, objective, provider, skill)` → `validateSetup(worktreePath)`.
+  5. If `--dry-run`: after validation passes (which sets `+x` defensively — see Step 3), print the worktree path + `autoresearch.sh` contents, then exit without commit or loop. Works with or without `--oneshot`.
   6. Default (no `--dry-run`): `commitFinalizeIfDirty(worktreePath, { message: "autoresearch: finalize agent-generated setup" })`, then `runLoop(...)`.
 
   **Note on `commitFinalizeIfDirty` signature:** today the function is `commitFinalizeIfDirty(worktreePath: string): Promise<void>` with the commit message hardcoded to `"autoresearch: finalize benchmark"` (see `src/commands/autoresearch.ts:100`). This step extends the signature to `commitFinalizeIfDirty(worktreePath: string, opts?: { message?: string }): Promise<void>`, defaulting to the existing string when omitted. Wizard callers don't change; full-auto passes the agent-generated message for git-log provenance (so `git log --grep "agent-generated"` finds auto-setup commits). Small, backward-compatible.
@@ -360,7 +362,7 @@ Don't revisit unless new evidence.
 
 - **Chain of `inference()` calls (objective-extract → probe → snippet-inference → validate)** — the shape this plan started in. Rejected because real benchmarks need exploration, not classification. The agent often needs to read the benchmark source before it can interpret the output; needs to iterate when the first extraction doesn't parse; needs to decide whether to use `awk`, `jq`, a temp file, or a re-run with a different flag. That's agent-shaped work, not a pipeline of single-turn classifiers. The validation gate survives in Phase 2.
 
-- **One-shot non-interactive setup (the earlier "v1" design)** — rejected after Experiment 40 showed that (a) the one-shot path succeeds at high rate but (b) the only material failure mode that remained was opencode's silent-choice gap, which interactive handoff resolves naturally by letting the agent ask. Keeping a parallel one-shot path would double the test surface, force a per-provider retry/escalation story to cover its failure mode, and split the "setup works from natural language" release story across two flags. Shipping interactive-only is simpler, empirically justified (12-cell cross-provider matrix in exp 40, 3-provider handoff mechanics in exp 39), and better for the user's actual workflow (they're at the terminal when they hit Enter on `start`).
+- **One-shot non-interactive setup as the default** — rejected as the default; shipped as the `--oneshot` opt-in flag. Experiment 40's 12-cell cross-provider matrix (11/12 first-attempt real fixes across claude / opencode / codex) justifies both sides of the decision: one-shot is good enough to be a reliable opt-in for unattended / CI / scripted contexts where a TTY handoff isn't possible or wanted, but the one marginal cell (opencode's silent-choice gap on `sem-multi-benchmark`) is why interactive stays the default — conversational handoff lets the agent ask rather than guess. `--oneshot` is explicit user opt-in into the "no user to ask" mode, not a silent fallback.
 
 - **Generate `autoresearch.sh` without validation, let the baseline measurement fail naturally** — harder to debug. Fail fast at setup.
 
@@ -386,6 +388,7 @@ End-to-end done when:
 - The 5 canonical benchmark shapes from Step 0 (`cargo-bench`, `go-bench`, `hyperfine`, `just-tracing`, `pytest-benchmark`, under `experiments/36-full-auto-setup/fixtures/`) all complete setup, pass validation, and enter the loop when exercised end-to-end with each provider. Manual verification; automating this requires real LLM sessions and is out of scope.
 - `shaka autoresearch start "<objective>" --wizard` still runs the original six-question wizard and leaves the TODO-marker `autoresearch.sh` exactly as it does today. Regression-level behavior.
 - `shaka autoresearch start "<objective>" --dry-run` runs the interactive session, validates the files, prints the worktree path + generated `autoresearch.sh`, does not commit, and does not enter the loop.
+- `shaka autoresearch start "<objective>" --oneshot` succeeds in a non-TTY context (the TTY guard is bypassed) and commits + enters the loop when validation passes. Combining with `--dry-run` runs oneshot setup + validation and exits without committing or entering the loop. Combining with `--wizard` is rejected at arg-parse time.
 - `shaka autoresearch start "<objective>"` on a box with no agent provider installed fails with an actionable message that names `--wizard` and `shaka init` and does NOT silently fall back.
 - `shaka autoresearch start "<objective>"` in a non-TTY context (piped stdin or `ssh -T`) fails with an actionable message that names `--wizard` as the fallback and explains the reason.
 - When validation fails after the interactive session exits, the error message names the failing phase (spec / benchmark / checks / dirty) and leaves the worktree on disk for user inspection.

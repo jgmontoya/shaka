@@ -31,7 +31,7 @@ import {
   type ProviderName,
   detectInstalledProviders,
 } from "../services/provider-detection";
-import { runSetupInteractive } from "../services/setup-session";
+import { runSetupInteractive, runSetupOneshot } from "../services/setup-session";
 import { loadSkill } from "../services/skills";
 import { readlineAsk, runWizard } from "./autoresearch-wizard";
 
@@ -269,11 +269,15 @@ interface LoopFlags {
 /**
  * Additional flags for `shaka autoresearch start`. `wizard` opts out of the
  * full-auto default; `dryRun` validates without committing or entering the
- * loop. Rejected in combination at arg-parse time.
+ * loop; `oneshot` runs the setup agent non-interactively via `runAgentStep`
+ * instead of handing the TTY to the provider CLI. Rejected in combination
+ * at arg-parse time: `--oneshot --wizard` and `--dry-run --wizard`.
+ * `--oneshot --dry-run` is allowed.
  */
 export interface StartFlags extends LoopFlags {
   readonly wizard?: boolean;
   readonly dryRun?: boolean;
+  readonly oneshot?: boolean;
 }
 
 /**
@@ -287,6 +291,7 @@ export interface StartFlags extends LoopFlags {
 export interface StartDeps {
   readonly detectProviders?: () => DetectedProviders;
   readonly runSetupInteractive?: typeof runSetupInteractive;
+  readonly runSetupOneshot?: typeof runSetupOneshot;
   readonly runLoop?: typeof runLoop;
 }
 
@@ -377,9 +382,12 @@ async function runFullAutoStart(
   repoRoot: string,
   detected: DetectedProviders,
   interactiveFn: typeof runSetupInteractive,
+  oneshotFn: typeof runSetupOneshot,
   loopFn: typeof runLoop,
 ): Promise<void> {
-  if (process.stdin.isTTY !== true) {
+  // --oneshot runs the setup agent without a TTY handoff, so the TTY guard is
+  // skipped — that's the entire point of the flag (unattended / CI / scripted).
+  if (opts.oneshot !== true && process.stdin.isTTY !== true) {
     console.error(
       "Full-auto autoresearch requires a TTY (interactive handoff to the provider CLI).\n" +
         "Pipe, CI, or `ssh -T` detected. Re-run with `--wizard` to use the hand-filled wizard path instead.",
@@ -402,7 +410,8 @@ async function runFullAutoStart(
   console.log(`Branch:   ${setup.branch}`);
 
   const setupSkill = await loadSkill("AutoresearchSetup");
-  await interactiveFn(setup.worktreePath, objective, provider, setupSkill);
+  const sessionFn = opts.oneshot === true ? oneshotFn : interactiveFn;
+  await sessionFn(setup.worktreePath, objective, provider, setupSkill);
 
   const validation = await validateSetup(setup.worktreePath);
   if (!validation.ok) reportValidationFailure(setup.worktreePath, validation);
@@ -425,6 +434,7 @@ export async function runStart(
 ): Promise<void> {
   const detect = deps.detectProviders ?? detectInstalledProviders;
   const interactiveFn = deps.runSetupInteractive ?? runSetupInteractive;
+  const oneshotFn = deps.runSetupOneshot ?? runSetupOneshot;
   const loopFn = deps.runLoop ?? runLoop;
 
   const repoRoot = await resolveRepoRoot(process.cwd());
@@ -442,7 +452,7 @@ export async function runStart(
     return runWizardStart(objective, opts, repoRoot, providers, loopFn);
   }
 
-  return runFullAutoStart(objective, opts, repoRoot, detected, interactiveFn, loopFn);
+  return runFullAutoStart(objective, opts, repoRoot, detected, interactiveFn, oneshotFn, loopFn);
 }
 
 async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Promise<void> {
@@ -559,6 +569,10 @@ export function createAutoresearchCommand(): Command {
     )
     .option("--wizard", "Opt out of full-auto; use the hand-filled wizard + TODO template")
     .option("--dry-run", "Generate + validate setup, but don't commit and don't enter the loop")
+    .option(
+      "--oneshot",
+      "Run setup agent non-interactively (no TUI handoff); useful for unattended / CI / scripted invocations",
+    )
     .action(
       async (
         objective: string,
@@ -568,11 +582,17 @@ export function createAutoresearchCommand(): Command {
           stopAfter?: number;
           wizard?: boolean;
           dryRun?: boolean;
+          oneshot?: boolean;
         },
       ) => {
         if (opts.wizard === true && opts.dryRun === true) {
           throw new Error(
             "--wizard and --dry-run cannot be combined: the wizard path has no post-setup loop-entry step to skip.",
+          );
+        }
+        if (opts.oneshot === true && opts.wizard === true) {
+          throw new Error(
+            "--oneshot and --wizard cannot be combined: --oneshot is a non-interactive variant of full-auto, --wizard opts out of full-auto entirely.",
           );
         }
         await runStart(objective, {
@@ -581,6 +601,7 @@ export function createAutoresearchCommand(): Command {
           stopAfter: opts.stopAfter,
           wizard: opts.wizard,
           dryRun: opts.dryRun,
+          oneshot: opts.oneshot,
         });
       },
     );

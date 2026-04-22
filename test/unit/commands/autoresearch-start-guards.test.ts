@@ -120,6 +120,19 @@ describe("autoresearch start — flag parsing", () => {
       ),
     ).rejects.toThrow(/--dry-run.*--wizard|--wizard.*--dry-run/i);
   });
+
+  test("--oneshot --wizard rejects with an explanatory error", async () => {
+    const cmd = createAutoresearchCommand();
+    cmd.exitOverride();
+    for (const sub of cmd.commands) sub.exitOverride();
+
+    await expect(
+      cmd.parseAsync(
+        ["start", "test objective", "--oneshot", "--wizard"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(/--oneshot.*--wizard|--wizard.*--oneshot/i);
+  });
 });
 
 describe("autoresearch start — runStart guard paths", () => {
