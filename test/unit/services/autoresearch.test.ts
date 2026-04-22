@@ -1146,14 +1146,29 @@ describe("renderTemplates", () => {
     expect(out.sh).toContain("METRIC");
   });
 
-  test("sh stderr guides the user toward edit + resume when the template is unfinished", () => {
-    // The unedited template fails the baseline; its stderr flows verbatim into
-    // the user-facing error from `measureBaseline`. Keep the hint actionable
-    // (the walkthrough relies on this exact guidance) without a separate
-    // diagnostic branch in the runner.
-    const out = renderTemplates(fullAnswers);
+  test("sh stderr guides the user toward edit + resume when the benchmarkCommand is a TODO placeholder", () => {
+    // Wizard-provided commands now render cleanly — no unconditional TODO
+    // exit appended (that bug failed every valid wizard setup). The TODO
+    // hint is carried by TODO_ANSWERS.benchmarkCommand instead, used by the
+    // non-TTY non-wizard path. Simulate that shape here so the actionable
+    // hint surfaces via `measureBaseline`'s stderr passthrough.
+    const todoLike = {
+      ...fullAnswers,
+      benchmarkCommand:
+        '# TODO: replace with a real benchmark\necho "autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`." >&2\nexit 1',
+    };
+    const out = renderTemplates(todoLike);
     expect(out.sh).toContain("TODO");
     expect(out.sh).toContain("shaka autoresearch resume");
+  });
+
+  test("sh does NOT append a TODO exit to a valid wizard-provided benchmarkCommand", () => {
+    // Regression guard for the reviewer-flagged bug: the generator used to
+    // always append `echo ... TODO ...; exit 1`, which failed every valid
+    // wizard-rendered benchmark regardless of what the user typed.
+    const out = renderTemplates(fullAnswers);
+    expect(out.sh).not.toContain("TODO");
+    expect(out.sh).not.toContain("exit 1");
   });
 
   test("checks file is produced only when a checks command is provided", () => {

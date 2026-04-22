@@ -306,6 +306,30 @@ async function setupArtifactsDirty(cwd: string): Promise<boolean> {
   return out.trim().length > 0;
 }
 
+/**
+ * Remove any ignored (and untracked) setup artifacts that survived a normal
+ * `git clean -fd`. Needed on incorrect-iteration revert paths because the
+ * tamper detector now sees ignored files (via `--ignored=matching`) but the
+ * revert doesn't clean them — without this, an agent-created ignored
+ * `autoresearch.checks.sh` would be re-flagged every iteration, trapping the
+ * loop in a tamper cycle. `-X` removes only ignored files (not plain
+ * untracked — those are handled by the general revert), scoped to the setup
+ * pathspec so unrelated ignored files in the worktree are preserved.
+ */
+async function cleanIgnoredSetupArtifacts(cwd: string): Promise<void> {
+  const proc = Bun.spawn(["git", "clean", "-fdX", "--", ...SETUP_ARTIFACTS], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [, , code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`git clean failed in ${cwd} during tamper revert`);
+}
+
 async function defaultAppendLog(cwd: string, entry: LogEntry): Promise<void> {
   // Append via POSIX O_APPEND (atomic up to PIPE_BUF for a single line) so
   // a mid-write crash can't truncate the existing log. The prior read-
@@ -730,6 +754,7 @@ async function runIteration(args: {
 
   if (await restoreJsonlIfChanged(jsonlSnapshot)) {
     await revertWorkingTree(JSONL_EXCLUDES, cwd);
+    await cleanIgnoredSetupArtifacts(cwd);
     return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
   }
 
@@ -740,6 +765,7 @@ async function runIteration(args: {
   // than simply running out of time.
   if (await setupArtifactsDirty(cwd)) {
     await revertWorkingTree(JSONL_EXCLUDES, cwd);
+    await cleanIgnoredSetupArtifacts(cwd);
     return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
   }
 
@@ -1031,7 +1057,10 @@ export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
 
   const md = `# Autoresearch: ${answers.objective}\n\n## Objective\n\n${answers.objective}\n\n## Metric\n\n- command: \`./autoresearch.sh\`\n- unit: ${unit}\n- direction: ${answers.direction}\n- baseline: measured at setup\n\n## Files in scope\n\n${renderBulletList(answers.filesInScope)}\n\n## Off-limits\n\n- \`autoresearch.*\` (run config; never modify)\n\n## Constraints\n\n${renderBulletList(answers.constraints)}\n${checksSection}`;
 
-  const sh = `#!/usr/bin/env sh\n# Benchmark for: ${shellObjective}\n# Metric: ${answers.direction} ${unit}\n#\n# This script must emit a single line on stdout of the form:\n#   METRIC name=<name> value=<number> unit=${unit}\n# Non-zero exit OR missing METRIC line = crash verdict.\nset -e\n\n# Your command:\n${answers.benchmarkCommand}\n\n# TODO: replace the two lines below with your METRIC emission, e.g.:\n#   echo "METRIC name=runtime value=<value> unit=${unit}"\necho "autoresearch.sh has a TODO marker — edit it and run \\\`shaka autoresearch resume\\\`." >&2\nexit 1\n`;
+  // The benchmarkCommand is embedded verbatim: wizard-provided commands get
+  // a clean script; TODO_ANSWERS' placeholder carries its own echo+exit so
+  // non-wizard non-TTY setups still fail loudly with an actionable message.
+  const sh = `#!/usr/bin/env sh\n# Benchmark for: ${shellObjective}\n# Metric: ${answers.direction} ${unit}\n#\n# This script must emit a single line on stdout of the form:\n#   METRIC name=<name> value=<number> unit=${unit}\n# Non-zero exit OR missing METRIC line = crash verdict.\nset -e\n\n# Your command:\n${answers.benchmarkCommand.trim()}\n`;
 
   const checks = answers.checksCommand.trim()
     ? `#!/usr/bin/env sh\n# Correctness gate — exit 0 when the candidate is acceptable.\n# Non-zero exit = 'incorrect' verdict even if the metric improved.\nset -e\n\n${answers.checksCommand.trim()}\n`
@@ -1040,10 +1069,15 @@ export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
   return { md, sh, checks };
 }
 
-/** Legacy TODO-marker template used when the wizard didn't run (non-TTY setups). */
+/**
+ * Legacy TODO-marker template used when the wizard didn't run (non-TTY setups).
+ * benchmarkCommand embeds its own echo+exit so the rendered script still fails
+ * loudly with an actionable message pointing at `shaka autoresearch resume`.
+ */
 const TODO_ANSWERS: WizardAnswers = {
   objective: "<objective>",
-  benchmarkCommand: "# TODO: replace with a real benchmark",
+  benchmarkCommand:
+    '# TODO: replace with a real benchmark that emits: METRIC name=runtime value=<value> unit=TODO\necho "autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`." >&2\nexit 1',
   direction: "minimize",
   unit: "TODO",
   checksCommand: "",
