@@ -80,7 +80,10 @@ async function maybeRunWizard(
  * Propagates the git error on commit hook failure so the caller can refuse to
  * start the loop.
  */
-export async function commitFinalizeIfDirty(worktreePath: string): Promise<void> {
+export async function commitFinalizeIfDirty(
+  worktreePath: string,
+  opts?: { readonly message?: string },
+): Promise<void> {
   const dirty = await listDirtyPaths(worktreePath);
   if (dirty.length === 0) return;
 
@@ -92,7 +95,8 @@ export async function commitFinalizeIfDirty(worktreePath: string): Promise<void>
     if (await Bun.file(path).exists()) await chmod(path, 0o755);
   }
 
-  await commitAllExcept(["autoresearch.jsonl"], "autoresearch: finalize benchmark", worktreePath);
+  const message = opts?.message ?? "autoresearch: finalize benchmark";
+  await commitAllExcept(["autoresearch.jsonl"], message, worktreePath);
 }
 
 /**

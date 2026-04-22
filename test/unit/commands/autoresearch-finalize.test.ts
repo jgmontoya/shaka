@@ -57,6 +57,21 @@ describe("commitFinalizeIfDirty", () => {
     expect(subject.trim()).toContain("finalize benchmark");
   });
 
+  test("uses custom commit message when opts.message is passed", async () => {
+    const dir = await makeRepo();
+    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+
+    await commitFinalizeIfDirty(dir, { message: "autoresearch: finalize agent-generated setup" });
+
+    const logProc = Bun.spawn(["git", "log", "-1", "--format=%s"], {
+      cwd: dir,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [subject] = await Promise.all([new Response(logProc.stdout).text(), logProc.exited]);
+    expect(subject.trim()).toBe("autoresearch: finalize agent-generated setup");
+  });
+
   test("throws (preserves user edits on disk) when a pre-commit hook rejects the commit", async () => {
     const dir = await makeRepo();
     // Install a pre-commit hook that always fails
