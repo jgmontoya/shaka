@@ -1,0 +1,20 @@
+#!/bin/sh
+# Simulates a provider TUI session: writes canned autoresearch.md and
+# autoresearch.sh into cwd, then exits 0.
+cat > autoresearch.md <<'EOF'
+# Test objective
+
+## Metric
+- command: ./autoresearch.sh
+- direction: minimize
+- unit: s
+
+## What's Been Tried
+_no iterations yet_
+EOF
+
+cat > autoresearch.sh <<'EOF'
+#!/bin/sh
+echo "METRIC name=stub value=1.0 unit=s"
+EOF
+chmod +x autoresearch.sh
