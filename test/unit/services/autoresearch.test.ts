@@ -23,6 +23,7 @@ import {
   renderTemplates,
   resolveExperimentWorktree,
   resolveResumeTarget,
+  runBenchmark,
   runLoop,
   runResume,
   setupWorkspace,
@@ -1638,5 +1639,55 @@ describe("experiment worktree discovery", () => {
     await expect(resolveResumeTarget(repo, repo, undefined)).rejects.toThrow(
       /no active autoresearch/i,
     );
+  });
+});
+
+// Skipped on Windows: runBenchmark spawns `./autoresearch.sh` directly (shebang
+// script by path), which is a Unix-only execution model. Mirrors the existing
+// autoresearch.checks.sh test's platform gate.
+describe.skipIf(process.platform === "win32")("runBenchmark", () => {
+  const createdDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const d of createdDirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  async function makeBenchDir(script: string): Promise<string> {
+    const dir = join(
+      tmpdir(),
+      `shaka-bench-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    await mkdir(dir, { recursive: true });
+    createdDirs.push(dir);
+    const path = join(dir, "autoresearch.sh");
+    await Bun.write(path, script);
+    const { chmod } = await import("node:fs/promises");
+    await chmod(path, 0o755);
+    return dir;
+  }
+
+  test("returns parsed measurement from a successful METRIC-emitting script", async () => {
+    const dir = await makeBenchDir(
+      "#!/bin/sh\necho 'some debug line'\necho 'METRIC name=runtime value=42.5 unit=ms'\n",
+    );
+
+    const result = await runBenchmark(dir);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("METRIC name=runtime value=42.5 unit=ms");
+    expect(result.stderr).toBe("");
+    expect(result.measurement).toEqual({ name: "runtime", value: 42.5, unit: "ms" });
+  });
+
+  test("returns null measurement when the script exits non-zero (even if METRIC appears on stdout)", async () => {
+    const dir = await makeBenchDir(
+      "#!/bin/sh\necho 'METRIC name=runtime value=42 unit=ms'\necho 'boom' >&2\nexit 3\n",
+    );
+
+    const result = await runBenchmark(dir);
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stderr).toContain("boom");
+    expect(result.measurement).toBeNull();
   });
 });

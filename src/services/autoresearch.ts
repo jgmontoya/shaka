@@ -289,7 +289,7 @@ async function defaultAppendLog(cwd: string, entry: LogEntry): Promise<void> {
 }
 
 /** Run the benchmark script at `<cwd>/autoresearch.sh` and parse its METRIC output. */
-async function defaultBenchmark(cwd: string): Promise<BenchResult> {
+export async function runBenchmark(cwd: string): Promise<BenchResult> {
   const proc = Bun.spawn(["./autoresearch.sh"], { cwd, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -332,7 +332,7 @@ interface ResolvedDeps {
 function resolveDeps(deps: RunLoopDeps): ResolvedDeps {
   return {
     agent: deps.agent ?? runAgentStep,
-    benchmark: deps.benchmark ?? defaultBenchmark,
+    benchmark: deps.benchmark ?? runBenchmark,
     checks: deps.checks ?? defaultChecks,
     appendLog: deps.appendLog ?? defaultAppendLog,
     now: deps.now ?? (() => new Date()),
