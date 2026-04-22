@@ -22,6 +22,7 @@ import {
   runResume,
   setupWorkspace,
   summarizeHypothesis,
+  validateSetup,
 } from "../services/autoresearch";
 import { renderStatus, shouldRenderWidget } from "../services/autoresearch-widget";
 import { commitAllExcept, listDirtyPaths } from "../services/git";
@@ -30,6 +31,7 @@ import {
   type ProviderName,
   detectInstalledProviders,
 } from "../services/provider-detection";
+import { runSetupInteractive } from "../services/setup-session";
 import { loadSkill } from "../services/skills";
 import { readlineAsk, runWizard } from "./autoresearch-wizard";
 
@@ -284,63 +286,24 @@ export interface StartFlags extends LoopFlags {
  */
 export interface StartDeps {
   readonly detectProviders?: () => DetectedProviders;
+  readonly runSetupInteractive?: typeof runSetupInteractive;
   readonly runLoop?: typeof runLoop;
 }
 
-export async function runStart(
-  objective: string,
-  opts: StartFlags,
-  deps: StartDeps = {},
+/** First available provider in the standard resolution order: claude → opencode → codex. */
+function pickProvider(providers: DetectedProviders): ProviderName {
+  if (providers.claude) return "claude";
+  if (providers.opencode) return "opencode";
+  if (providers.codex) return "codex";
+  throw new Error("No providers available — guarded upstream");
+}
+
+async function enterLoop(
+  worktreePath: string,
+  providers: DetectedProviders,
+  opts: LoopFlags,
+  loopFn: typeof runLoop,
 ): Promise<void> {
-  const detect = deps.detectProviders ?? detectInstalledProviders;
-  const loopFn = deps.runLoop ?? runLoop;
-
-  const repoRoot = await resolveRepoRoot(process.cwd());
-  if (!repoRoot) {
-    console.error(
-      "Not inside a git repository. Run `shaka autoresearch start` from within the repo you want to optimize.",
-    );
-    process.exit(1);
-  }
-
-  // Guard paths for the full-auto default (skipped when --wizard is set).
-  if (opts.wizard !== true) {
-    if (process.stdin.isTTY !== true) {
-      console.error(
-        "Full-auto autoresearch requires a TTY (interactive handoff to the provider CLI).\n" +
-          "Pipe, CI, or `ssh -T` detected. Re-run with `--wizard` to use the hand-filled wizard path instead.",
-      );
-      process.exit(1);
-    }
-    const detected = detect();
-    if (!detected.claude && !detected.opencode && !detected.codex) {
-      console.error(
-        "No agent provider installed (claude, opencode, or codex).\n" +
-          "Run `shaka init` to install one, or re-run with `--wizard` to fill the setup fields by hand.",
-      );
-      process.exit(1);
-    }
-  }
-
-  // TODO: Full-auto default path — wired in Commit C. For now, fall through
-  // to the existing wizard/todo body so the build stays green.
-  const providers = resolveProviders(detect(), opts.provider);
-
-  const answers = await maybeRunWizard(objective, repoRoot);
-  const setup = answers
-    ? await setupWorkspace({ repoRoot, objective, templateMode: "wizard", answers })
-    : await setupWorkspace({ repoRoot, objective, templateMode: "todo" });
-  console.log(`\nWorktree: ${setup.worktreePath}`);
-  console.log(`Branch:   ${setup.branch}`);
-
-  if (answers !== undefined) {
-    const finalized = await maybeOpenEditorOnBench(setup.worktreePath);
-    // When `$EDITOR` isn't set the user is told to edit `autoresearch.sh`
-    // manually and run `resume` — don't then silently enter the loop here
-    // and run the TODO-marker'd benchmark for no reason.
-    if (!finalized) return;
-  }
-
   const skillContent = await loadSkill("Autoresearch");
   const controller = new AbortController();
   const widget = buildOnTick();
@@ -351,7 +314,7 @@ export async function runStart(
       () =>
         loopFn(
           {
-            cwd: setup.worktreePath,
+            cwd: worktreePath,
             providers,
             stopWhen: buildStopWhen(opts),
             signal: controller.signal,
@@ -363,6 +326,123 @@ export async function runStart(
   } finally {
     widget.finish();
   }
+}
+
+async function runWizardStart(
+  objective: string,
+  opts: StartFlags,
+  repoRoot: string,
+  providers: DetectedProviders,
+  loopFn: typeof runLoop,
+): Promise<void> {
+  const answers = await maybeRunWizard(objective, repoRoot);
+  const setup = answers
+    ? await setupWorkspace({ repoRoot, objective, templateMode: "wizard", answers })
+    : await setupWorkspace({ repoRoot, objective, templateMode: "todo" });
+  console.log(`\nWorktree: ${setup.worktreePath}`);
+  console.log(`Branch:   ${setup.branch}`);
+  if (answers !== undefined) {
+    const finalized = await maybeOpenEditorOnBench(setup.worktreePath);
+    // Without `$EDITOR`, the user edits by hand and runs `resume` — don't
+    // silently enter the loop with the TODO-marker'd benchmark.
+    if (!finalized) return;
+  }
+  await enterLoop(setup.worktreePath, providers, opts, loopFn);
+}
+
+function reportValidationFailure(
+  worktreePath: string,
+  validation: Extract<Awaited<ReturnType<typeof validateSetup>>, { ok: false }>,
+): never {
+  console.error(`\nSetup validation failed at phase '${validation.phase}': ${validation.message}`);
+  if (validation.stdout) console.error(`\nSTDOUT:\n${validation.stdout}`);
+  if (validation.stderr) console.error(`\nSTDERR:\n${validation.stderr}`);
+  console.error(`\nWorktree left at: ${worktreePath}`);
+  console.error(
+    "Re-run `shaka autoresearch start` with a more specific objective, or open the worktree and fix the setup by hand.",
+  );
+  process.exit(1);
+}
+
+async function printDryRun(worktreePath: string): Promise<void> {
+  console.log("\nSetup validated. Dry-run: not committing, not entering loop.");
+  console.log(`Worktree: ${worktreePath}`);
+  const script = await Bun.file(join(worktreePath, "autoresearch.sh")).text();
+  console.log(`\n--- autoresearch.sh ---\n${script}`);
+}
+
+async function runFullAutoStart(
+  objective: string,
+  opts: StartFlags,
+  repoRoot: string,
+  detected: DetectedProviders,
+  interactiveFn: typeof runSetupInteractive,
+  loopFn: typeof runLoop,
+): Promise<void> {
+  if (process.stdin.isTTY !== true) {
+    console.error(
+      "Full-auto autoresearch requires a TTY (interactive handoff to the provider CLI).\n" +
+        "Pipe, CI, or `ssh -T` detected. Re-run with `--wizard` to use the hand-filled wizard path instead.",
+    );
+    process.exit(1);
+  }
+  if (!detected.claude && !detected.opencode && !detected.codex) {
+    console.error(
+      "No agent provider installed (claude, opencode, or codex).\n" +
+        "Run `shaka init` to install one, or re-run with `--wizard` to fill the setup fields by hand.",
+    );
+    process.exit(1);
+  }
+
+  const providers = resolveProviders(detected, opts.provider);
+  const provider = pickProvider(providers);
+
+  const setup = await setupWorkspace({ repoRoot, objective, templateMode: "defer" });
+  console.log(`\nWorktree: ${setup.worktreePath}`);
+  console.log(`Branch:   ${setup.branch}`);
+
+  const setupSkill = await loadSkill("AutoresearchSetup");
+  await interactiveFn(setup.worktreePath, objective, provider, setupSkill);
+
+  const validation = await validateSetup(setup.worktreePath);
+  if (!validation.ok) reportValidationFailure(setup.worktreePath, validation);
+
+  if (opts.dryRun === true) {
+    await printDryRun(setup.worktreePath);
+    return;
+  }
+
+  await commitFinalizeIfDirty(setup.worktreePath, {
+    message: "autoresearch: finalize agent-generated setup",
+  });
+  await enterLoop(setup.worktreePath, providers, opts, loopFn);
+}
+
+export async function runStart(
+  objective: string,
+  opts: StartFlags,
+  deps: StartDeps = {},
+): Promise<void> {
+  const detect = deps.detectProviders ?? detectInstalledProviders;
+  const interactiveFn = deps.runSetupInteractive ?? runSetupInteractive;
+  const loopFn = deps.runLoop ?? runLoop;
+
+  const repoRoot = await resolveRepoRoot(process.cwd());
+  if (!repoRoot) {
+    console.error(
+      "Not inside a git repository. Run `shaka autoresearch start` from within the repo you want to optimize.",
+    );
+    process.exit(1);
+  }
+
+  const detected = detect();
+
+  if (opts.wizard === true) {
+    const providers = resolveProviders(detected, opts.provider);
+    return runWizardStart(objective, opts, repoRoot, providers, loopFn);
+  }
+
+  return runFullAutoStart(objective, opts, repoRoot, detected, interactiveFn, loopFn);
 }
 
 async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Promise<void> {
