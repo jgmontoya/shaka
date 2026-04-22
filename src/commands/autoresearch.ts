@@ -264,7 +264,37 @@ interface LoopFlags {
   readonly stopAfter?: number;
 }
 
-async function runStart(objective: string, opts: LoopFlags): Promise<void> {
+/**
+ * Additional flags for `shaka autoresearch start`. `wizard` opts out of the
+ * full-auto default; `dryRun` validates without committing or entering the
+ * loop. Rejected in combination at arg-parse time.
+ */
+export interface StartFlags extends LoopFlags {
+  readonly wizard?: boolean;
+  readonly dryRun?: boolean;
+}
+
+/**
+ * Dependency-injection seams for `runStart`. The deps bag exists specifically
+ * to exercise system boundaries (provider detection, loop entry) from tests
+ * without launching real provider CLIs. Production callers pass nothing.
+ *
+ * Kept minimal on purpose — see `feedback_follow_codebase_not_theory`: DI only
+ * where testability demands it, not as blanket architecture.
+ */
+export interface StartDeps {
+  readonly detectProviders?: () => DetectedProviders;
+  readonly runLoop?: typeof runLoop;
+}
+
+export async function runStart(
+  objective: string,
+  opts: StartFlags,
+  deps: StartDeps = {},
+): Promise<void> {
+  const detect = deps.detectProviders ?? detectInstalledProviders;
+  const loopFn = deps.runLoop ?? runLoop;
+
   const repoRoot = await resolveRepoRoot(process.cwd());
   if (!repoRoot) {
     console.error(
@@ -273,7 +303,28 @@ async function runStart(objective: string, opts: LoopFlags): Promise<void> {
     process.exit(1);
   }
 
-  const providers = resolveProviders(detectInstalledProviders(), opts.provider);
+  // Guard paths for the full-auto default (skipped when --wizard is set).
+  if (opts.wizard !== true) {
+    if (process.stdin.isTTY !== true) {
+      console.error(
+        "Full-auto autoresearch requires a TTY (interactive handoff to the provider CLI).\n" +
+          "Pipe, CI, or `ssh -T` detected. Re-run with `--wizard` to use the hand-filled wizard path instead.",
+      );
+      process.exit(1);
+    }
+    const detected = detect();
+    if (!detected.claude && !detected.opencode && !detected.codex) {
+      console.error(
+        "No agent provider installed (claude, opencode, or codex).\n" +
+          "Run `shaka init` to install one, or re-run with `--wizard` to fill the setup fields by hand.",
+      );
+      process.exit(1);
+    }
+  }
+
+  // TODO: Full-auto default path — wired in Commit C. For now, fall through
+  // to the existing wizard/todo body so the build stays green.
+  const providers = resolveProviders(detect(), opts.provider);
 
   const answers = await maybeRunWizard(objective, repoRoot);
   const setup = answers
@@ -298,7 +349,7 @@ async function runStart(objective: string, opts: LoopFlags): Promise<void> {
       controller,
       "SIGINT received — finishing current iteration, then stopping.",
       () =>
-        runLoop(
+        loopFn(
           {
             cwd: setup.worktreePath,
             providers,
@@ -426,15 +477,30 @@ export function createAutoresearchCommand(): Command {
       "Stop after N consecutive discards without improvement",
       parsePositiveInt("--stop-after"),
     )
+    .option("--wizard", "Opt out of full-auto; use the hand-filled wizard + TODO template")
+    .option("--dry-run", "Generate + validate setup, but don't commit and don't enter the loop")
     .action(
       async (
         objective: string,
-        opts: { provider?: string; maxIterations?: number; stopAfter?: number },
+        opts: {
+          provider?: string;
+          maxIterations?: number;
+          stopAfter?: number;
+          wizard?: boolean;
+          dryRun?: boolean;
+        },
       ) => {
+        if (opts.wizard === true && opts.dryRun === true) {
+          throw new Error(
+            "--wizard and --dry-run cannot be combined: the wizard path has no post-setup loop-entry step to skip.",
+          );
+        }
         await runStart(objective, {
           provider: validateProviderFlag(opts.provider),
           maxIterations: opts.maxIterations,
           stopAfter: opts.stopAfter,
+          wizard: opts.wizard,
+          dryRun: opts.dryRun,
         });
       },
     );
