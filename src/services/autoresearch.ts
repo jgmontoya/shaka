@@ -343,6 +343,146 @@ async function defaultChecks(cwd: string): Promise<{ readonly exitCode: number }
   return { exitCode };
 }
 
+// ─── Setup validation ──────────────────────────────────────────────────────
+
+export type SetupValidationResult =
+  | { readonly ok: true; readonly measurement: Measurement; readonly checksExitCode?: number }
+  | {
+      readonly ok: false;
+      readonly phase: "spec" | "benchmark" | "checks" | "dirty";
+      readonly message: string;
+      readonly stdout?: string;
+      readonly stderr?: string;
+    };
+
+export interface ValidateSetupDeps {
+  readonly runBenchmark?: (cwd: string) => Promise<BenchResult>;
+  readonly parseSpec?: (md: string) => unknown;
+  readonly assertOnlySetupDirty?: (cwd: string) => Promise<void>;
+}
+
+async function validateSpec(
+  worktreePath: string,
+  spec: (md: string) => unknown,
+): Promise<SetupValidationResult | null> {
+  try {
+    const specBody = await Bun.file(join(worktreePath, "autoresearch.md")).text();
+    spec(specBody);
+    return null;
+  } catch (err) {
+    return {
+      ok: false,
+      phase: "spec",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+function benchmarkFailure(benchResult: BenchResult): SetupValidationResult {
+  return {
+    ok: false,
+    phase: "benchmark",
+    message:
+      benchResult.exitCode !== 0
+        ? `autoresearch.sh exited ${benchResult.exitCode}`
+        : "autoresearch.sh did not emit a parseable METRIC line",
+    stdout: benchResult.stdout,
+    stderr: benchResult.stderr,
+  };
+}
+
+/**
+ * Run `autoresearch.checks.sh` and capture stdout/stderr for failure diagnostics.
+ * Inlined (not delegated to `defaultChecks`) because the validation path needs
+ * the streams; widening `defaultChecks` for one caller costs more surface than
+ * duplicating this short spawn.
+ */
+async function runChecksCapturing(cwd: string): Promise<{
+  readonly exitCode: number;
+  readonly stdout: string;
+  readonly stderr: string;
+}> {
+  const proc = Bun.spawn(["./autoresearch.checks.sh"], { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout, stderr };
+}
+
+/**
+ * Validate the setup artifacts in `worktreePath` after the interactive setup
+ * session exits. Composition order: spec parse → defensive `+x` on bench +
+ * checks scripts → benchmark run → optional checks → dirty gate. Returns a
+ * discriminated union so callers can narrow on `result.ok` for diagnostics
+ * without null-branching.
+ *
+ * The defensive chmod covers setup agents that produce `autoresearch.sh`
+ * without the bit set. It's idempotent; scripts that already have the bit
+ * keep it unchanged.
+ */
+export async function validateSetup(
+  worktreePath: string,
+  deps: ValidateSetupDeps = {},
+): Promise<SetupValidationResult> {
+  const bench = deps.runBenchmark ?? runBenchmark;
+  const spec = deps.parseSpec ?? parseSpec;
+  const dirtyGate = deps.assertOnlySetupDirty ?? assertOnlySetupDirty;
+
+  // 1. Spec parse.
+  const specFailure = await validateSpec(worktreePath, spec);
+  if (specFailure !== null) return specFailure;
+
+  // 2. Defensive chmod +x on bench + checks scripts when present.
+  const benchPath = join(worktreePath, "autoresearch.sh");
+  const checksPath = join(worktreePath, "autoresearch.checks.sh");
+  if (!(await Bun.file(benchPath).exists())) {
+    return { ok: false, phase: "benchmark", message: "autoresearch.sh missing" };
+  }
+  await chmod(benchPath, 0o755);
+  const checksExists = await Bun.file(checksPath).exists();
+  if (checksExists) await chmod(checksPath, 0o755);
+
+  // 3. Benchmark run.
+  const benchResult = await bench(worktreePath);
+  if (benchResult.exitCode !== 0 || benchResult.measurement === null) {
+    return benchmarkFailure(benchResult);
+  }
+  const measurement = benchResult.measurement;
+
+  // 4. Optional checks.
+  let checksExitCode: number | undefined;
+  if (checksExists) {
+    const { exitCode, stdout, stderr } = await runChecksCapturing(worktreePath);
+    if (exitCode !== 0) {
+      return {
+        ok: false,
+        phase: "checks",
+        message: `autoresearch.checks.sh exited ${exitCode}`,
+        stdout,
+        stderr,
+      };
+    }
+    checksExitCode = 0;
+  }
+
+  // 5. Dirty gate.
+  try {
+    await dirtyGate(worktreePath);
+  } catch (err) {
+    return {
+      ok: false,
+      phase: "dirty",
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  return checksExitCode === undefined
+    ? { ok: true, measurement }
+    : { ok: true, measurement, checksExitCode };
+}
+
 interface ResolvedDeps {
   readonly agent: NonNullable<RunLoopDeps["agent"]>;
   readonly benchmark: NonNullable<RunLoopDeps["benchmark"]>;

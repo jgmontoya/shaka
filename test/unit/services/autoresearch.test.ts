@@ -30,6 +30,7 @@ import {
   setupWorkspace,
   slugify,
   summarizeHypothesis,
+  validateSetup,
 } from "../../../src/services/autoresearch";
 import { isCleanExcept } from "../../../src/services/git";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
@@ -1834,5 +1835,182 @@ describe("assertOnlySetupDirty", () => {
     await Bun.write(join(dir, "rogue.js"), "// rogue\n");
 
     await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/rogue\.js/);
+  });
+});
+
+// Skipped on Windows: validateSetup runs ./autoresearch.sh directly (shebang
+// script by path), which is a Unix-only execution model. Mirrors the runBenchmark
+// platform gate above.
+describe.skipIf(process.platform === "win32")("validateSetup", () => {
+  const createdDirs: string[] = [];
+
+  afterEach(async () => {
+    for (const d of createdDirs.splice(0)) await rm(d, { recursive: true, force: true });
+  });
+
+  async function makeWorktree(opts?: {
+    readonly spec?: string;
+    readonly bench?: string;
+    readonly benchMode?: number;
+    readonly checks?: string;
+    readonly checksMode?: number;
+  }): Promise<string> {
+    const dir = join(
+      tmpdir(),
+      `shaka-validate-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    await mkdir(dir, { recursive: true });
+    createdDirs.push(dir);
+    await run(["git", "init", "-q", "-b", "main"], dir);
+    await run(["git", "config", "user.email", "t@t"], dir);
+    await run(["git", "config", "user.name", "t"], dir);
+
+    const { chmod } = await import("node:fs/promises");
+
+    const spec =
+      opts?.spec ??
+      "# test\n\n## Metric\n- command: ./autoresearch.sh\n- direction: minimize\n- unit: ms\n";
+    await Bun.write(join(dir, "autoresearch.md"), spec);
+
+    if (opts?.bench !== undefined) {
+      const benchPath = join(dir, "autoresearch.sh");
+      await Bun.write(benchPath, opts.bench);
+      await chmod(benchPath, opts.benchMode ?? 0o755);
+    } else {
+      const benchPath = join(dir, "autoresearch.sh");
+      await Bun.write(
+        benchPath,
+        "#!/bin/sh\necho 'METRIC name=runtime value=1.5 unit=ms'\n",
+      );
+      await chmod(benchPath, opts?.benchMode ?? 0o755);
+    }
+
+    if (opts?.checks !== undefined) {
+      const checksPath = join(dir, "autoresearch.checks.sh");
+      await Bun.write(checksPath, opts.checks);
+      await chmod(checksPath, opts.checksMode ?? 0o755);
+    }
+
+    await run(["git", "add", "-A"], dir);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], dir);
+    return dir;
+  }
+
+  test("happy path returns ok with parsed measurement", async () => {
+    const dir = await makeWorktree();
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.measurement).toEqual({ name: "runtime", value: 1.5, unit: "ms" });
+      expect(result.checksExitCode).toBeUndefined();
+    }
+  });
+
+  test("fails with phase='spec' when autoresearch.md lacks a direction field", async () => {
+    const dir = await makeWorktree({
+      spec: "# test\n\n## Metric\n- command: ./autoresearch.sh\n- unit: ms\n",
+    });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("spec");
+      expect(result.message).toMatch(/direction/);
+    }
+  });
+
+  test("fails with phase='benchmark' and captured streams when the script exits non-zero", async () => {
+    const dir = await makeWorktree({
+      bench: "#!/bin/sh\necho 'stdout noise'\necho 'stderr noise' >&2\nexit 7\n",
+    });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("benchmark");
+      expect(result.stdout).toContain("stdout noise");
+      expect(result.stderr).toContain("stderr noise");
+    }
+  });
+
+  test("fails with phase='benchmark' when the script exits 0 but emits no METRIC", async () => {
+    const dir = await makeWorktree({ bench: "#!/bin/sh\necho 'no metric here'\nexit 0\n" });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("benchmark");
+      expect(result.message).toMatch(/METRIC/);
+    }
+  });
+
+  test("fails with phase='benchmark' when autoresearch.sh is missing entirely", async () => {
+    const dir = await makeWorktree();
+    await rm(join(dir, "autoresearch.sh"));
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("benchmark");
+      expect(result.message).toMatch(/missing/);
+    }
+  });
+
+  test("defensively chmod +x on autoresearch.sh when it lacks the executable bit", async () => {
+    const dir = await makeWorktree({
+      bench: "#!/bin/sh\necho 'METRIC name=t value=2 unit=ms'\n",
+      benchMode: 0o644,
+    });
+    const { stat } = await import("node:fs/promises");
+    const before = await stat(join(dir, "autoresearch.sh"));
+    expect(before.mode & 0o111).toBe(0);
+
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.measurement).toEqual({ name: "t", value: 2, unit: "ms" });
+    }
+    const after = await stat(join(dir, "autoresearch.sh"));
+    expect(after.mode & 0o111).not.toBe(0);
+  });
+
+  test("fails with phase='checks' when autoresearch.checks.sh exits non-zero", async () => {
+    const dir = await makeWorktree({
+      checks: "#!/bin/sh\necho 'check stdout'\necho 'check stderr' >&2\nexit 1\n",
+    });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("checks");
+      expect(result.stdout).toContain("check stdout");
+      expect(result.stderr).toContain("check stderr");
+    }
+  });
+
+  test("captures checksExitCode=0 when autoresearch.checks.sh passes", async () => {
+    const dir = await makeWorktree({
+      checks: "#!/bin/sh\nexit 0\n",
+    });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.checksExitCode).toBe(0);
+    }
+  });
+
+  test("fails with phase='dirty' when unrelated paths are dirty in the worktree", async () => {
+    const dir = await makeWorktree();
+    await Bun.write(join(dir, "rogue.ts"), "export const x = 1;\n");
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("dirty");
+      expect(result.message).toMatch(/rogue\.ts/);
+    }
   });
 });
