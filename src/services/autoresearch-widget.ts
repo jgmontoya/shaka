@@ -46,6 +46,6 @@ export interface TerminalInfo {
  */
 export function shouldRenderWidget(info: TerminalInfo): boolean {
   if (!info.isTTY) return false;
-  if (info.term === "dumb") return false;
+  if (info.term?.trim().toLowerCase() === "dumb") return false;
   return true;
 }

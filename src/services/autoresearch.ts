@@ -711,8 +711,13 @@ async function runIteration(args: {
   // Infrastructure failures (no provider, spawn error, CLI crash) are not
   // iteration outcomes — they indicate the user's environment is broken.
   // Surface the real cause instead of coercing to discard/incorrect.
+  //
+  // Restore the JSONL snapshot before throwing so a misbehaving provider that
+  // wrote to autoresearch.jsonl and then exited non-zero can't poison the
+  // next resume (prompt context + prior-state reconstruction both read jsonl).
   if (agentResult.exitCode !== 0 && !agentResult.timedOut) {
     const diag = agentResult.stderr.trim() || agentResult.stdout.trim() || "(no output)";
+    await restoreJsonlIfChanged(jsonlSnapshot);
     throw new Error(`Agent failed on iter ${iter}: ${diag}`);
   }
 

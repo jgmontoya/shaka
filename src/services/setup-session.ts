@@ -10,6 +10,16 @@
 
 import { runAgentStep } from "../domain/agent-execution";
 import type { ProviderName } from "../providers/types";
+import type { DetectedProviders } from "../services/provider-detection";
+
+/** Single-provider DetectedProviders override — forces `runAgentStep` to dispatch to one backend. */
+function onlyProvider(provider: ProviderName): DetectedProviders {
+  return {
+    claude: provider === "claude",
+    opencode: provider === "opencode",
+    codex: provider === "codex",
+  };
+}
 
 /**
  * Claude: positional seeds the first user turn; `--append-system-prompt`
@@ -117,11 +127,18 @@ export async function runSetupOneshot(
   deps?: { readonly runAgent?: typeof runAgentStep },
 ): Promise<SetupSessionResult> {
   const prompt = `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
-  const result = await (deps?.runAgent ?? runAgentStep)({
-    prompt,
-    cwd: worktreePath,
-    timeout: 15 * 60 * 1000,
-  });
+  // Force the selected provider so `--provider X` is honored — without this,
+  // runAgentStep falls back to detectInstalledProviders() and dispatches to
+  // whichever backend happens to be first-available, silently ignoring the
+  // user's choice.
+  const result = await (deps?.runAgent ?? runAgentStep)(
+    {
+      prompt,
+      cwd: worktreePath,
+      timeout: 15 * 60 * 1000,
+    },
+    onlyProvider(provider),
+  );
   return {
     exitCode: result.exitCode,
     provider: result.provider ?? provider,
