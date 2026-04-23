@@ -21,6 +21,7 @@ import {
   findExperimentWorktree,
   improvesBest,
   parseMetricLine,
+  parseSpec,
   renderTemplates,
   resolveExperimentWorktree,
   resolveResumeTarget,
@@ -74,7 +75,7 @@ async function setupExperimentRepo(opts: { direction: Direction }): Promise<stri
 
   await Bun.write(
     join(dir, "autoresearch.md"),
-    `# Autoresearch: test\n\n## Metric\n- direction: ${opts.direction}\n`,
+    `# Autoresearch: test\n\n## Metric\n- direction: ${opts.direction}\n- unit: ms\n`,
   );
   await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n");
 
@@ -239,6 +240,21 @@ describe("classifyVerdict", () => {
         beatsBest: false,
       }),
     ).toBe("crash");
+  });
+});
+
+describe("parseSpec", () => {
+  test("returns direction and unit when both are present", () => {
+    const spec = parseSpec("## Metric\n- direction: minimize\n- unit: ms\n");
+    expect(spec).toEqual({ direction: "minimize", unit: "ms" });
+  });
+
+  test("throws when direction is missing", () => {
+    expect(() => parseSpec("## Metric\n- unit: ms\n")).toThrow(/direction/);
+  });
+
+  test("throws when unit is missing — the loop needs it to reject incomparable measurements", () => {
+    expect(() => parseSpec("## Metric\n- direction: minimize\n")).toThrow(/unit/);
   });
 });
 
@@ -604,7 +620,7 @@ describe("runLoop", () => {
       // Also edit a setup artifact — this is what should trip the safety gate
       await Bun.write(
         join(cwd, "autoresearch.md"),
-        "# Autoresearch: hijacked\n\n## Metric\n- direction: minimize\n",
+        "# Autoresearch: hijacked\n\n## Metric\n- direction: minimize\n- unit: ms\n",
       );
       return {
         exitCode: 0,
@@ -644,6 +660,94 @@ describe("runLoop", () => {
     // HEAD is unchanged and the worktree is back to clean-except-jsonl.
     expect(await headSha(cwd)).toBe(headBefore);
     expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+  });
+
+  test("benchmark drifts to a different unit → crash; revert, no commit", async () => {
+    // Regression guard: a smaller value in a different unit is not an
+    // improvement. Treat unit mismatch as a missing measurement (null → crash
+    // verdict) so the iteration reverts cleanly.
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const headBefore = await headSha(cwd);
+
+    const agent = scriptedAgent([{ stdout: "HYPOTHESIS: switch units" }]);
+    // Baseline emits ms (matching spec); iteration emits seconds with a
+    // smaller numeric value — a naive compare would "improve" falsely.
+    const benchmark = scriptedBenchmark([
+      { value: 100 },
+      {
+        exitCode: 0,
+        stdout: "METRIC name=t value=0.5 unit=s",
+        measurement: { name: "t", value: 0.5, unit: "s" },
+      },
+    ]);
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent, benchmark },
+    );
+
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].verdict).toBe("crash");
+    expect(entries[0].metric).toBeNull();
+    expect(await headSha(cwd)).toBe(headBefore);
+  });
+
+  test("benchmark that mutates setup artifacts → incorrect verdict (post-benchmark tamper gate)", async () => {
+    // Regression guard: the pre-benchmark tamper gate catches agent edits.
+    // The post-benchmark gate catches self-modifying benchmark / checks
+    // scripts that slip mutations into commitAllExcept.
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const headBefore = await headSha(cwd);
+
+    // Agent proposes a valid edit to the subject code.
+    const agent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "app.ts"), "export const x = 2;");
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: improve x",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+    // Benchmark emits a valid improving metric, BUT also mutates autoresearch.sh
+    // as a side effect (e.g. a self-calibrating script).
+    const benchmark = async (): Promise<BenchResult> => {
+      // First call: baseline. Second: after agent edit.
+      if ((benchmark as unknown as { calls: number }).calls === undefined) {
+        (benchmark as unknown as { calls: number }).calls = 0;
+      }
+      const calls = ((benchmark as unknown as { calls: number }).calls += 1);
+      if (calls === 2) {
+        // Post-benchmark mutation — should trip the post-benchmark tamper gate.
+        await Bun.write(join(cwd, "autoresearch.sh"), "#!/bin/sh\necho 'mutated by benchmark'\n");
+      }
+      return {
+        exitCode: 0,
+        stdout: "METRIC name=t value=50 unit=ms",
+        stderr: "",
+        measurement: { name: "t", value: 50, unit: "ms" },
+      };
+    };
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent, benchmark },
+    );
+
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries).toHaveLength(1);
+    expect(entries[0].verdict).toBe("incorrect");
+    expect(entries[0].commit).toBeNull();
+    // HEAD unchanged — nothing committed, benchmark-induced mutation wiped.
+    expect(await headSha(cwd)).toBe(headBefore);
   });
 
   test("agent tampering with jsonl is restored and classified incorrect", async () => {
@@ -1482,7 +1586,7 @@ describe("runResume (in-worktree)", () => {
     // Replace template md with a parseable spec
     await Bun.write(
       join(setup.worktreePath, "autoresearch.md"),
-      "# Autoresearch\n\n## Metric\n- direction: minimize\n",
+      "# Autoresearch\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await run(["git", "add", "-A"], setup.worktreePath);
     await run(
@@ -1579,7 +1683,7 @@ describe("runResume (in-worktree)", () => {
     );
     await Bun.write(
       join(setup.worktreePath, "autoresearch.md"),
-      "# Pretending to be a spec\n\n## Metric\n- direction: minimize\n",
+      "# Pretending to be a spec\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
 
     await expect(
@@ -1590,7 +1694,7 @@ describe("runResume (in-worktree)", () => {
   test("rejects a main checkout masquerading as an autoresearch branch", async () => {
     const repo = await makeSourceRepo();
     await run(["git", "checkout", "-b", "autoresearch/fake"], repo);
-    await Bun.write(join(repo, "autoresearch.md"), "# Autoresearch\n\n## Metric\n- direction: minimize\n");
+    await Bun.write(join(repo, "autoresearch.md"), "# Autoresearch\n\n## Metric\n- direction: minimize\n- unit: ms\n");
     await run(["git", "add", "-A"], repo);
     await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "fake spec"], repo);
 
@@ -1620,7 +1724,7 @@ describe("runResume (in-worktree)", () => {
     await run(["git", "checkout", "-b", "autoresearch/fake"], submodule);
     await Bun.write(
       join(submodule, "autoresearch.md"),
-      "# Submodule decoy\n\n## Metric\n- direction: minimize\n",
+      "# Submodule decoy\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await Bun.write(
       join(submodule, "autoresearch.sh"),
@@ -1762,7 +1866,7 @@ describe("experiment worktree discovery", () => {
     await run(["git", "checkout", "-b", "autoresearch/fake"], repo);
     await Bun.write(
       join(repo, "autoresearch.md"),
-      "# Decoy\n\n## Metric\n- direction: minimize\n",
+      "# Decoy\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await run(["git", "add", "-A"], repo);
     await run(
@@ -1859,7 +1963,7 @@ describe("assertOnlySetupDirty", () => {
     await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
     await Bun.write(
       join(dir, "autoresearch.md"),
-      "# spec\n\n## Metric\n- direction: minimize\n",
+      "# spec\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
 

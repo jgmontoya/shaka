@@ -63,7 +63,7 @@ describe("autoresearch walking skeleton", () => {
     // can parse it — real users edit the template or let the wizard populate it.
     await Bun.write(
       join(setup.worktreePath, "autoresearch.md"),
-      "# Autoresearch: e2e\n\n## Metric\n- direction: minimize\n",
+      "# Autoresearch: e2e\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await sh(["git", "add", "-A"], setup.worktreePath);
     await sh(

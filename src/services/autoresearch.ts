@@ -163,16 +163,25 @@ export function parseMetricLine(stdout: string): Measurement | null {
 }
 
 const DIRECTION_PATTERN = /^\s*-\s*direction:\s*(minimize|maximize)\s*$/m;
+const UNIT_PATTERN = /^\s*-\s*unit:\s*([^\s]+)\s*$/m;
 
-/** Parse the minimum fields the runner needs out of `autoresearch.md`. */
-export function parseSpec(md: string): { readonly direction: Direction } {
-  const match = md.match(DIRECTION_PATTERN);
-  if (!match) {
+/**
+ * Parse the minimum fields the runner needs out of `autoresearch.md`.
+ * Both direction and unit are required — the loop uses direction to compare
+ * values and unit to reject incomparable measurements across iterations.
+ */
+export function parseSpec(md: string): { readonly direction: Direction; readonly unit: string } {
+  const direction = md.match(DIRECTION_PATTERN);
+  if (!direction) {
     throw new Error(
       "autoresearch.md is missing a '- direction: minimize|maximize' line in ## Metric.",
     );
   }
-  return { direction: match[1] as Direction };
+  const unit = md.match(UNIT_PATTERN);
+  if (!unit) {
+    throw new Error("autoresearch.md is missing a '- unit: <unit>' line in ## Metric.");
+  }
+  return { direction: direction[1] as Direction, unit: unit[1] as string };
 }
 
 const HYPOTHESIS_PATTERN = /^HYPOTHESIS:\s*(.+?)\s*$/m;
@@ -561,11 +570,23 @@ function resolveDeps(deps: RunLoopDeps): ResolvedDeps {
   };
 }
 
-async function measureBaseline(cwd: string, benchmark: ResolvedDeps["benchmark"]): Promise<number> {
+async function measureBaseline(
+  cwd: string,
+  benchmark: ResolvedDeps["benchmark"],
+  expectedUnit: string,
+): Promise<number> {
   const r = await benchmark(cwd);
   if (r.exitCode !== 0 || r.measurement === null) {
     const diag = (r.stderr || r.stdout).trim();
     throw new Error(`Baseline benchmark failed (exit ${r.exitCode}).${diag ? ` ${diag}` : ""}`);
+  }
+  // Baseline is the reference point; a mismatched unit here is a spec/script
+  // misalignment, not an iteration-level issue. Fail loudly so the user fixes
+  // it in one place rather than chasing inconsistent metrics later.
+  if (r.measurement.unit !== expectedUnit) {
+    throw new Error(
+      `Baseline benchmark emitted unit=${r.measurement.unit} but autoresearch.md declares unit=${expectedUnit}. Align the METRIC line in autoresearch.sh with the spec.`,
+    );
   }
   return r.measurement.value;
 }
@@ -703,14 +724,44 @@ async function restoreJsonlIfChanged(snapshot: JsonlSnapshot): Promise<boolean> 
   return true;
 }
 
-function incorrectOutcome(args: {
+interface IncorrectContext {
   readonly iter: number;
   readonly deps: ResolvedDeps;
   readonly agentResult: AgentExecutionResult;
   readonly hypothesis: string;
   readonly asi: readonly string[];
   readonly iterStart: number;
-}): IterationOutcome {
+}
+
+/**
+ * Shared revert-and-classify for the three incorrect-iteration gates
+ * (jsonl-tamper, pre-benchmark setup-tamper, post-benchmark setup-tamper).
+ * Same shape at every site: revert working tree, clean ignored setup
+ * artifacts (so a next iteration isn't immediately re-flagged), return an
+ * incorrect outcome carrying the agent's hypothesis/asi for the log entry.
+ */
+async function revertAndClassifyIncorrect(
+  cwd: string,
+  ctx: IncorrectContext,
+): Promise<IterationOutcome> {
+  await revertWorkingTree(JSONL_EXCLUDES, cwd);
+  await cleanIgnoredSetupArtifacts(cwd);
+  return incorrectOutcome(ctx);
+}
+
+/**
+ * Return the measurement's numeric value iff its unit matches the spec's
+ * declared unit; otherwise null so the iteration is classified as `crash`.
+ * Rejecting mismatched units at consumption time is cheaper than adding a new
+ * verdict variant and keeps classifyVerdict oblivious to unit semantics.
+ */
+function usableMetric(measurement: Measurement | null, expectedUnit: string): number | null {
+  if (measurement === null) return null;
+  if (measurement.unit !== expectedUnit) return null;
+  return measurement.value;
+}
+
+function incorrectOutcome(args: IncorrectContext): IterationOutcome {
   return {
     verdict: "incorrect",
     metric: null,
@@ -755,12 +806,13 @@ async function runIteration(args: {
   readonly cwd: string;
   readonly iter: number;
   readonly direction: Direction;
+  readonly expectedUnit: string;
   readonly best: number;
   readonly providers: DetectedProviders;
   readonly deps: ResolvedDeps;
   readonly prompt: string;
 }): Promise<IterationOutcome> {
-  const { cwd, iter, direction, best, providers, deps, prompt } = args;
+  const { cwd, iter, direction, expectedUnit, best, providers, deps, prompt } = args;
   const iterStart = Date.now();
 
   const jsonlSnapshot = await snapshotJsonl(cwd);
@@ -782,10 +834,10 @@ async function runIteration(args: {
   const hypothesis = extractHypothesis(agentResult.stdout);
   const asi = extractAsi(agentResult.stdout);
 
+  const tamperContext = { iter, deps, agentResult, hypothesis, asi, iterStart };
+
   if (await restoreJsonlIfChanged(jsonlSnapshot)) {
-    await revertWorkingTree(JSONL_EXCLUDES, cwd);
-    await cleanIgnoredSetupArtifacts(cwd);
-    return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
+    return revertAndClassifyIncorrect(cwd, tamperContext);
   }
 
   // Skipping benchmark on tampered iterations: (a) the spec/bench may no
@@ -794,9 +846,7 @@ async function runIteration(args: {
   // timeout because an illegitimate iteration is a stronger failure mode
   // than simply running out of time.
   if (await setupArtifactsDirty(cwd)) {
-    await revertWorkingTree(JSONL_EXCLUDES, cwd);
-    await cleanIgnoredSetupArtifacts(cwd);
-    return incorrectOutcome({ iter, deps, agentResult, hypothesis, asi, iterStart });
+    return revertAndClassifyIncorrect(cwd, tamperContext);
   }
 
   // Skipping benchmark on timed-out iterations: the agent's edits are, by
@@ -826,13 +876,23 @@ async function runIteration(args: {
   }
 
   const benchResult = await deps.benchmark(cwd);
-  const metric = benchResult.measurement?.value ?? null;
+  // Reject mismatched units — a benchmark that drifts from the spec's declared
+  // unit produces incomparable numbers. Treat as missing measurement → crash.
+  const metric = usableMetric(benchResult.measurement, expectedUnit);
   const beatsBest = metric !== null && improvesBest(metric, best, direction);
 
   // Only run correctness checks when the benchmark actually produced a number —
   // otherwise we waste work on a run that'll be `crash` regardless.
   const correctnessOk =
     benchResult.exitCode === 0 && metric !== null ? (await deps.checks(cwd)).exitCode === 0 : true;
+
+  // Post-benchmark tamper re-check: the pre-benchmark gate catches agent edits
+  // to setup artifacts, but benchmark or checks scripts can also mutate them
+  // (self-updating calibration, golden-file regenerators, etc.). Those
+  // mutations must not land in the iteration commit.
+  if (await setupArtifactsDirty(cwd)) {
+    return revertAndClassifyIncorrect(cwd, tamperContext);
+  }
 
   const baseInput = {
     metric,
@@ -926,7 +986,7 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
 
   // If no prior `keep` exists, HEAD is still the setup commit — re-measure.
   // Otherwise the prior run's best-kept metric is the accurate reference.
-  const baseline = prior?.best ?? (await measureBaseline(cwd, resolved.benchmark));
+  const baseline = prior?.best ?? (await measureBaseline(cwd, resolved.benchmark, spec.unit));
 
   const book: LoopBookkeeping = {
     iter: prior?.iter ?? 0,
@@ -952,6 +1012,7 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
       cwd,
       iter: book.iter,
       direction: spec.direction,
+      expectedUnit: spec.unit,
       best: book.best,
       providers,
       deps: resolved,
