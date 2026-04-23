@@ -307,6 +307,36 @@ async function setupArtifactsDirty(cwd: string): Promise<boolean> {
 }
 
 /**
+ * Force-stage the setup artifacts (`git add -f`) so they're committed even if
+ * a source-repo `.gitignore` pattern (e.g. `*.sh`) would otherwise skip them.
+ * Without this, the initial setup commit silently omits the generated
+ * autoresearch.sh, every subsequent iteration sees it as an untracked-ignored
+ * dirty file via setupArtifactsDirty, cleanIgnoredSetupArtifacts deletes it
+ * on revert, and the loop breaks. Force-add is idempotent for non-ignored
+ * files (behaves like a plain add).
+ */
+async function forceStageSetupArtifacts(cwd: string): Promise<void> {
+  // Only stage setup artifacts that actually exist on disk — `git add -f` on
+  // a missing pathspec errors.
+  const present: string[] = [];
+  for (const artifact of SETUP_ARTIFACTS) {
+    if (await Bun.file(join(cwd, artifact)).exists()) present.push(artifact);
+  }
+  if (present.length === 0) return;
+  const proc = Bun.spawn(["git", "add", "-f", "--", ...present], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [, , code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`git add -f failed in ${cwd} while staging setup artifacts`);
+}
+
+/**
  * Remove any ignored (and untracked) setup artifacts that survived a normal
  * `git clean -fd`. Needed on incorrect-iteration revert paths because the
  * tamper detector now sees ignored files (via `--ignored=matching`) but the
@@ -1073,11 +1103,16 @@ export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
  * Legacy TODO-marker template used when the wizard didn't run (non-TTY setups).
  * benchmarkCommand embeds its own echo+exit so the rendered script still fails
  * loudly with an actionable message pointing at `shaka autoresearch resume`.
+ *
+ * The echo uses SINGLE-quoted sh syntax so the inline backticks around the
+ * command name print literally. Double-quoted with unescaped backticks would
+ * trigger POSIX command substitution and silently try to invoke `shaka
+ * autoresearch resume` as a subcommand.
  */
 const TODO_ANSWERS: WizardAnswers = {
   objective: "<objective>",
   benchmarkCommand:
-    '# TODO: replace with a real benchmark that emits: METRIC name=runtime value=<value> unit=TODO\necho "autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`." >&2\nexit 1',
+    "# TODO: replace with a real benchmark that emits: METRIC name=runtime value=<value> unit=TODO\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`.' >&2\nexit 1",
   direction: "minimize",
   unit: "TODO",
   checksCommand: "",
@@ -1198,6 +1233,9 @@ export async function setupWorkspace(args: SetupWorkspaceArgs): Promise<SetupRes
 
   const wroteAnything = !mdExists || !shExists || (!checksExisted && rendered.checks !== null);
   if (wroteAnything) {
+    // Force-stage setup artifacts so a source-repo .gitignore pattern
+    // (e.g. `*.sh`) can't silently skip them on `git add -A`.
+    await forceStageSetupArtifacts(worktreePath);
     await commitAll("autoresearch: setup", worktreePath);
   }
 

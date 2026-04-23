@@ -1171,6 +1171,31 @@ describe("renderTemplates", () => {
     expect(out.sh).not.toContain("exit 1");
   });
 
+  test("sh parses under `sh -n` with the TODO placeholder, with no latent command substitution", async () => {
+    // Regression guard for a sneaky bug where TODO_ANSWERS' echo used double
+    // quotes with literal backticks around `shaka autoresearch resume` — POSIX
+    // would treat the backticks as command substitution and silently try to
+    // run shaka. The single-quoted sh form prints them literally. Assert (a)
+    // the script is syntactically valid under `sh -n`, and (b) it doesn't
+    // contain the double-quoted-backtick-invocation shape.
+    const todoLike = {
+      ...fullAnswers,
+      benchmarkCommand:
+        "# TODO: replace with a real benchmark\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`.' >&2\nexit 1",
+    };
+    const out = renderTemplates(todoLike);
+    // No inline `"..."` wrapping of the backtick phrase in the rendered sh.
+    expect(out.sh).not.toMatch(/"[^"]*`shaka[^`]*`[^"]*"/);
+    // Parses cleanly.
+    const proc = Bun.spawn(["sh", "-n", "-c", out.sh], { stdout: "pipe", stderr: "pipe" });
+    const [, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  });
+
   test("checks file is produced only when a checks command is provided", () => {
     expect(renderTemplates(fullAnswers).checks).not.toBeNull();
     expect(renderTemplates(fullAnswers).checks).toContain("bun test --only correctness");
