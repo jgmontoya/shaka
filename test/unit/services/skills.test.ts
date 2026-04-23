@@ -62,6 +62,6 @@ describe("loadSkill", () => {
 
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("Output contract");
-    expect(body).toContain("What's Been Tried");
+    expect(body).toContain("Required spec structure");
   });
 });

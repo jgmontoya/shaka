@@ -79,9 +79,6 @@ Don't ask for decisions you can make safely on your own (file names, awk regexes
 
 ## Benchmark
 - wraps: ./bench-cli.sh — CLI startup latency (lower is better)
-
-## What's Been Tried
-_no iterations yet_
 ```
 
-Seed the `## What's Been Tried` section as shown — the iteration loop appends to it later.
+Iteration history lives in `autoresearch.jsonl` and is surfaced by `shaka autoresearch status`. You don't need to duplicate it in the spec.

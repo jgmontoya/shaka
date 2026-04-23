@@ -118,7 +118,7 @@ These land before the steps that depend on them. Each is small; grouping them up
 - Content: the contract ("produce files that make the loop runnable"), the `METRIC` line format with examples, the validation check the agent should perform itself (run `./autoresearch.sh`, confirm one `METRIC name=... value=... unit=...` line on stdout), guidance on keeping `autoresearch.md` minimal, and permission to ask the user for clarification when the objective is genuinely ambiguous (interactive-mode-specific).
 - The generated `autoresearch.md` MUST record the chosen benchmark command or benchmark source when the repo exposes more than one candidate. Experiment 40 surfaced a real gap: on `sem-multi-benchmark` (two plausible benchmarks, objective "Make it faster"), claude and codex both documented their pick in `autoresearch.md`; opencode picked one but left the spec silent. Iteration agents later read the spec, not the transcript — silent choices break the audit trail. Mitigation is authoring-level: the skill body must include an explicit example, not just a directive.
 - Parallel file structure to existing `defaults/system/skills/Autoresearch/SKILL.md` so the same loader surface handles both.
-- **Seed a `## What's Been Tried` section in the generated `autoresearch.md`** (initially empty, e.g. `_no iterations yet_`). Idea cribbed from pi-autoresearch's rolling-log convention: a fresh iteration agent resuming after a context reset reads this narrative faster than it can re-derive history from `autoresearch.jsonl`. **This step seeds the section only**; the iteration side (teaching the Autoresearch loop skill to append a one-line bullet when logging each entry) is a separate follow-up and explicitly out of scope here.
+- ~~**`## What's Been Tried` section scaffold**~~ — **Cut 2026-04-23**. The plan originally borrowed pi-autoresearch's rolling-markdown-log convention for the iteration agent's benefit. Shaka already injects recent jsonl entries into every iteration's prompt and has `shaka autoresearch status` for humans, so the in-spec section was duplicative. A real user's second run (`## What's Been Tried` stayed empty because the iteration-side append was deferred) surfaced the UX friction immediately. Decision: drop the scaffold entirely and let `autoresearch.jsonl` + the status command carry the narrative.
 
 #### Concrete `SKILL.md` skeleton
 
@@ -182,12 +182,9 @@ Don't ask for decisions you can make safely on your own (file names, awk regexes
 
 ## Benchmark
 - wraps: ./bench-cli.sh — CLI startup latency (lower is better)
-
-## What's Been Tried
-_no iterations yet_
 ```
 
-Seed the `## What's Been Tried` section as shown — the iteration loop appends to it later.
+Iteration history lives in `autoresearch.jsonl` and is surfaced by `shaka autoresearch status`. You don't need to duplicate it in the spec.
 ````
 
 This skeleton is the starting deliverable. Subsequent edits (e.g. adding examples of `METRIC` lines for different units, clarifying `autoresearch.checks.sh` patterns) land incrementally without changing the loader surface.
@@ -324,7 +321,7 @@ The interactive session itself is LLM-mediated and effectively untestable at the
   - missing or unparsable `METRIC`
   - failing `autoresearch.checks.sh`
   - dirty gate rejecting non-setup artifacts
-- **Skill-contract fixture test**: the generated `autoresearch.md` contains `## What's Been Tried` when a scripted-agent stub produces the spec.
+- **Skill-contract fixture test**: the generated `autoresearch.md` parses via `parseSpec` with required direction + unit fields (covers the spec contract without pinning to specific sections that have churned).
 - **Docs**: update `docs/autoresearch-walkthrough.md` to lead with the default agent-driven interactive path; document `--wizard` and `--dry-run` as opt-outs; document the non-TTY behavior explicitly.
 
 ## Open questions
@@ -392,5 +389,5 @@ End-to-end done when:
 - `shaka autoresearch start "<objective>"` on a box with no agent provider installed fails with an actionable message that names `--wizard` and `shaka init` and does NOT silently fall back.
 - `shaka autoresearch start "<objective>"` in a non-TTY context (piped stdin or `ssh -T`) fails with an actionable message that names `--wizard` as the fallback and explains the reason.
 - When validation fails after the interactive session exits, the error message names the failing phase (spec / benchmark / checks / dirty) and leaves the worktree on disk for user inspection.
-- Existing autoresearch tests stay green; new tests cover: per-provider invocation arg construction (unit), command-layer composition with injected spawn (integration), stub-provider end-to-end smoke (real `stdio: "inherit"` path), validation gate, and the `## What's Been Tried` seed.
+- Existing autoresearch tests stay green; new tests cover: per-provider invocation arg construction (unit), command-layer composition with injected spawn (integration), stub-provider end-to-end smoke (real `stdio: "inherit"` path), and the validation gate.
 - `docs/autoresearch-walkthrough.md` leads with the default agent-driven interactive path and documents `--wizard`, `--dry-run`, and `--provider` as opt-outs/overrides.

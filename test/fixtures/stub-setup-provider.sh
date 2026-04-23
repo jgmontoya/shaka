@@ -8,9 +8,6 @@ cat > autoresearch.md <<'EOF'
 - command: ./autoresearch.sh
 - direction: minimize
 - unit: s
-
-## What's Been Tried
-_no iterations yet_
 EOF
 
 cat > autoresearch.sh <<'EOF'

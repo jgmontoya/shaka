@@ -80,9 +80,6 @@ function writeValidSetup(worktreePath: string): () => Promise<void> {
         "- direction: minimize",
         "- unit: s",
         "",
-        "## What's Been Tried",
-        "_no iterations yet_",
-        "",
       ].join("\n"),
     );
     const shPath = join(worktreePath, "autoresearch.sh");
