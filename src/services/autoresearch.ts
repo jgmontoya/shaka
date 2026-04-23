@@ -337,12 +337,17 @@ async function forceStageSetupArtifacts(cwd: string): Promise<void> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [, , code] = await Promise.all([
+  const [, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  if (code !== 0) throw new Error(`git add -f failed in ${cwd} while staging setup artifacts`);
+  if (code !== 0) {
+    const diag = stderr.trim();
+    throw new Error(
+      `git add -f failed in ${cwd} while staging setup artifacts${diag ? `: ${diag}` : ""}`,
+    );
+  }
 }
 
 /**
@@ -361,12 +366,15 @@ async function cleanIgnoredSetupArtifacts(cwd: string): Promise<void> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [, , code] = await Promise.all([
+  const [, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
-  if (code !== 0) throw new Error(`git clean failed in ${cwd} during tamper revert`);
+  if (code !== 0) {
+    const diag = stderr.trim();
+    throw new Error(`git clean failed in ${cwd} during tamper revert${diag ? `: ${diag}` : ""}`);
+  }
 }
 
 async function defaultAppendLog(cwd: string, entry: LogEntry): Promise<void> {
@@ -891,6 +899,14 @@ async function runIteration(args: {
   // (self-updating calibration, golden-file regenerators, etc.). Those
   // mutations must not land in the iteration commit.
   if (await setupArtifactsDirty(cwd)) {
+    return revertAndClassifyIncorrect(cwd, tamperContext);
+  }
+  // Symmetric re-check on autoresearch.jsonl: if benchmark or checks scripts
+  // wrote to the runner's log (golden-file regenerator, calibration cache),
+  // restore the pre-iteration snapshot so the tamper content doesn't survive
+  // revertWorkingTree (which preserves jsonl) into the next resume's
+  // loadPriorState / loadRecentEntries.
+  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
   }
 

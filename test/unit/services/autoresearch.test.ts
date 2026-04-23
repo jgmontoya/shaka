@@ -715,14 +715,13 @@ describe("runLoop", () => {
       };
     };
     // Benchmark emits a valid improving metric, BUT also mutates autoresearch.sh
-    // as a side effect (e.g. a self-calibrating script).
+    // as a side effect (e.g. a self-calibrating script). First call is the
+    // baseline measurement; second call is the iteration — that's when we
+    // inject the tamper.
+    let benchCalls = 0;
     const benchmark = async (): Promise<BenchResult> => {
-      // First call: baseline. Second: after agent edit.
-      if ((benchmark as unknown as { calls: number }).calls === undefined) {
-        (benchmark as unknown as { calls: number }).calls = 0;
-      }
-      const calls = ((benchmark as unknown as { calls: number }).calls += 1);
-      if (calls === 2) {
+      benchCalls += 1;
+      if (benchCalls === 2) {
         // Post-benchmark mutation — should trip the post-benchmark tamper gate.
         await Bun.write(join(cwd, "autoresearch.sh"), "#!/bin/sh\necho 'mutated by benchmark'\n");
       }
