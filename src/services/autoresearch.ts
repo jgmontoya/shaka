@@ -54,6 +54,13 @@ export interface LogEntry {
   readonly provider: ProviderName | null;
   readonly hypothesis: string;
   readonly metric: number | null;
+  /**
+   * Unit the metric was emitted in. Persisted so resume can detect a spec
+   * edit that changed the unit between runs and refuse to compare
+   * incommensurable measurements. Optional for backward compatibility with
+   * jsonl files written before this field existed.
+   */
+  readonly unit?: string;
   readonly verdict: Verdict;
   readonly commit: string | null;
   /** Diagnostic for a failed keep commit, e.g. pre-commit hook rejection. */
@@ -282,7 +289,12 @@ export const SETUP_ARTIFACTS = [
  * layers share one source of truth for dirty-path partitioning.
  */
 export async function assertOnlySetupDirty(worktreePath: string): Promise<void> {
-  const dirty = await listDirtyPaths(worktreePath);
+  // `includeIgnored: true` catches agent-dropped foreign files that match a
+  // .gitignore pattern (e.g. `.env`, `tmp/cache`). Without it, plain git
+  // status would hide the file and the gate would pass even though the
+  // worktree is no longer "setup artifacts only" — asymmetric with
+  // setupArtifactsDirty's own ignored-aware check.
+  const dirty = await listDirtyPaths(worktreePath, { includeIgnored: true });
   if (dirty.length === 0) return;
 
   const setupSet = new Set<string>(SETUP_ARTIFACTS);
@@ -432,18 +444,19 @@ export type SetupValidationResult =
 
 export interface ValidateSetupDeps {
   readonly runBenchmark?: (cwd: string) => Promise<BenchResult>;
-  readonly parseSpec?: (md: string) => unknown;
+  readonly parseSpec?: (md: string) => { readonly direction: Direction; readonly unit: string };
   readonly assertOnlySetupDirty?: (cwd: string) => Promise<void>;
 }
 
+type ParsedSpec = { readonly direction: Direction; readonly unit: string };
+
 async function validateSpec(
   worktreePath: string,
-  spec: (md: string) => unknown,
-): Promise<SetupValidationResult | null> {
+  spec: (md: string) => ParsedSpec,
+): Promise<{ readonly parsed: ParsedSpec } | SetupValidationResult> {
   try {
     const specBody = await Bun.file(join(worktreePath, "autoresearch.md")).text();
-    spec(specBody);
-    return null;
+    return { parsed: spec(specBody) };
   } catch (err) {
     return {
       ok: false,
@@ -451,6 +464,43 @@ async function validateSpec(
       message: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+function unitMismatchFailure(
+  benchResult: BenchResult,
+  measured: string,
+  expected: string,
+): SetupValidationResult {
+  return {
+    ok: false,
+    phase: "benchmark",
+    message: `autoresearch.sh emitted unit=${measured} but autoresearch.md declares unit=${expected}. Align the METRIC line in autoresearch.sh with the spec.`,
+    stdout: benchResult.stdout,
+    stderr: benchResult.stderr,
+  };
+}
+
+/**
+ * Run optional checks script. Returns the exit code when the script exists and
+ * passes; returns a validation failure when it fails. Absent script returns
+ * `undefined` so the caller knows to omit `checksExitCode` from the result.
+ */
+async function validateOptionalChecks(
+  worktreePath: string,
+  checksExists: boolean,
+): Promise<number | SetupValidationResult | undefined> {
+  if (!checksExists) return undefined;
+  const { exitCode, stdout, stderr } = await runChecksCapturing(worktreePath);
+  if (exitCode !== 0) {
+    return {
+      ok: false,
+      phase: "checks",
+      message: `autoresearch.checks.sh exited ${exitCode}`,
+      stdout,
+      stderr,
+    };
+  }
+  return 0;
 }
 
 function benchmarkFailure(benchResult: BenchResult): SetupValidationResult {
@@ -506,8 +556,9 @@ export async function validateSetup(
   const dirtyGate = deps.assertOnlySetupDirty ?? assertOnlySetupDirty;
 
   // 1. Spec parse.
-  const specFailure = await validateSpec(worktreePath, spec);
-  if (specFailure !== null) return specFailure;
+  const specResult = await validateSpec(worktreePath, spec);
+  if ("ok" in specResult) return specResult;
+  const parsedSpec = specResult.parsed;
 
   // 2. Defensive chmod +x on bench + checks scripts when present.
   const benchPath = join(worktreePath, "autoresearch.sh");
@@ -526,21 +577,18 @@ export async function validateSetup(
   }
   const measurement = benchResult.measurement;
 
-  // 4. Optional checks.
-  let checksExitCode: number | undefined;
-  if (checksExists) {
-    const { exitCode, stdout, stderr } = await runChecksCapturing(worktreePath);
-    if (exitCode !== 0) {
-      return {
-        ok: false,
-        phase: "checks",
-        message: `autoresearch.checks.sh exited ${exitCode}`,
-        stdout,
-        stderr,
-      };
-    }
-    checksExitCode = 0;
+  // 3a. Unit agreement — surface mismatch before commit, not later in
+  // measureBaseline. Otherwise the setup gets committed and the loop entry
+  // would fail at baseline with a diagnostic the user sees AFTER the
+  // (wrong) setup has landed on disk.
+  if (measurement.unit !== parsedSpec.unit) {
+    return unitMismatchFailure(benchResult, measurement.unit, parsedSpec.unit);
   }
+
+  // 4. Optional checks.
+  const checksResult = await validateOptionalChecks(worktreePath, checksExists);
+  if (typeof checksResult === "object") return checksResult;
+  const checksExitCode: number | undefined = checksResult;
 
   // 5. Dirty gate.
   try {
@@ -675,8 +723,18 @@ function countConsecutiveDiscards(entries: readonly LogEntry[]): number {
  * Read an existing jsonl and reconstruct loop state. Returns null for an empty
  * or missing file. Truncated trailing lines are dropped with a warning and the
  * file is rewritten cleanly so future appends don't concatenate to the bad tail.
+ *
+ * Refuses to resume when the current spec's `unit` no longer matches the unit
+ * persisted on the most recent jsonl entry — keeps/discards recorded under the
+ * old unit aren't numerically comparable to new measurements and would produce
+ * silent false-improvement decisions otherwise. Entries without a `unit` field
+ * (written before this field was persisted) are treated as unit-compatible.
  */
-async function loadPriorState(cwd: string, direction: Direction): Promise<PriorRunState | null> {
+async function loadPriorState(
+  cwd: string,
+  direction: Direction,
+  expectedUnit: string,
+): Promise<PriorRunState | null> {
   const path = join(cwd, JSONL_FILE);
   const file = Bun.file(path);
   if (!(await file.exists())) return null;
@@ -688,6 +746,16 @@ async function loadPriorState(cwd: string, direction: Direction): Promise<PriorR
     await Bun.write(path, renderJsonlEntries(entries));
   }
   if (entries.length === 0) return null;
+
+  // Latest persisted unit (if any) is the reference. Older entries without
+  // `unit` are grandfathered as compatible — callers wrote them before the
+  // field existed.
+  const persistedUnit = [...entries].reverse().find((e) => e.unit !== undefined)?.unit;
+  if (persistedUnit !== undefined && persistedUnit !== expectedUnit) {
+    throw new Error(
+      `autoresearch.md declares unit=${expectedUnit} but prior jsonl entries used unit=${persistedUnit}. Revert the spec edit, or start a fresh experiment with \`shaka autoresearch start\`.`,
+    );
+  }
 
   const iter = Math.max(...entries.map((e) => e.iter));
   const kept = entries.filter((e) => e.verdict === "keep").length;
@@ -739,6 +807,8 @@ interface IncorrectContext {
   readonly hypothesis: string;
   readonly asi: readonly string[];
   readonly iterStart: number;
+  /** Spec's declared unit at iteration time — persisted so resume can detect unit drift. */
+  readonly expectedUnit: string;
 }
 
 /**
@@ -780,6 +850,7 @@ function incorrectOutcome(args: IncorrectContext): IterationOutcome {
       provider: args.agentResult.provider,
       hypothesis: args.hypothesis,
       metric: null,
+      unit: args.expectedUnit,
       verdict: "incorrect",
       commit: null,
       asi: args.asi,
@@ -842,7 +913,15 @@ async function runIteration(args: {
   const hypothesis = extractHypothesis(agentResult.stdout);
   const asi = extractAsi(agentResult.stdout);
 
-  const tamperContext = { iter, deps, agentResult, hypothesis, asi, iterStart };
+  const tamperContext = {
+    iter,
+    deps,
+    agentResult,
+    hypothesis,
+    asi,
+    iterStart,
+    expectedUnit,
+  };
 
   if (await restoreJsonlIfChanged(jsonlSnapshot)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
@@ -875,6 +954,7 @@ async function runIteration(args: {
         provider: agentResult.provider,
         hypothesis,
         metric: null,
+        unit: expectedUnit,
         verdict: "timeout",
         commit: null,
         asi,
@@ -942,6 +1022,7 @@ async function runIteration(args: {
     provider: agentResult.provider,
     hypothesis,
     metric,
+    unit: expectedUnit,
     verdict,
     commit,
     commitError,
@@ -998,7 +1079,7 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
 
   const specBody = await Bun.file(join(cwd, "autoresearch.md")).text();
   const spec = parseSpec(specBody);
-  const prior = await loadPriorState(cwd, spec.direction);
+  const prior = await loadPriorState(cwd, spec.direction, spec.unit);
 
   // If no prior `keep` exists, HEAD is still the setup commit — re-measure.
   // Otherwise the prior run's best-kept metric is the accurate reference.

@@ -61,9 +61,20 @@ export async function isCleanExcept(
  * (` M path` → `M path`), shifting every path by one character. Uses
  * `git status --porcelain -z` for NUL-separated records so paths containing
  * whitespace parse unambiguously.
+ *
+ * Pass `{ includeIgnored: true }` to surface `.gitignore`-matched untracked
+ * files too. Use when the caller needs to detect ANY foreign file in the
+ * worktree (e.g. an agent dropping `.env` or `tmp/cache` outside the setup
+ * pathspec); omit otherwise, because most callers want git's normal
+ * "relevant changes" semantics.
  */
-export async function listDirtyPaths(cwd: string): Promise<readonly string[]> {
-  const proc = Bun.spawn(["git", "-c", "commit.gpgSign=false", "status", "--porcelain", "-z"], {
+export async function listDirtyPaths(
+  cwd: string,
+  opts?: { readonly includeIgnored?: boolean },
+): Promise<readonly string[]> {
+  const args = ["-c", "commit.gpgSign=false", "status", "--porcelain", "-z"];
+  if (opts?.includeIgnored === true) args.push("--ignored=matching");
+  const proc = Bun.spawn(["git", ...args], {
     cwd,
     stdout: "pipe",
     stderr: "pipe",

@@ -867,6 +867,50 @@ describe("runLoop", () => {
     expect(newEntry.metric).toBe(80);
   });
 
+  test("resume refuses when spec.unit differs from the unit recorded on prior entries", async () => {
+    // Regression guard: LogEntry now persists unit. If the user edits
+    // autoresearch.md's unit between runs, historical metrics aren't
+    // numerically comparable to new ones — a 0.09s would look like an
+    // improvement over a 100ms "best." Fail loudly so the user notices
+    // the edit instead of silently getting false keeps.
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+
+    // Seed a prior keep recorded under unit=ms.
+    const msKeep = {
+      iter: 1,
+      ts: "2026-04-20T00:00:00.000Z",
+      provider: "claude",
+      hypothesis: "prior ms keep",
+      metric: 100,
+      unit: "ms",
+      verdict: "keep",
+      commit: "cafef00d",
+      asi: [],
+      duration_ms: 200,
+    };
+    await Bun.write(join(cwd, "autoresearch.jsonl"), `${JSON.stringify(msKeep)}\n`);
+
+    // User changes spec to unit=s between runs (simulating a hand-edit).
+    await Bun.write(
+      join(cwd, "autoresearch.md"),
+      "# Autoresearch: test\n\n## Metric\n- direction: minimize\n- unit: s\n",
+    );
+
+    const neverCalled = async (): Promise<BenchResult> => {
+      throw new Error("benchmark should not be reached on a unit-mismatched resume");
+    };
+    const neverCalledAgent = async (): Promise<AgentExecutionResult> => {
+      throw new Error("agent should not be reached on a unit-mismatched resume");
+    };
+
+    await expect(
+      runLoop(
+        { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+        { agent: neverCalledAgent, benchmark: neverCalled },
+      ),
+    ).rejects.toThrow(/unit=s.*unit=ms/);
+  });
+
   test("resume skips a truncated trailing line and continues from the last valid entry", async () => {
     cwd = await setupExperimentRepo({ direction: "minimize" });
 
@@ -1983,6 +2027,18 @@ describe("assertOnlySetupDirty", () => {
 
     await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/rogue\.js/);
   });
+
+  test("throws when an unrelated file is dropped AND matches .gitignore", async () => {
+    // Regression guard: listDirtyPaths needs --ignored=matching here,
+    // otherwise git hides the gitignored .env and the gate falsely passes.
+    const dir = await makeRepo();
+    await Bun.write(join(dir, ".gitignore"), ".env\n");
+    await run(["git", "add", ".gitignore"], dir);
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "add gitignore"], dir);
+    await Bun.write(join(dir, ".env"), "SECRET=1\n");
+
+    await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/\.env/);
+  });
 });
 
 // Skipped on Windows: validateSetup runs ./autoresearch.sh directly (shebang
@@ -2158,6 +2214,22 @@ describe.skipIf(process.platform === "win32")("validateSetup", () => {
     if (!result.ok) {
       expect(result.phase).toBe("dirty");
       expect(result.message).toMatch(/rogue\.ts/);
+    }
+  });
+
+  test("fails phase=benchmark when autoresearch.sh's emitted unit mismatches the spec", async () => {
+    // Regression guard: setup validation must catch unit mismatch BEFORE
+    // commit. Otherwise the setup lands and measureBaseline throws later,
+    // forcing the user to unwind a committed-but-broken setup.
+    const dir = await makeWorktree({
+      bench: "#!/bin/sh\necho 'METRIC name=runtime value=1.5 unit=s'\n",
+    });
+    const result = await validateSetup(dir);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.phase).toBe("benchmark");
+      expect(result.message).toMatch(/unit=s.*unit=ms/);
     }
   });
 });
