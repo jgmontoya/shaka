@@ -9,11 +9,8 @@ if [ ! -f /.dockerenv ]; then
   exit 1
 fi
 
-pass() { echo "  ✅ $1"; }
-fail() { echo "  ❌ $1"; }
-warn() { echo "  ⚠️  $1"; }
-skip() { echo "  ⏭️  $1"; }
-section() { echo; echo "── $1 ──"; }
+# shellcheck source=lib/common.sh
+source "$(dirname "$0")/lib/common.sh"
 
 echo "E2E: codex hooks"
 
@@ -528,6 +525,23 @@ else
   else
     warn "Knowledge directory not created (session-end worker may not have triggered compilation)"
   fi
+
+  # ── Autoresearch ──────────────────────────────────────────────────
+
+  # Docker is already the sandbox — codex's internal Landlock-based sandbox
+  # can't coexist with it and silently blocks all file writes when given
+  # --full-auto (workspace-write). Without the bypass, the loop e2e's agent
+  # can't modify slow.sh (all iterations land as discard with "Unable to
+  # apply the slow.sh change because the filesystem sandbox..."), and the
+  # oneshot e2e's setup agent can't create autoresearch.md at all. Codex's
+  # own help documents the bypass's intent: "Intended solely for running in
+  # environments that are externally sandboxed."
+  export SHAKA_CODEX_BYPASS_SANDBOX=1
+
+  # shellcheck source=lib/autoresearch.sh
+  source "$(dirname "$0")/lib/autoresearch.sh"
+  run_autoresearch_e2e codex
+  run_autoresearch_oneshot_e2e codex
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────

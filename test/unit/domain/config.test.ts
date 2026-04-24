@@ -464,13 +464,6 @@ describe("Config", () => {
       expect(isSubagent({ SHAKA_CODEX_SUBAGENT: "false" })).toBe(false);
     });
 
-    test("returns true for legacy CODEX_SUBAGENT (migration shim)", () => {
-      // Pre-v0.10.1 codex wrappers on disk still export CODEX_SUBAGENT.
-      // Users who upgrade the package without running `shaka reload` must
-      // continue to have subagent detection work during the upgrade window.
-      // Remove this test when the legacy shim is removed in v0.11.0.
-      expect(isSubagent({ CODEX_SUBAGENT: "true" })).toBe(true);
-    });
   });
 
   describe("ensureConfigComplete", () => {

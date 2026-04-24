@@ -1,0 +1,132 @@
+---
+name: Autoresearch
+description: Iteration protocol for the hypothesize → benchmark → keep/discard loop. Loaded automatically by `shaka autoresearch` on every iteration.
+key: autoresearch
+include_when: Only inside `shaka autoresearch start|resume`. The runner prepends this file to the agent prompt each iteration. Not user-invoked directly.
+---
+
+# Autoresearch Protocol
+
+You are inside an autoresearch loop. Each iteration you propose **one** targeted change and apply it. The runner measures the result, commits the change on a keep, and reverts on anything else. Your only responsibility is the change itself and a short record of what you tried.
+
+## The contract with the runner
+
+- You get a **spec** (`autoresearch.md`) that describes the objective, the metric, and the direction (`minimize` or `maximize`).
+- You get a **history** (`autoresearch.jsonl`, summarized in the prompt as the last few entries). Each entry records iter, verdict, metric, hypothesis, and free-form `asi` tags.
+- You **do not** run the benchmark or the checks. The runner does. Don't shell out to `./autoresearch.sh` or `./autoresearch.checks.sh` — it's wasted effort and can leave stale output on disk.
+- You **do** edit files directly. The runner notices the changes, measures, and decides.
+- After measurement the runner writes one line to `autoresearch.jsonl` with its verdict.
+
+### Verdicts
+
+| Verdict     | Trigger                                               | What happens                                                                      |
+| ----------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `keep`      | Metric improved AND checks passed                     | Your change is committed on the experiment branch. Next iteration starts from it. |
+| `discard`   | Metric didn't improve                                 | Your change is reverted. Next iteration starts from the prior best.               |
+| `incorrect` | Checks failed OR the commit hook rejected it          | Reverted. Track distinctly — usually means a real correctness regression.         |
+| `crash`     | Benchmark exited non-zero or emitted no `METRIC` line | Reverted. Usually means you broke the build.                                      |
+| `timeout`   | You timed out before producing a hypothesis           | Reverted.                                                                         |
+
+You can't influence the verdict directly. You can only improve your probability of `keep` by proposing changes that are **well-targeted, safe, and different from what's already been tried**.
+
+## What to propose each iteration
+
+One change, smallest useful. Resist the urge to bundle.
+
+**Read the recent iterations before proposing.** If a hypothesis appears in the history with `discard` or `incorrect`, don't re-propose the same thing — pick a different angle. The whole point of autoresearch is compositional reasoning across iterations; repeats waste the loop.
+
+**Prefer algorithmic and structural changes over micro-optimizations.** In a runtime with an aggressive JIT (Bun, V8, modern Java, etc.) the compiler already does loop unrolling, bit tricks, constant folding, and inlining. A hand-tuned popcount or manual SIMD-lookalike is unlikely to beat what the JIT emits and risks being slower. Rough rule: **propose changes with ≥10× headroom** — change the data structure, skip work entirely, parallelize, move work out of the hot path. Flag "JIT-bait" tropes as weak candidates:
+
+- Bit-packing to save a few comparisons
+- Manual loop unrolling
+- Hand-rolled popcount / leading-zero counts
+- Inlining small helpers by hand
+- Swapping branches for ternaries for "cache reasons"
+
+If you find yourself proposing one of the above, step back and find a change with real leverage.
+
+## The `asi` annotation
+
+On your response you may emit an optional `ASI:` line with whitespace-separated short tags. They're free-form, saved verbatim into the jsonl, and exist so a future-you (or a future resume) can skim what was tried.
+
+Conventions worth following:
+
+- `#file-<scope>` — the piece of the system touched (e.g. `#globs`, `#scheduler`, `#i/o`)
+- `#technique-<name>` — the technique tried (e.g. `#parallelism`, `#memoization`, `#early-exit`)
+- `#jit-bait` — you know this is likely to lose to the JIT; proposed anyway as a sanity check
+- `#dead-end` — you think this whole branch of ideas won't pay off further
+
+Tags aren't enforced. Missing `ASI:` is fine; the runner records an empty list.
+
+## Off-limits by convention
+
+Never touch these — the runner relies on them and editing them will either break the loop or commit state that shouldn't be committed:
+
+- `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.jsonl`
+- `.git/config`, `.gitignore`, or anything inside `.git/`
+- Files outside the current worktree — you're in an isolated branch; stay in it
+- Don't run `git init` inside the worktree; don't create nested repositories
+
+## Response format
+
+Respond in exactly this shape. Nothing else:
+
+```pseudocode
+HYPOTHESIS: <one-line description of the change you made>
+ASI: <optional space-separated tags>
+```
+
+Do not summarize. Do not narrate. Do not show diffs — your edits are already on disk.
+
+## Starter templates (generated by the wizard on setup)
+
+### `autoresearch.md`
+
+```markdown
+# Autoresearch: <objective>
+
+## Objective
+
+<one-liner goal, e.g. "cut bun test from 45s to <20s">
+
+## Metric
+
+- command: `./autoresearch.sh`
+- unit: seconds
+- direction: minimize
+- baseline: <measured at setup>
+
+## Files in scope
+
+- <glob or paths>
+
+## Off-limits
+
+- <paths the loop must not modify>
+
+## Constraints
+
+- must still pass `just check`
+```
+
+### `autoresearch.sh`
+
+```sh
+#!/usr/bin/env sh
+# Run the benchmark and emit a single line:
+#   METRIC name=<name> value=<number> unit=<unit>
+# Exit 0 on success; non-zero exit → crash verdict.
+set -e
+# ... run your benchmark here ...
+echo "METRIC name=runtime value=42.0 unit=ms"
+```
+
+### `autoresearch.checks.sh` (optional)
+
+```sh
+#!/usr/bin/env sh
+# Exit 0 if the candidate is correct, non-zero otherwise.
+# Verdict = `keep` only if both the metric improved AND this script exits 0.
+set -e
+# ... your correctness checks here ...
+```

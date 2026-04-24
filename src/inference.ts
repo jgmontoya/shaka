@@ -98,10 +98,13 @@ export async function resolveInferenceAttempts(
  * Uses spawn (not Bun.$) because Bun.$ drops empty string arguments.
  * --setting-sources "" disables hooks (prevents recursion).
  * --tools "" disables tool use (pure text inference).
+ * --no-session-persistence keeps the hook-triggered classifier out of
+ *   ~/.claude/projects/<cwd>/ so it doesn't clutter the session picker.
+ *   Only works with --print (which we always pass via -p below).
  * Prompt is piped via stdin to avoid argument length limits.
  */
 async function callClaudeCLI(options: InferenceOptions): Promise<InferenceResult> {
-  const args = ["--setting-sources", "", "--tools", ""];
+  const args = ["--setting-sources", "", "--tools", "", "--no-session-persistence"];
   if (options.model) args.push("--model", options.model);
   if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
   args.push("-p");
@@ -129,10 +132,21 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // The agent is installed by shaka via symlink: ~/.config/opencode/agents/shaka/ → source.
   // NOTE: Requires `shaka init` to have been run. This is intentional — inference is only
   // called from hooks, which already require shaka installation to function.
-  const args = ["run", "--agent", "shaka/inference", prompt];
+  //
+  // --pure: skip loading external plugins in the child process (including our own
+  // opencode plugin). Belt-and-suspenders with SHAKA_OPENCODE_SUBAGENT — the env
+  // guard lets the plugin short-circuit, --pure prevents it from loading at all.
+  // Also saves ~300ms of plugin-init overhead per classifier call. Requires
+  // opencode ≥ 2026-03-27 (PR #19347); errors out on older versions.
+  //
+  // --format json: emit newline-delimited JSON events on stdout. First event is
+  // step_start with the created session's ID (which we use to fire-and-forget a
+  // cleanup subprocess after this call returns — see parseOpencodeJsonStream).
+  const args = ["run", "--pure", "--format", "json", "--agent", "shaka/inference"];
   // opencode expects provider/model format (e.g., "anthropic/claude-haiku-4-5")
   // Skip bare aliases like "haiku" which are Claude CLI-specific
   if (options.model?.includes("/")) args.push("--model", options.model);
+  args.push("--", prompt);
 
   // Mark this subprocess as a subagent so Shaka's hooks (format-reminder,
   // session-start) short-circuit via isSubagent(). This is load-bearing:
@@ -146,23 +160,113 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // guard  — opencode's own plugin-teardown-on-session-disposal also stops it,
   // but the env check is the belt; Exp 30 documented the suspenders.
   //
-  // Bun.$.env() REPLACES env (does not merge), so spread process.env first
-  // to preserve PATH and other inherited vars.
-  const result = await Bun.$`opencode ${args}`
-    .env({ ...process.env, SHAKA_OPENCODE_SUBAGENT: "true" })
-    .quiet()
-    .nothrow();
+  const proc = Bun.spawn(["opencode", ...args], {
+    env: { ...process.env, SHAKA_OPENCODE_SUBAGENT: "true" },
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const result = await collectOpenCodeProcess(proc, options.timeout);
+
+  const { sessionId, text } = parseOpencodeJsonStream(result.stdout);
+
+  // Fire-and-forget cleanup: `opencode run` persists a session on every
+  // invocation (no upstream --ephemeral; issue #4489). We delegate deletion
+  // to opencode's own `session delete` subcommand rather than reaching into
+  // its sqlite DB — safer against schema drift. --pure skips plugin loading
+  // (recursion safety + speed). No await: the ~1.2s subprocess runs off
+  // the caller's critical path. If it fails the session becomes an orphan,
+  // same outcome as pre-fix.
+  if (sessionId) {
+    Bun.spawn(["opencode", "--pure", "session", "delete", sessionId], {
+      env: { ...process.env, SHAKA_OPENCODE_SUBAGENT: "true" },
+      stdout: "ignore",
+      stderr: "ignore",
+    }).unref();
+  }
 
   if (result.exitCode !== 0) {
     return {
       success: false,
-      error: `OpenCode CLI error: ${result.stderr.toString()}`,
+      error: `OpenCode CLI error: ${result.stderr}`,
       provider: "opencode-cli",
     };
   }
 
-  const text = result.stdout.toString().trim();
   return parseResponse(text, options.expectJson, "opencode-cli");
+}
+
+async function collectOpenCodeProcess(
+  proc: Bun.Subprocess<"ignore", "pipe", "pipe">,
+  timeout: number | undefined,
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  let stdout = "";
+  let stderr = "";
+  const stdoutDone = appendStreamText(proc.stdout, (chunk) => {
+    stdout += chunk;
+  });
+  const stderrDone = appendStreamText(proc.stderr, (chunk) => {
+    stderr += chunk;
+  });
+  const completed = Promise.all([stdoutDone, stderrDone, proc.exited]).then(
+    ([finalStdout, finalStderr, exitCode]) => ({
+      stdout: finalStdout,
+      stderr: finalStderr,
+      exitCode,
+    }),
+  );
+
+  if (timeout === undefined) return completed;
+
+  const finished = await Promise.race([completed, delay(timeout).then(() => null)]);
+  if (finished !== null) return finished;
+
+  proc.kill("SIGTERM");
+  const drained = await Promise.race([completed, delay(100).then(() => null)]);
+  if (drained === null) {
+    proc.kill("SIGKILL");
+  }
+  return {
+    stdout: drained?.stdout ?? stdout,
+    stderr: appendLine(drained?.stderr ?? stderr, `Timeout after ${timeout}ms`),
+    exitCode: 1,
+  };
+}
+
+async function appendStreamText(
+  stream: ReadableStream<Uint8Array>,
+  append: (chunk: string) => void,
+): Promise<string> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = decoder.decode(value, { stream: true });
+      text += chunk;
+      append(chunk);
+    }
+  } catch {
+    // Best effort: callers still get whatever was captured before the stream failed.
+  }
+
+  const tail = decoder.decode();
+  text += tail;
+  append(tail);
+  return text;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+function appendLine(text: string, line: string): string {
+  return text ? `${text}\n${line}` : line;
 }
 
 /**
@@ -271,6 +375,37 @@ function spawnCLI(
 // Response Parsing
 // ---------------------------------------------------------------------------
 
+/**
+ * Parse the newline-delimited JSON event stream emitted by
+ * `opencode run --format json`. Returns the session ID from the first
+ * `step_start` event (for cleanup) and the concatenated response text
+ * from all `text` events in stream order. Malformed lines are skipped
+ * silently; the parser is best-effort and never throws.
+ */
+export function parseOpencodeJsonStream(stdout: string): {
+  sessionId: string | null;
+  text: string;
+} {
+  const lines = stdout.split("\n");
+  let sessionId: string | null = null;
+  const textParts: string[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const evt = JSON.parse(line);
+      if (sessionId === null && evt.type === "step_start" && typeof evt.sessionID === "string") {
+        sessionId = evt.sessionID;
+      }
+      if (evt.type === "text" && typeof evt.part?.text === "string") {
+        textParts.push(evt.part.text);
+      }
+    } catch {
+      // skip malformed line
+    }
+  }
+  return { sessionId, text: textParts.join("") };
+}
+
 function parseResponse(text: string, expectJson?: boolean, provider?: string): InferenceResult {
   if (!expectJson) {
     return { success: true, text, provider };
@@ -314,6 +449,7 @@ export async function inference(
   detected: DetectedProviders = detectInstalledProviders(),
 ): Promise<InferenceResult> {
   const attempts = await resolveInferenceAttempts(options, detected);
+  let lastFailure: InferenceResult | null = null;
 
   for (const attempt of attempts) {
     const resolvedOptions = { ...options, model: attempt.model };
@@ -330,12 +466,15 @@ export async function inference(
         break;
     }
     if (result.success) return result;
+    lastFailure = result;
   }
 
-  return {
-    success: false,
-    error: "No inference provider available. Install claude, opencode, or codex CLI.",
-  };
+  return (
+    lastFailure ?? {
+      success: false,
+      error: "No inference provider available. Install claude, opencode, or codex CLI.",
+    }
+  );
 }
 
 /**

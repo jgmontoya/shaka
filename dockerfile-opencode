@@ -6,9 +6,11 @@ FROM debian:bookworm-slim
 LABEL org.opencontainers.image.title="shaka-opencode" \
       org.opencontainers.image.description="Shaka dev/test environment with opencode provider"
 
-# Install curl (needed for bun + opencode installers), then clean up
+# curl/unzip for the bun + opencode installers; jq for test assertions;
+# git for the autoresearch e2e (worktrees, commits, reverts). Clean up apt
+# cache to keep the image small.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates unzip jq && \
+    apt-get install -y --no-install-recommends curl ca-certificates unzip jq git && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
