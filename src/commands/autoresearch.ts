@@ -425,17 +425,28 @@ async function runFullAutoStart(
   const sessionFn = opts.oneshot === true ? oneshotFn : interactiveFn;
   await sessionFn(setup.worktreePath, objective, provider, setupSkill);
 
+  // The provider TUI (or oneshot subprocess) just exited. The following
+  // phases run silently — validation can take tens of seconds because it
+  // executes the user's benchmark once, and the widget won't draw until
+  // after iteration 1 completes. Narrate each phase so the user knows
+  // Shaka is working rather than hung.
+  console.log("\nSetup session ended. Validating generated artifacts...");
   const validation = await validateSetup(setup.worktreePath);
   if (!validation.ok) reportValidationFailure(setup.worktreePath, validation);
+  console.log(
+    `✓ Setup validated (${validation.measurement.name}=${validation.measurement.value}${validation.measurement.unit}).`,
+  );
 
   if (opts.dryRun === true) {
     await printDryRun(setup.worktreePath);
     return;
   }
 
+  console.log("Committing setup...");
   await commitFinalizeIfDirty(setup.worktreePath, {
     message: "autoresearch: finalize agent-generated setup",
   });
+  console.log("Entering optimization loop. Measuring baseline (runs your benchmark once more)...");
   await enterLoop(setup.worktreePath, providers, opts, loopFn);
 }
 
