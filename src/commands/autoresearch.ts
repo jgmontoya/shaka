@@ -147,16 +147,6 @@ async function maybeOpenEditorOnBench(worktreePath: string): Promise<boolean> {
   return true;
 }
 
-async function currentBranch(cwd: string): Promise<string | null> {
-  const proc = Bun.spawn(["git", "rev-parse", "--abbrev-ref", "HEAD"], {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [out, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  return code === 0 ? out.trim() : null;
-}
-
 /**
  * Resolve the providers the loop should see, enforcing that at least one CLI
  * is actually installed. Throws with an actionable message before any
@@ -198,8 +188,7 @@ function parsePositiveInt(flag: string): (v: string) => number {
 function validateProviderFlag(value: string | undefined): ProviderName | undefined {
   if (value === undefined) return undefined;
   if (value !== "claude" && value !== "opencode" && value !== "codex") {
-    console.error("--provider must be one of: claude, opencode, codex");
-    process.exit(1);
+    throw new Error("--provider must be one of: claude, opencode, codex");
   }
   return value;
 }
@@ -497,28 +486,10 @@ async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Prom
   // before the loop gets a chance to silently commit or revert them.
   await commitFinalizeIfDirty(targetCwd);
 
-  const skillContent = await loadSkill("Autoresearch");
-  const controller = new AbortController();
-  const widget = buildOnTick();
-  try {
-    await withSigintAbort(
-      controller,
-      "SIGINT received — finishing current iteration, then stopping.",
-      () =>
-        runResume(
-          {
-            cwd: targetCwd,
-            providers,
-            stopWhen: buildStopWhen(opts),
-            signal: controller.signal,
-            skillContent,
-          },
-          { onTick: widget.onTick },
-        ),
-    );
-  } finally {
-    widget.finish();
-  }
+  // `runResume` has the same `(cfg, deps) => Promise<void>` shape as `runLoop`,
+  // so it slots into `enterLoop`'s loop-framing (skill load, abort controller,
+  // widget lifecycle, SIGINT handling) without duplicating the scaffolding.
+  await enterLoop(targetCwd, providers, opts, runResume);
 }
 
 function describeState(exp: ExperimentWorktree): string {

@@ -104,14 +104,23 @@ function spawnWithStdin(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let exited = false;
     let timedOut = false;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
 
     const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], cwd: opts.cwd });
 
+    // `exit` fires when the child process terminates; `close` fires later when
+    // stdio streams finish draining. Tracking `exited` separately prevents the
+    // timeout from misclassifying a successful-but-draining process as a
+    // timeout if the timer fires in that gap.
+    proc.on("exit", () => {
+      exited = true;
+    });
+
     const timer = opts.timeout
       ? setTimeout(() => {
-          if (!settled) {
+          if (!settled && !exited) {
             timedOut = true;
             proc.kill("SIGTERM");
             killTimer = setTimeout(() => {

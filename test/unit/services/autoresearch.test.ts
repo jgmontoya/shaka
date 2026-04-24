@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, realpath, rm } from "node:fs/promises";
+import { chmod, mkdir, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
@@ -416,7 +416,7 @@ describe("runLoop", () => {
       join(cwd, ".git", "hooks", "pre-commit"),
       "#!/bin/sh\necho 'blocked by hook' >&2\nexit 1\n",
     );
-    await run(["chmod", "+x", join(cwd, ".git", "hooks", "pre-commit")], cwd);
+    await chmod(join(cwd, ".git", "hooks", "pre-commit"), 0o755);
     await Bun.write(join(cwd, "slow.ts"), "export const x = 1;\n");
     await run(["git", "add", "-A"], cwd);
     await run(["git", "-c", "commit.gpgSign=false", "commit", "--no-verify", "-q", "-m", "add slow"], cwd);
@@ -1322,7 +1322,7 @@ describe("renderTemplates", () => {
     expect(out.sh).not.toContain("exit 1");
   });
 
-  test("sh parses under `sh -n` with the TODO placeholder, with no latent command substitution", async () => {
+  test.skipIf(process.platform === "win32")("sh parses under `sh -n` with the TODO placeholder, with no latent command substitution", async () => {
     // Regression guard for a sneaky bug where TODO_ANSWERS' echo used double
     // quotes with literal backticks around `shaka autoresearch resume` — POSIX
     // would treat the backticks as command substitution and silently try to
@@ -1947,7 +1947,6 @@ describe.skipIf(process.platform === "win32")("runBenchmark", () => {
     createdDirs.push(dir);
     const path = join(dir, "autoresearch.sh");
     await Bun.write(path, script);
-    const { chmod } = await import("node:fs/promises");
     await chmod(path, 0o755);
     return dir;
   }
@@ -2073,8 +2072,6 @@ describe.skipIf(process.platform === "win32")("validateSetup", () => {
     await run(["git", "config", "user.email", "t@t"], dir);
     await run(["git", "config", "user.name", "t"], dir);
 
-    const { chmod } = await import("node:fs/promises");
-
     const spec =
       opts?.spec ??
       "# test\n\n## Metric\n- command: ./autoresearch.sh\n- direction: minimize\n- unit: ms\n";
@@ -2170,7 +2167,6 @@ describe.skipIf(process.platform === "win32")("validateSetup", () => {
       bench: "#!/bin/sh\necho 'METRIC name=t value=2 unit=ms'\n",
       benchMode: 0o644,
     });
-    const { stat } = await import("node:fs/promises");
     const before = await stat(join(dir, "autoresearch.sh"));
     expect(before.mode & 0o111).toBe(0);
 
