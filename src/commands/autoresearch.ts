@@ -17,6 +17,7 @@ import {
   type WizardAnswers,
   assertOnlySetupDirty,
   findExperimentWorktree,
+  forceStageSetupArtifacts,
   resolveResumeTarget,
   runLoop,
   runResume,
@@ -86,7 +87,13 @@ export async function commitFinalizeIfDirty(
   worktreePath: string,
   opts?: { readonly message?: string },
 ): Promise<void> {
-  const dirty = await listDirtyPaths(worktreePath);
+  // `includeIgnored: true` so a gitignored setup artifact (repo ignoring
+  // `*.sh` etc.) still triggers the finalize flow. Without it, the user
+  // drops a valid autoresearch.checks.sh that matches .gitignore and
+  // listDirtyPaths hides it; this function early-returns, the file never
+  // gets chmod/staged/committed, and the next resume's tamper check
+  // treats it as agent-dropped and deletes it.
+  const dirty = await listDirtyPaths(worktreePath, { includeIgnored: true });
   if (dirty.length === 0) return;
 
   await assertOnlySetupDirty(worktreePath);
@@ -96,6 +103,11 @@ export async function commitFinalizeIfDirty(
     const path = join(worktreePath, artifact);
     if (await Bun.file(path).exists()) await chmod(path, 0o755);
   }
+
+  // Force-stage setup artifacts so a source-repo .gitignore pattern can't
+  // silently skip them on commitAllExcept's `git add -A`. Same helper
+  // setupWorkspace uses at initial commit.
+  await forceStageSetupArtifacts(worktreePath);
 
   const message = opts?.message ?? "autoresearch: finalize benchmark";
   await commitAllExcept(["autoresearch.jsonl"], message, worktreePath);

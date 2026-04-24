@@ -119,12 +119,16 @@ export async function runSetupInteractive(
  * (no TUI session to resume) — returns `resumeHint: null, sessionId: null`
  * unconditionally.
  */
+export interface SetupOneshotDeps {
+  readonly runAgent?: typeof runAgentStep;
+}
+
 export async function runSetupOneshot(
   worktreePath: string,
   objective: string,
   provider: ProviderName,
   skillBody: string,
-  deps?: { readonly runAgent?: typeof runAgentStep },
+  deps?: SetupOneshotDeps,
 ): Promise<SetupSessionResult> {
   const prompt = `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
   // Force the selected provider so `--provider X` is honored — without this,

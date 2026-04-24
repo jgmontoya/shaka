@@ -1,6 +1,7 @@
 #!/bin/sh
 # Simulates a provider TUI session: writes canned autoresearch.md and
 # autoresearch.sh into cwd, then exits 0.
+set -e
 cat > autoresearch.md <<'EOF'
 # Test objective
 

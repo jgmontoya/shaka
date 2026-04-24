@@ -1,12 +1,15 @@
 import { test, expect } from "bun:test";
 import type { ProviderName } from "../../../src/providers/types";
 import {
+  type SetupOneshotDeps,
   buildClaudeArgs,
   buildCodexArgs,
   buildOpencodeArgs,
   runSetupInteractive,
   runSetupOneshot,
 } from "../../../src/services/setup-session";
+
+type FakeRunAgent = NonNullable<SetupOneshotDeps["runAgent"]>;
 
 test("buildClaudeArgs returns claude argv with positional objective and --append-system-prompt", () => {
   expect(buildClaudeArgs("make it fast", "SKILL BODY")).toEqual([
@@ -85,11 +88,7 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
       provider: "claude" as const,
       timedOut: false,
     };
-  }) as unknown as Parameters<typeof runSetupOneshot>[4] extends infer D
-    ? D extends { readonly runAgent?: infer F }
-      ? F
-      : never
-    : never;
+  }) as unknown as FakeRunAgent;
 
   const result = await runSetupOneshot(
     "/tmp/wt",
@@ -132,11 +131,7 @@ test("runSetupOneshot forces the selected provider via DetectedProviders overrid
       provider: "codex" as const,
       timedOut: false,
     };
-  }) as unknown as Parameters<typeof runSetupOneshot>[4] extends infer D
-    ? D extends { readonly runAgent?: infer F }
-      ? F
-      : never
-    : never;
+  }) as unknown as FakeRunAgent;
 
   await runSetupOneshot("/tmp/wt", "obj", "codex", "skill", { runAgent: fakeRunAgent });
 

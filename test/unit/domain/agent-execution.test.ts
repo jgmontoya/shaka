@@ -163,7 +163,13 @@ describe("agent-execution", () => {
 
       expect(result.timedOut).toBe(true);
       expect(result.exitCode).toBe(1);
-      expect(elapsedMs).toBeGreaterThanOrEqual(1000);
+      // Floor at the timeout itself, not timeout+SIGKILL-grace, so the
+      // assertion doesn't flake on slow CI where spawn overhead eats into
+      // the 500ms escalation window. Upper bound caps runaway if the
+      // SIGKILL escalation fails — otherwise a stuck subprocess would hang
+      // the whole test file.
+      expect(elapsedMs).toBeGreaterThanOrEqual(600);
+      expect(elapsedMs).toBeLessThan(5000);
     } finally {
       if (oldPath === undefined) {
         delete process.env.PATH;

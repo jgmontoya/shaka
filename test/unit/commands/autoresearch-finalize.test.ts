@@ -72,24 +72,33 @@ describe("commitFinalizeIfDirty", () => {
     expect(subject.trim()).toBe("autoresearch: finalize agent-generated setup");
   });
 
-  test("throws (preserves user edits on disk) when a pre-commit hook rejects the commit", async () => {
-    const dir = await makeRepo();
-    // Install a pre-commit hook that always fails
-    const hookPath = join(dir, ".git", "hooks", "pre-commit");
-    await Bun.write(hookPath, "#!/bin/sh\nexit 1\n");
-    await chmod(hookPath, 0o755);
+  // Skipped on Windows: relies on git executing a `#!/bin/sh` pre-commit hook
+  // via shebang dispatch, which Windows git doesn't do natively. Symmetric
+  // with the exec-bit / shebang-script skip at line 99.
+  test.skipIf(process.platform === "win32")(
+    "throws (preserves user edits on disk) when a pre-commit hook rejects the commit",
+    async () => {
+      const dir = await makeRepo();
+      // Install a pre-commit hook that always fails
+      const hookPath = join(dir, ".git", "hooks", "pre-commit");
+      await Bun.write(hookPath, "#!/bin/sh\nexit 1\n");
+      await chmod(hookPath, 0o755);
 
-    // User edits the benchmark
-    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+      // User edits the benchmark
+      await Bun.write(
+        join(dir, "autoresearch.sh"),
+        "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n",
+      );
 
-    await expect(commitFinalizeIfDirty(dir)).rejects.toThrow();
+      await expect(commitFinalizeIfDirty(dir)).rejects.toThrow();
 
-    // The edits must still be on disk — the caller will surface the error and
-    // stop, rather than proceeding into a loop whose first revert would wipe
-    // the user's manual work.
-    const contents = await Bun.file(join(dir, "autoresearch.sh")).text();
-    expect(contents).toContain("METRIC name=t value=1 unit=ms");
-  });
+      // The edits must still be on disk — the caller will surface the error and
+      // stop, rather than proceeding into a loop whose first revert would wipe
+      // the user's manual work.
+      const contents = await Bun.file(join(dir, "autoresearch.sh")).text();
+      expect(contents).toContain("METRIC name=t value=1 unit=ms");
+    },
+  );
 
   // Skipped on Windows: this test asserts the Unix executable bit (git mode
   // 100755) and spawns `./autoresearch.checks.sh` directly — both are Unix-

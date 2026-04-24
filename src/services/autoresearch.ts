@@ -336,7 +336,7 @@ async function setupArtifactsDirty(cwd: string): Promise<boolean> {
  * on revert, and the loop breaks. Force-add is idempotent for non-ignored
  * files (behaves like a plain add).
  */
-async function forceStageSetupArtifacts(cwd: string): Promise<void> {
+export async function forceStageSetupArtifacts(cwd: string): Promise<void> {
   // Only stage setup artifacts that actually exist on disk — `git add -f` on
   // a missing pathspec errors.
   const present: string[] = [];
@@ -701,9 +701,19 @@ function renderJsonlEntries(entries: readonly LogEntry[]): string {
  * re-measures the baseline by running the benchmark at HEAD, which is the
  * honest truth (reverted candidates aren't represented anywhere in the tree).
  */
-function deriveBestMetric(entries: readonly LogEntry[], direction: Direction): number | null {
+function deriveBestMetric(
+  entries: readonly LogEntry[],
+  direction: Direction,
+  expectedUnit: string,
+): number | null {
+  // Only compare keeps whose persisted unit matches the current spec. Legacy
+  // entries written before LogEntry carried a unit field are intentionally
+  // excluded — we can't prove they were in the same unit, and comparing
+  // across mixed units would let a cross-unit false improvement sneak in.
+  // When every kept entry is legacy, returning null triggers runLoop to
+  // re-measure baseline at HEAD, which is the safe reset.
   const keptMetrics = entries
-    .filter((e) => e.verdict === "keep")
+    .filter((e) => e.verdict === "keep" && e.unit === expectedUnit)
     .map((e) => e.metric)
     .filter((m): m is number => m !== null);
   if (keptMetrics.length === 0) return null;
@@ -764,7 +774,7 @@ async function loadPriorState(
     kept,
     discarded: entries.length - kept,
     consecutiveDiscards: countConsecutiveDiscards(entries),
-    best: deriveBestMetric(entries, direction),
+    best: deriveBestMetric(entries, direction, expectedUnit),
     lastMetric: entries[entries.length - 1]?.metric ?? null,
   };
 }
@@ -974,19 +984,15 @@ async function runIteration(args: {
   const correctnessOk =
     benchResult.exitCode === 0 && metric !== null ? (await deps.checks(cwd)).exitCode === 0 : true;
 
-  // Post-benchmark tamper re-check: the pre-benchmark gate catches agent edits
-  // to setup artifacts, but benchmark or checks scripts can also mutate them
-  // (self-updating calibration, golden-file regenerators, etc.). Those
-  // mutations must not land in the iteration commit.
-  if (await setupArtifactsDirty(cwd)) {
+  // Post-benchmark tamper re-check. Order matches the pre-benchmark gate
+  // (jsonl first, setup second) so a tampered jsonl is restored before the
+  // setup-tamper branch's revertAndClassifyIncorrect runs — otherwise
+  // revertWorkingTree(JSONL_EXCLUDES) would preserve the tampered jsonl into
+  // the next resume's loadPriorState / loadRecentEntries.
+  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
   }
-  // Symmetric re-check on autoresearch.jsonl: if benchmark or checks scripts
-  // wrote to the runner's log (golden-file regenerator, calibration cache),
-  // restore the pre-iteration snapshot so the tamper content doesn't survive
-  // revertWorkingTree (which preserves jsonl) into the next resume's
-  // loadPriorState / loadRecentEntries.
-  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
+  if (await setupArtifactsDirty(cwd)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
   }
 

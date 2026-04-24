@@ -26,4 +26,12 @@ describe("resolveProviders", () => {
       codex: false,
     });
   });
+
+  test("forced-provider check runs before the no-providers-installed guard", () => {
+    // Documents precedence: when nothing is installed AND a provider is
+    // forced, the user sees the specific "X is not installed" message
+    // rather than the generic "no providers available." The former is more
+    // actionable (names the missing binary) and should win.
+    expect(() => resolveProviders(none, "claude")).toThrow(/claude.*not installed/i);
+  });
 });

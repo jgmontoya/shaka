@@ -10,6 +10,12 @@ async function readEventually(path: string, timeoutMs = 250): Promise<string> {
     if (await file.exists()) return file.text();
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+  // Prefer a message naming the polling contract over the ENOENT the final
+  // .text() would otherwise throw — helps readers diagnose "did the writer
+  // never run?" vs "did the path I pass in even exist?"
+  if (!(await Bun.file(path).exists())) {
+    throw new Error(`readEventually: ${path} did not appear within ${timeoutMs}ms`);
+  }
   return Bun.file(path).text();
 }
 

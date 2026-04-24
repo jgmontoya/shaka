@@ -87,6 +87,11 @@ function runCodex(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
   return spawnWithStdin("codex", "codex", ["exec", sandboxFlag, "-"], opts.prompt, opts);
 }
 
+function appendTimeoutSentinel(stderr: string, timeoutMs: number | undefined): string {
+  const sentinel = `Timeout after ${timeoutMs}ms`;
+  return stderr ? `${stderr}\n${sentinel}` : sentinel;
+}
+
 /** Spawn a CLI process, optionally piping stdin. */
 function spawnWithStdin(
   provider: ProviderName,
@@ -109,9 +114,6 @@ function spawnWithStdin(
           if (!settled) {
             timedOut = true;
             proc.kill("SIGTERM");
-            stderr = stderr
-              ? `${stderr}\nTimeout after ${opts.timeout}ms`
-              : `Timeout after ${opts.timeout}ms`;
             killTimer = setTimeout(() => {
               if (!settled) proc.kill("SIGKILL");
             }, 500);
@@ -142,7 +144,17 @@ function spawnWithStdin(
       clearTimeout(killTimer);
       if (!settled) {
         settled = true;
-        resolve({ exitCode: timedOut ? 1 : (code ?? 1), stdout, stderr, provider, timedOut });
+        // Timeout sentinel is appended AFTER draining stderr so late
+        // shutdown chunks land before it — keeps the tail chronological
+        // for consumers that parse shutdown reasons.
+        const finalStderr = timedOut ? appendTimeoutSentinel(stderr, opts.timeout) : stderr;
+        resolve({
+          exitCode: timedOut ? 1 : (code ?? 1),
+          stdout,
+          stderr: finalStderr,
+          provider,
+          timedOut,
+        });
       }
     });
     proc.on("error", (err) => {
