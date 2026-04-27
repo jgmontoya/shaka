@@ -6,11 +6,7 @@ import type {
   AgentExecutionOptions,
   AgentExecutionResult,
 } from "../../../src/domain/agent-execution";
-import {
-  type BenchResult,
-  runLoop,
-  setupWorkspace,
-} from "../../../src/services/autoresearch";
+import { type BenchResult, runLoop, setupWorkspace } from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false };
@@ -131,10 +127,7 @@ describe("autoresearch walking skeleton", () => {
     expect(commits[1]).toContain("iter 1");
 
     // ── Assert the jsonl is NOT tracked at HEAD ──────────────────────────
-    const treeFiles = await sh(
-      ["git", "ls-tree", "-r", setup.branch, "--name-only"],
-      repo,
-    );
+    const treeFiles = await sh(["git", "ls-tree", "-r", setup.branch, "--name-only"], repo);
     expect(treeFiles.split("\n")).not.toContain("autoresearch.jsonl");
 
     // ── Original checkout remained untouched ─────────────────────────────

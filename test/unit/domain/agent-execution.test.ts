@@ -106,36 +106,39 @@ describe("agent-execution", () => {
     }
   });
 
-  test.skipIf(process.platform === "win32")("does not crash when a provider closes stdin early", async () => {
-    const root = join(
-      tmpdir(),
-      `shaka-agent-early-stdin-close-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    );
-    const binDir = join(root, "bin");
-    const oldPath = process.env.PATH;
-    try {
-      await mkdir(binDir, { recursive: true });
-      const codex = join(binDir, "codex");
-      await Bun.write(codex, "#!/bin/sh\nexit 7\n");
-      await chmod(codex, 0o755);
-      process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
-
-      const result = await runAgentStep(
-        { prompt: "x".repeat(8 * 1024 * 1024), timeout: 1000 },
-        { claude: false, opencode: false, codex: true },
+  test.skipIf(process.platform === "win32")(
+    "does not crash when a provider closes stdin early",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-early-stdin-close-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       );
+      const binDir = join(root, "bin");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const codex = join(binDir, "codex");
+        await Bun.write(codex, "#!/bin/sh\nexit 7\n");
+        await chmod(codex, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 
-      expect(result.provider).toBe("codex");
-      expect(result.exitCode).toBe(7);
-    } finally {
-      if (oldPath === undefined) {
-        delete process.env.PATH;
-      } else {
-        process.env.PATH = oldPath;
+        const result = await runAgentStep(
+          { prompt: "x".repeat(8 * 1024 * 1024), timeout: 1000 },
+          { claude: false, opencode: false, codex: true },
+        );
+
+        expect(result.provider).toBe("codex");
+        expect(result.exitCode).toBe(7);
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
       }
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   test.skipIf(process.platform === "win32")("waits for a timed-out provider to exit", async () => {
     const root = join(

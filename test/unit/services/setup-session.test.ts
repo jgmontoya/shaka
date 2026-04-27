@@ -90,13 +90,9 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
     };
   }) as unknown as FakeRunAgent;
 
-  const result = await runSetupOneshot(
-    "/tmp/wt",
-    "make it fast",
-    "claude",
-    "SKILL BODY CONTENT",
-    { runAgent: fakeRunAgent },
-  );
+  const result = await runSetupOneshot("/tmp/wt", "make it fast", "claude", "SKILL BODY CONTENT", {
+    runAgent: fakeRunAgent,
+  });
 
   expect(captured).toHaveLength(1);
   const prompt = captured[0]?.prompt ?? "";

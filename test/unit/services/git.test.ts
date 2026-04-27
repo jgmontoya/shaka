@@ -179,8 +179,7 @@ describe("git service", () => {
 
     // Simulate the failed-commit aftermath: staged but not committed.
     await Bun.write(join(testDir, "tracked.txt"), "v2");
-    await Bun.spawn(["git", "add", "-A"], { cwd: testDir, stdout: "pipe", stderr: "pipe" })
-      .exited;
+    await Bun.spawn(["git", "add", "-A"], { cwd: testDir, stdout: "pipe", stderr: "pipe" }).exited;
 
     await revertWorkingTree([], testDir);
 
@@ -233,8 +232,7 @@ describe("git service", () => {
   // fixed behavior here.
   test("isCleanExcept treats an unstaged modification to an excluded tracked file as clean", async () => {
     await Bun.write(join(testDir, "log.jsonl"), "initial\n");
-    await Bun.spawn(["git", "add", "-A"], { cwd: testDir, stdout: "pipe", stderr: "pipe" })
-      .exited;
+    await Bun.spawn(["git", "add", "-A"], { cwd: testDir, stdout: "pipe", stderr: "pipe" }).exited;
     await Bun.spawn(["git", "-c", "commit.gpgSign=false", "commit", "-m", "track log"], {
       cwd: testDir,
       stdout: "pipe",
@@ -308,10 +306,7 @@ describe("git service", () => {
         const ar = worktrees.filter((w) => w.branch?.startsWith("refs/heads/autoresearch/"));
         expect(ar).toHaveLength(2);
         const branches = ar.map((w) => w.branch).sort();
-        expect(branches).toEqual([
-          "refs/heads/autoresearch/one",
-          "refs/heads/autoresearch/two",
-        ]);
+        expect(branches).toEqual(["refs/heads/autoresearch/one", "refs/heads/autoresearch/two"]);
       } finally {
         await removeWorktree(wt1, testDir).catch(() => {});
         await removeWorktree(wt2, testDir).catch(() => {});

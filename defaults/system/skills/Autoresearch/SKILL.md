@@ -62,7 +62,7 @@ Tags aren't enforced. Missing `ASI:` is fine; the runner records an empty list.
 
 Never touch these — the runner relies on them and editing them will either break the loop or commit state that shouldn't be committed:
 
-- `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.jsonl`
+- `autoresearch.md`, `autoresearch.sh`, `autoresearch.checks.sh`, `autoresearch.jsonl`, `autoresearch.meta.json`
 - `.git/config`, `.gitignore`, or anything inside `.git/`
 - Files outside the current worktree — you're in an isolated branch; stay in it
 - Don't run `git init` inside the worktree; don't create nested repositories

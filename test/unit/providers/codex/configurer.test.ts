@@ -745,7 +745,9 @@ describe("CodexProviderConfigurer", () => {
       });
       await configurer.uninstall({ shakaHome: testShakaHome });
 
-      expect(await Bun.file(join(testCodexHome, "agents", "my-custom-agent.toml")).exists()).toBe(true);
+      expect(await Bun.file(join(testCodexHome, "agents", "my-custom-agent.toml")).exists()).toBe(
+        true,
+      );
     });
 
     test("checkInstallation verifies TOML files exist for non-hidden agents", async () => {
@@ -785,14 +787,8 @@ describe("CodexProviderConfigurer", () => {
       );
 
       // Set up valid hooks but NO TOML files
-      await Bun.write(
-        join(testCodexHome, "hooks.json"),
-        JSON.stringify({ hooks: {} }),
-      );
-      await Bun.write(
-        join(testCodexHome, "shaka-hook-wrapper.ts"),
-        "// wrapper",
-      );
+      await Bun.write(join(testCodexHome, "hooks.json"), JSON.stringify({ hooks: {} }));
+      await Bun.write(join(testCodexHome, "shaka-hook-wrapper.ts"), "// wrapper");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -872,10 +868,7 @@ describe("CodexProviderConfigurer", () => {
       const { CodexProviderConfigurer } = await import(
         "../../../../src/providers/codex/configurer"
       );
-      await Bun.write(
-        join(testShakaHome, "system", "agents", "architect.md"),
-        "# Architect\n",
-      );
+      await Bun.write(join(testShakaHome, "system", "agents", "architect.md"), "# Architect\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -890,7 +883,11 @@ describe("CodexProviderConfigurer", () => {
 
       await configurer.uninstall({ shakaHome: testShakaHome });
       let exists = true;
-      try { await lstat(agentLink); } catch { exists = false; }
+      try {
+        await lstat(agentLink);
+      } catch {
+        exists = false;
+      }
       expect(exists).toBe(false);
     });
 
@@ -915,7 +912,11 @@ describe("CodexProviderConfigurer", () => {
 
       await configurer.uninstall({ shakaHome: testShakaHome });
       let exists = true;
-      try { await lstat(skillLink); } catch { exists = false; }
+      try {
+        await lstat(skillLink);
+      } catch {
+        exists = false;
+      }
       expect(exists).toBe(false);
     });
 

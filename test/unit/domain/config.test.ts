@@ -463,7 +463,6 @@ describe("Config", () => {
     test("returns false when SHAKA_CODEX_SUBAGENT is not true", () => {
       expect(isSubagent({ SHAKA_CODEX_SUBAGENT: "false" })).toBe(false);
     });
-
   });
 
   describe("ensureConfigComplete", () => {
@@ -500,7 +499,11 @@ describe("Config", () => {
         version: "0.3.0",
         reasoning: { enabled: true },
         permissions: { managed: false },
-        providers: { claude: { enabled: true }, opencode: { enabled: false }, codex: { enabled: false, summarization_model: "auto" } },
+        providers: {
+          claude: { enabled: true },
+          opencode: { enabled: false },
+          codex: { enabled: false, summarization_model: "auto" },
+        },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },
         memory: {
@@ -617,7 +620,11 @@ describe("Config", () => {
         version: "0.4.0",
         reasoning: { enabled: true },
         permissions: { managed: true },
-        providers: { claude: { enabled: true }, opencode: { enabled: false }, codex: { enabled: false, summarization_model: "auto" } },
+        providers: {
+          claude: { enabled: true },
+          opencode: { enabled: false },
+          codex: { enabled: false, summarization_model: "auto" },
+        },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },
         memory: {
@@ -681,7 +688,11 @@ describe("Config", () => {
         version: "0.7.0",
         reasoning: { enabled: true },
         permissions: { managed: true },
-        providers: { claude: { enabled: false }, opencode: { enabled: false }, codex: { enabled: false, summarization_model: "auto" } },
+        providers: {
+          claude: { enabled: false },
+          opencode: { enabled: false },
+          codex: { enabled: false, summarization_model: "auto" },
+        },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },
         memory: {

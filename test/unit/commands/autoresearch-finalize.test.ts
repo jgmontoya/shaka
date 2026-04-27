@@ -55,7 +55,10 @@ describe("commitFinalizeIfDirty", () => {
 
   test("commits the dirty benchmark as a finalize commit", async () => {
     const dir = await makeRepo();
-    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(
+      join(dir, "autoresearch.sh"),
+      "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n",
+    );
 
     await commitFinalizeIfDirty(dir);
 
@@ -70,7 +73,10 @@ describe("commitFinalizeIfDirty", () => {
 
   test("uses custom commit message when opts.message is passed", async () => {
     const dir = await makeRepo();
-    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(
+      join(dir, "autoresearch.sh"),
+      "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n",
+    );
 
     await commitFinalizeIfDirty(dir, { message: "autoresearch: finalize agent-generated setup" });
 
@@ -119,36 +125,37 @@ describe("commitFinalizeIfDirty", () => {
   test.skipIf(process.platform === "win32")(
     "commits a newly created untracked setup artifact as part of finalize",
     async () => {
-    // The wizard may have skipped `autoresearch.checks.sh`; the user could
-    // still add one via $EDITOR. That untracked file should ride into the
-    // finalize commit, executable so the loop's checks gate can spawn it.
-    const dir = await makeRepo();
-    await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
+      // The wizard may have skipped `autoresearch.checks.sh`; the user could
+      // still add one via $EDITOR. That untracked file should ride into the
+      // finalize commit, executable so the loop's checks gate can spawn it.
+      const dir = await makeRepo();
+      await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
 
-    await commitFinalizeIfDirty(dir);
+      await commitFinalizeIfDirty(dir);
 
-    const lsProc = Bun.spawn(["git", "ls-tree", "HEAD", "autoresearch.checks.sh"], {
-      cwd: dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [lsOut] = await Promise.all([new Response(lsProc.stdout).text(), lsProc.exited]);
-    const [mode, , , name] = lsOut.trim().split(/\s+/);
-    expect(name).toBe("autoresearch.checks.sh");
-    expect(mode).toBe("100755");
+      const lsProc = Bun.spawn(["git", "ls-tree", "HEAD", "autoresearch.checks.sh"], {
+        cwd: dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [lsOut] = await Promise.all([new Response(lsProc.stdout).text(), lsProc.exited]);
+      const [mode, , , name] = lsOut.trim().split(/\s+/);
+      expect(name).toBe("autoresearch.checks.sh");
+      expect(mode).toBe("100755");
 
-    const runProc = Bun.spawn(["./autoresearch.checks.sh"], {
-      cwd: dir,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-    const [, , exit] = await Promise.all([
-      new Response(runProc.stdout).text(),
-      new Response(runProc.stderr).text(),
-      runProc.exited,
-    ]);
-    expect(exit).toBe(0);
-  });
+      const runProc = Bun.spawn(["./autoresearch.checks.sh"], {
+        cwd: dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [, , exit] = await Promise.all([
+        new Response(runProc.stdout).text(),
+        new Response(runProc.stderr).text(),
+        runProc.exited,
+      ]);
+      expect(exit).toBe(0);
+    },
+  );
 
   test("no-ops when the only dirt is gitignored toolchain output, not setup artifacts", async () => {
     // Reproduces the user-reported false-positive: a Cargo project's

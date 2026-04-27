@@ -14,6 +14,7 @@ import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStart } from "../../../src/commands/autoresearch";
+import { readAutoresearchMeta } from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 async function sh(args: string[], cwd: string): Promise<void> {
@@ -83,10 +84,7 @@ function writeValidSetup(worktreePath: string): () => Promise<void> {
       ].join("\n"),
     );
     const shPath = join(worktreePath, "autoresearch.sh");
-    await Bun.write(
-      shPath,
-      "#!/bin/sh\necho \"METRIC name=stub value=1.0 unit=s\"\n",
-    );
+    await Bun.write(shPath, '#!/bin/sh\necho "METRIC name=stub value=1.0 unit=s"\n');
     await chmod(shPath, 0o755);
   };
 }
@@ -107,7 +105,7 @@ function writeInvalidSetup(worktreePath: string): () => Promise<void> {
       ].join("\n"),
     );
     const shPath = join(worktreePath, "autoresearch.sh");
-    await Bun.write(shPath, "#!/bin/sh\necho \"nothing useful here\"\n");
+    await Bun.write(shPath, '#!/bin/sh\necho "nothing useful here"\n');
     await chmod(shPath, 0o755);
   };
 }
@@ -183,6 +181,38 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
     }
   });
 
+  test("full-auto writes baseline metadata before entering the loop", async () => {
+    const env = await makeRepoEnv("metadata");
+    envs.push(env);
+    const oldCwd = process.cwd();
+    const restoreTTY = swapIsTTY(true);
+    try {
+      process.chdir(env.repo);
+      await runStart(
+        "metadata objective",
+        { wizard: false, dryRun: false },
+        {
+          detectProviders: () => CLAUDE_ONLY,
+          runSetupInteractive: async (worktreePath, _objective, provider, _skill) => {
+            await writeValidSetup(worktreePath)();
+            return { exitCode: 0, provider, resumeHint: null, sessionId: null };
+          },
+          runLoop: async (args) => {
+            const meta = await readAutoresearchMeta(args.cwd);
+            expect(meta?.baseline.metric).toBe(1);
+            expect(meta?.baseline.unit).toBe("s");
+            expect(meta?.baseline.direction).toBe("minimize");
+            expect(meta?.baseline.command).toBe("./autoresearch.sh");
+            expect(meta?.baseline.commit).toMatch(/^[0-9a-f]{7}$/);
+          },
+        },
+      );
+    } finally {
+      restoreTTY();
+      process.chdir(oldCwd);
+    }
+  });
+
   test("full-auto validation failure exits without entering the loop", async () => {
     const env = await makeRepoEnv("invalid");
     envs.push(env);
@@ -228,6 +258,48 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
       // Error names the failing phase.
       expect(combined.toLowerCase()).toMatch(/benchmark|metric/);
       expect(exitCalls).toContain(1);
+    } finally {
+      process.exit = realExit;
+      console.error = realErr;
+      restoreTTY();
+      process.chdir(oldCwd);
+    }
+  });
+
+  test("full-auto validation failure suggests optimize when invoked via optimize", async () => {
+    const env = await makeRepoEnv("invalid-optimize");
+    envs.push(env);
+    const oldCwd = process.cwd();
+    const restoreTTY = swapIsTTY(true);
+
+    const realExit = process.exit;
+    const realErr = console.error;
+    const errLines: string[] = [];
+    process.exit = ((code?: string | number | null | undefined): never => {
+      throw new Error(`__stub_exit__:${code ?? 0}`);
+    }) as typeof process.exit;
+    console.error = (...args: unknown[]): void => {
+      errLines.push(args.map(String).join(" "));
+    };
+
+    try {
+      process.chdir(env.repo);
+      await expect(
+        runStart(
+          "invalid objective",
+          { wizard: false, dryRun: false },
+          {
+            detectProviders: () => CLAUDE_ONLY,
+            runSetupInteractive: async (worktreePath, _objective, provider, _skill) => {
+              await writeInvalidSetup(worktreePath)();
+              return { exitCode: 0, provider, resumeHint: null, sessionId: null };
+            },
+          },
+          "optimize",
+        ),
+      ).rejects.toThrow(/__stub_exit__:1/);
+
+      expect(errLines.join("\n")).toContain("shaka optimize start");
     } finally {
       process.exit = realExit;
       console.error = realErr;

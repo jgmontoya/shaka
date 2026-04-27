@@ -17,7 +17,11 @@ describe("UninstallService", () => {
 
   /** Set up a fully initialized shaka home for testing uninstall. */
   async function setupInitializedHome(
-    providers: { claude: boolean; opencode: boolean; codex: boolean } = { claude: true, opencode: false, codex: false },
+    providers: { claude: boolean; opencode: boolean; codex: boolean } = {
+      claude: true,
+      opencode: false,
+      codex: false,
+    },
   ) {
     const initService = new InitService({
       shakaHome: testHome,
@@ -31,12 +35,15 @@ describe("UninstallService", () => {
   }
 
   function createService(
-    overrides: { detectProviders?: () => Promise<{ claude: boolean; opencode: boolean; codex: boolean }> } = {},
+    overrides: {
+      detectProviders?: () => Promise<{ claude: boolean; opencode: boolean; codex: boolean }>;
+    } = {},
   ) {
     return new UninstallService({
       shakaHome: testHome,
       detectProviders:
-        overrides.detectProviders ?? (async () => ({ claude: false, opencode: false, codex: false })),
+        overrides.detectProviders ??
+        (async () => ({ claude: false, opencode: false, codex: false })),
     });
   }
 

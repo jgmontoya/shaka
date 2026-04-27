@@ -7,7 +7,7 @@
  * workflow.
  */
 
-import { appendFile, chmod, realpath, rm } from "node:fs/promises";
+import { appendFile, chmod, lstat, realpath, rm } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import {
   type AgentExecutionOptions,
@@ -38,6 +38,20 @@ export interface Measurement {
   readonly name: string;
   readonly value: number;
   readonly unit: string;
+}
+
+export interface BaselineMeta {
+  readonly ts: string;
+  readonly metric: number;
+  readonly unit: string;
+  readonly direction: Direction;
+  readonly command: string;
+  readonly commit: string;
+}
+
+export interface AutoresearchMeta {
+  readonly schemaVersion: 1;
+  readonly baseline: BaselineMeta;
 }
 
 export interface BenchResult {
@@ -107,6 +121,9 @@ export interface RunLoopDeps {
   readonly onTick?: (state: WidgetState) => void;
 }
 
+const OPTIMIZE_START_HINT =
+  "start a fresh experiment with `shaka optimize start` (`shaka autoresearch start` also works).";
+
 export interface VerdictInput {
   readonly metric: number | null;
   readonly benchmarkExitCode: number;
@@ -171,6 +188,7 @@ export function parseMetricLine(stdout: string): Measurement | null {
 
 const DIRECTION_PATTERN = /^\s*-\s*direction:\s*(minimize|maximize)\s*$/m;
 const UNIT_PATTERN = /^\s*-\s*unit:\s*([^\s]+)\s*$/m;
+const COMMAND_PATTERN = /^\s*-\s*command:\s*`?([^`\n]+?)`?\s*$/m;
 
 /**
  * Parse the minimum fields the runner needs out of `autoresearch.md`.
@@ -189,6 +207,18 @@ export function parseSpec(md: string): { readonly direction: Direction; readonly
     throw new Error("autoresearch.md is missing a '- unit: <unit>' line in ## Metric.");
   }
   return { direction: direction[1] as Direction, unit: unit[1] as string };
+}
+
+export function parseAutoresearchSpec(md: string): {
+  readonly direction: Direction;
+  readonly unit: string;
+  readonly command: string;
+} {
+  const spec = parseSpec(md);
+  return {
+    ...spec,
+    command: md.match(COMMAND_PATTERN)?.[1]?.trim() || "./autoresearch.sh",
+  };
 }
 
 const HYPOTHESIS_PATTERN = /^HYPOTHESIS:\s*(.+?)\s*$/m;
@@ -267,7 +297,8 @@ ASI: <optional space-separated #tags for future-you>`,
 // ─── Loop ──────────────────────────────────────────────────────────────────
 
 const JSONL_FILE = "autoresearch.jsonl";
-const JSONL_EXCLUDES = [JSONL_FILE] as const;
+const META_FILE = "autoresearch.meta.json";
+export const RUNNER_STATE_EXCLUDES = [JSONL_FILE, META_FILE] as const;
 
 /**
  * Setup files the runner owns — the agent must never modify them, and callers
@@ -300,11 +331,11 @@ export async function assertOnlySetupDirty(worktreePath: string): Promise<void> 
   const dirty = await listDirtyPaths(worktreePath);
   if (dirty.length === 0) return;
 
-  const setupSet = new Set<string>(SETUP_ARTIFACTS);
-  const unrelated = dirty.filter((path) => !setupSet.has(path));
+  const allowedSet = new Set<string>([...SETUP_ARTIFACTS, ...RUNNER_STATE_EXCLUDES]);
+  const unrelated = dirty.filter((path) => !allowedSet.has(path));
   if (unrelated.length > 0) {
     throw new Error(
-      `Unrelated changes in worktree after editor session: ${unrelated.join(", ")}. Commit or stash them before continuing, then run \`shaka autoresearch resume\`.`,
+      `Unrelated changes in worktree after editor session: ${unrelated.join(", ")}. Commit or stash them before continuing, then run \`shaka optimize resume\` (\`shaka autoresearch resume\` also works).`,
     );
   }
 }
@@ -650,6 +681,148 @@ async function measureBaseline(
   return r.measurement.value;
 }
 
+async function shortHead(cwd: string): Promise<string> {
+  const proc = Bun.spawn(["git", "rev-parse", "--short", "HEAD"], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [out, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
+    const diag = stderr.trim();
+    throw new Error(`git rev-parse --short HEAD failed${diag ? `: ${diag}` : ""}`);
+  }
+  return out.trim();
+}
+
+async function readRegularTextFile(path: string, label: string): Promise<string | null> {
+  let stats: Awaited<ReturnType<typeof lstat>>;
+  try {
+    stats = await lstat(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  if (!stats.isFile()) {
+    throw new Error(`${label} must be a regular file.`);
+  }
+  return await Bun.file(path).text();
+}
+
+function validateAutoresearchMeta(raw: unknown, path: string): AutoresearchMeta {
+  if (typeof raw !== "object" || raw === null) {
+    throw new Error(`${path} must contain a JSON object`);
+  }
+  const meta = raw as { schemaVersion?: unknown; baseline?: unknown };
+  if (meta.schemaVersion !== 1) {
+    throw new Error(`${path} has unsupported schemaVersion=${String(meta.schemaVersion)}`);
+  }
+  if (typeof meta.baseline !== "object" || meta.baseline === null) {
+    throw new Error(`${path} is missing baseline`);
+  }
+  return { schemaVersion: 1, baseline: validateBaselineMeta(meta.baseline, path) };
+}
+
+function requireMetaString(
+  baseline: Partial<Record<keyof BaselineMeta, unknown>>,
+  path: string,
+  key: "ts" | "unit" | "command" | "commit",
+): string {
+  const value = baseline[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`${path} baseline.${key} is required`);
+  }
+  return value;
+}
+
+function validateBaselineMeta(raw: object, path: string): BaselineMeta {
+  const baseline = raw as Partial<Record<keyof BaselineMeta, unknown>>;
+  const metric = baseline.metric;
+  if (typeof metric !== "number" || !Number.isFinite(metric)) {
+    throw new Error(`${path} baseline.metric must be a finite number`);
+  }
+  const direction = baseline.direction;
+  if (direction !== "minimize" && direction !== "maximize") {
+    throw new Error(`${path} baseline.direction must be minimize or maximize`);
+  }
+  return {
+    ts: requireMetaString(baseline, path, "ts"),
+    metric,
+    unit: requireMetaString(baseline, path, "unit"),
+    direction,
+    command: requireMetaString(baseline, path, "command"),
+    commit: requireMetaString(baseline, path, "commit"),
+  };
+}
+
+export async function readAutoresearchMeta(cwd: string): Promise<AutoresearchMeta | null> {
+  const path = join(cwd, META_FILE);
+  const rawText = await readRegularTextFile(path, META_FILE);
+  if (rawText === null) return null;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawText);
+  } catch (err) {
+    throw new Error(
+      `${META_FILE} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  return validateAutoresearchMeta(raw, META_FILE);
+}
+
+export async function writeAutoresearchMeta(cwd: string, meta: AutoresearchMeta): Promise<void> {
+  await Bun.write(join(cwd, META_FILE), `${JSON.stringify(meta, null, 2)}\n`);
+}
+
+export async function writeBaselineMetaFromMeasurement(
+  cwd: string,
+  measurement: Measurement,
+  spec: { readonly direction: Direction; readonly unit: string; readonly command: string },
+  now: () => Date = () => new Date(),
+): Promise<AutoresearchMeta> {
+  if (measurement.unit !== spec.unit) {
+    throw new Error(
+      `Baseline metadata unit mismatch: measurement unit=${measurement.unit}, spec unit=${spec.unit}`,
+    );
+  }
+  const meta: AutoresearchMeta = {
+    schemaVersion: 1,
+    baseline: {
+      ts: now().toISOString(),
+      metric: measurement.value,
+      unit: measurement.unit,
+      direction: spec.direction,
+      command: spec.command,
+      commit: await shortHead(cwd),
+    },
+  };
+  await writeAutoresearchMeta(cwd, meta);
+  return meta;
+}
+
+async function baselineFromMetadata(
+  cwd: string,
+  spec: { readonly direction: Direction; readonly unit: string },
+): Promise<number | null> {
+  const meta = await readAutoresearchMeta(cwd);
+  if (meta === null) return null;
+  if (meta.baseline.unit !== spec.unit) {
+    throw new Error(
+      `autoresearch.md declares unit=${spec.unit} but ${META_FILE} uses unit=${meta.baseline.unit}. Revert the spec edit, or ${OPTIMIZE_START_HINT}`,
+    );
+  }
+  if (meta.baseline.direction !== spec.direction) {
+    throw new Error(
+      `autoresearch.md declares direction=${spec.direction} but ${META_FILE} uses direction=${meta.baseline.direction}. Revert the spec edit, or ${OPTIMIZE_START_HINT}`,
+    );
+  }
+  return meta.baseline.metric;
+}
+
 /** State reconstructed from a prior run's jsonl, used when resuming. */
 interface PriorRunState {
   readonly iter: number;
@@ -696,6 +869,38 @@ function parseJsonlEntries(raw: string): {
 
 function renderJsonlEntries(entries: readonly LogEntry[]): string {
   return entries.length === 0 ? "" : `${entries.map((e) => JSON.stringify(e)).join("\n")}\n`;
+}
+
+export async function readAutoresearchJsonlEntries(cwd: string): Promise<readonly LogEntry[]> {
+  const path = join(cwd, JSONL_FILE);
+  const raw = await readRegularTextFile(path, JSONL_FILE);
+  if (raw === null || raw.trim() === "") return [];
+  const { entries, droppedTail } = parseJsonlEntries(raw);
+  if (droppedTail) {
+    await Bun.write(path, renderJsonlEntries(entries));
+  }
+  return entries;
+}
+
+async function resolveLoopBaseline(
+  cwd: string,
+  spec: { readonly direction: Direction; readonly unit: string; readonly command: string },
+  priorKept: number,
+  deps: Pick<ResolvedDeps, "benchmark" | "now">,
+): Promise<number> {
+  const persisted = await baselineFromMetadata(cwd, spec);
+  if (persisted !== null) return persisted;
+
+  const measured = await measureBaseline(cwd, deps.benchmark, spec.unit);
+  if (priorKept === 0) {
+    await writeBaselineMetaFromMeasurement(
+      cwd,
+      { name: "baseline", value: measured, unit: spec.unit },
+      spec,
+      deps.now,
+    );
+  }
+  return measured;
 }
 
 /**
@@ -748,16 +953,7 @@ async function loadPriorState(
   direction: Direction,
   expectedUnit: string,
 ): Promise<PriorRunState | null> {
-  const path = join(cwd, JSONL_FILE);
-  const file = Bun.file(path);
-  if (!(await file.exists())) return null;
-  const raw = await file.text();
-  if (raw.trim() === "") return null;
-
-  const { entries, droppedTail } = parseJsonlEntries(raw);
-  if (droppedTail) {
-    await Bun.write(path, renderJsonlEntries(entries));
-  }
+  const entries = await readAutoresearchJsonlEntries(cwd);
   if (entries.length === 0) return null;
 
   // Latest persisted unit (if any) is the reference. Older entries without
@@ -766,7 +962,7 @@ async function loadPriorState(
   const persistedUnit = [...entries].reverse().find((e) => e.unit !== undefined)?.unit;
   if (persistedUnit !== undefined && persistedUnit !== expectedUnit) {
     throw new Error(
-      `autoresearch.md declares unit=${expectedUnit} but prior jsonl entries used unit=${persistedUnit}. Revert the spec edit, or start a fresh experiment with \`shaka autoresearch start\`.`,
+      `autoresearch.md declares unit=${expectedUnit} but prior jsonl entries used unit=${persistedUnit}. Revert the spec edit, or ${OPTIMIZE_START_HINT}`,
     );
   }
 
@@ -790,27 +986,60 @@ interface IterationOutcome {
   readonly entry: LogEntry;
 }
 
-interface JsonlSnapshot {
+interface RunnerStateFileSnapshot {
   readonly path: string;
   readonly content: string | null;
 }
 
-async function snapshotJsonl(cwd: string): Promise<JsonlSnapshot> {
-  const path = join(cwd, JSONL_FILE);
-  const file = Bun.file(path);
-  return { path, content: (await file.exists()) ? await file.text() : null };
+interface RunnerStateSnapshot {
+  readonly files: readonly RunnerStateFileSnapshot[];
 }
 
-async function restoreJsonlIfChanged(snapshot: JsonlSnapshot): Promise<boolean> {
-  const file = Bun.file(snapshot.path);
-  const current = (await file.exists()) ? await file.text() : null;
-  if (current === snapshot.content) return false;
-  if (snapshot.content === null) {
-    await rm(snapshot.path, { force: true });
-  } else {
-    await Bun.write(snapshot.path, snapshot.content);
+async function observeRunnerStateFile(path: string): Promise<{
+  readonly regular: boolean;
+  readonly content: string | null;
+}> {
+  let stats: Awaited<ReturnType<typeof lstat>>;
+  try {
+    stats = await lstat(path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return { regular: true, content: null };
+    }
+    throw err;
   }
-  return true;
+  if (!stats.isFile()) {
+    return { regular: false, content: null };
+  }
+  return { regular: true, content: await Bun.file(path).text() };
+}
+
+async function snapshotRunnerState(cwd: string): Promise<RunnerStateSnapshot> {
+  const files: RunnerStateFileSnapshot[] = [];
+  for (const name of RUNNER_STATE_EXCLUDES) {
+    const path = join(cwd, name);
+    const state = await observeRunnerStateFile(path);
+    if (!state.regular) {
+      throw new Error(`${name} must be a regular file.`);
+    }
+    files.push({ path, content: state.content });
+  }
+  return { files };
+}
+
+async function restoreRunnerStateIfChanged(snapshot: RunnerStateSnapshot): Promise<boolean> {
+  let changed = false;
+  for (const snap of snapshot.files) {
+    const current = await observeRunnerStateFile(snap.path);
+    if (current.regular && current.content === snap.content) continue;
+    changed = true;
+    if (snap.content === null) {
+      await rm(snap.path, { force: true });
+    } else {
+      await Bun.write(snap.path, snap.content);
+    }
+  }
+  return changed;
 }
 
 interface IncorrectContext {
@@ -835,7 +1064,7 @@ async function revertAndClassifyIncorrect(
   cwd: string,
   ctx: IncorrectContext,
 ): Promise<IterationOutcome> {
-  await revertWorkingTree(JSONL_EXCLUDES, cwd);
+  await revertWorkingTree(RUNNER_STATE_EXCLUDES, cwd);
   await cleanIgnoredSetupArtifacts(cwd);
   return incorrectOutcome(ctx);
 }
@@ -882,7 +1111,7 @@ async function tryCommitKeep(
 }> {
   try {
     return {
-      commit: await commitAllExcept(JSONL_EXCLUDES, commitMessage(iter, hypothesis), cwd),
+      commit: await commitAllExcept(RUNNER_STATE_EXCLUDES, commitMessage(iter, hypothesis), cwd),
     };
   } catch (err) {
     const commitError = err instanceof Error ? err.message : String(err);
@@ -907,7 +1136,7 @@ async function runIteration(args: {
   const { cwd, iter, direction, expectedUnit, best, providers, deps, prompt } = args;
   const iterStart = Date.now();
 
-  const jsonlSnapshot = await snapshotJsonl(cwd);
+  const jsonlSnapshot = await snapshotRunnerState(cwd);
   const agentResult = await deps.agent({ prompt, cwd }, providers);
 
   // Infrastructure failures (no provider, spawn error, CLI crash) are not
@@ -919,7 +1148,7 @@ async function runIteration(args: {
   // next resume (prompt context + prior-state reconstruction both read jsonl).
   if (agentResult.exitCode !== 0 && !agentResult.timedOut) {
     const diag = agentResult.stderr.trim() || agentResult.stdout.trim() || "(no output)";
-    await restoreJsonlIfChanged(jsonlSnapshot);
+    await restoreRunnerStateIfChanged(jsonlSnapshot);
     throw new Error(`Agent failed on iter ${iter}: ${diag}`);
   }
 
@@ -936,7 +1165,7 @@ async function runIteration(args: {
     expectedUnit,
   };
 
-  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
+  if (await restoreRunnerStateIfChanged(jsonlSnapshot)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
   }
 
@@ -956,7 +1185,7 @@ async function runIteration(args: {
   // so running benchmark/checks on this tree cannot produce a keep — it
   // only produces wasted work and noisy signals.
   if (agentResult.timedOut) {
-    await revertWorkingTree(JSONL_EXCLUDES, cwd);
+    await revertWorkingTree(RUNNER_STATE_EXCLUDES, cwd);
     return {
       verdict: "timeout",
       metric: null,
@@ -990,9 +1219,9 @@ async function runIteration(args: {
   // Post-benchmark tamper re-check. Order matches the pre-benchmark gate
   // (jsonl first, setup second) so a tampered jsonl is restored before the
   // setup-tamper branch's revertAndClassifyIncorrect runs — otherwise
-  // revertWorkingTree(JSONL_EXCLUDES) would preserve the tampered jsonl into
+  // revertWorkingTree(RUNNER_STATE_EXCLUDES) would preserve the tampered jsonl into
   // the next resume's loadPriorState / loadRecentEntries.
-  if (await restoreJsonlIfChanged(jsonlSnapshot)) {
+  if (await restoreRunnerStateIfChanged(jsonlSnapshot)) {
     return revertAndClassifyIncorrect(cwd, tamperContext);
   }
   if (await setupArtifactsDirty(cwd)) {
@@ -1022,7 +1251,7 @@ async function runIteration(args: {
   }
 
   if (verdict !== "keep") {
-    await revertWorkingTree(JSONL_EXCLUDES, cwd);
+    await revertWorkingTree(RUNNER_STATE_EXCLUDES, cwd);
   }
 
   const entry: LogEntry = {
@@ -1067,18 +1296,7 @@ function applyOutcome(book: LoopBookkeeping, outcome: IterationOutcome): void {
 const RECENT_ENTRY_WINDOW = 5;
 
 async function loadRecentEntries(cwd: string): Promise<readonly LogEntry[]> {
-  const file = Bun.file(join(cwd, JSONL_FILE));
-  if (!(await file.exists())) return [];
-  const raw = (await file.text()).split("\n").filter((l) => l.length > 0);
-  const entries: LogEntry[] = [];
-  for (const line of raw) {
-    try {
-      entries.push(JSON.parse(line) as LogEntry);
-    } catch {
-      // Truncated lines are dealt with by loadPriorState on resume; the
-      // running loop writes whole lines, so this path is defensive only.
-    }
-  }
+  const entries = await readAutoresearchJsonlEntries(cwd);
   return entries.slice(-RECENT_ENTRY_WINDOW);
 }
 
@@ -1087,12 +1305,9 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
   const resolved = resolveDeps(deps);
 
   const specBody = await Bun.file(join(cwd, "autoresearch.md")).text();
-  const spec = parseSpec(specBody);
+  const spec = parseAutoresearchSpec(specBody);
   const prior = await loadPriorState(cwd, spec.direction, spec.unit);
-
-  // If no prior `keep` exists, HEAD is still the setup commit — re-measure.
-  // Otherwise the prior run's best-kept metric is the accurate reference.
-  const baseline = prior?.best ?? (await measureBaseline(cwd, resolved.benchmark, spec.unit));
+  const baseline = await resolveLoopBaseline(cwd, spec, prior?.kept ?? 0, resolved);
 
   const book: LoopBookkeeping = {
     iter: prior?.iter ?? 0,
@@ -1138,7 +1353,7 @@ export async function runLoop(cfg: RunLoopConfig, deps: RunLoopDeps = {}): Promi
     });
 
     // Belt-and-braces: a rogue agent edit that survived revert would show up here.
-    if (outcome.verdict !== "keep" && !(await isCleanExcept(JSONL_EXCLUDES, cwd))) {
+    if (outcome.verdict !== "keep" && !(await isCleanExcept(RUNNER_STATE_EXCLUDES, cwd))) {
       throw new Error(`Post-revert worktree is dirty at iteration ${book.iter}`);
     }
   }
@@ -1269,7 +1484,7 @@ export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
 /**
  * Legacy TODO-marker template used when the wizard didn't run (non-TTY setups).
  * benchmarkCommand embeds its own echo+exit so the rendered script still fails
- * loudly with an actionable message pointing at `shaka autoresearch resume`.
+ * loudly with an actionable message pointing at `shaka optimize resume`.
  *
  * The echo uses SINGLE-quoted sh syntax so the inline backticks around the
  * command name print literally. Double-quoted with unescaped backticks would
@@ -1279,7 +1494,7 @@ export function renderTemplates(answers: WizardAnswers): RenderedTemplates {
 const TODO_ANSWERS: WizardAnswers = {
   objective: "<objective>",
   benchmarkCommand:
-    "# TODO: replace with a real benchmark that emits: METRIC name=runtime value=<value> unit=TODO\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`.' >&2\nexit 1",
+    "# TODO: replace with a real benchmark that emits: METRIC name=runtime value=<value> unit=TODO\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka optimize resume`.' >&2\nexit 1",
   direction: "minimize",
   unit: "TODO",
   checksCommand: "",

@@ -97,89 +97,95 @@ describe("inference", () => {
       expect(result.error).toContain("codex");
     });
 
-    test.skipIf(process.platform === "win32")("enforces timeout for OpenCode CLI inference", async () => {
-      const root = join(
-        tmpdir(),
-        `shaka-inference-opencode-timeout-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      );
-      const binDir = join(root, "bin");
-      const oldPath = process.env.PATH;
-      try {
-        await mkdir(binDir, { recursive: true });
-        const opencode = join(binDir, "opencode");
-        await Bun.write(
-          opencode,
-          "#!/bin/sh\nsleep 0.3\nprintf '%s\\n' '{\"type\":\"text\",\"part\":{\"text\":\"late success\"}}'\n",
+    test.skipIf(process.platform === "win32")(
+      "enforces timeout for OpenCode CLI inference",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-opencode-timeout-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         );
-        await chmod(opencode, 0o755);
-        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const opencode = join(binDir, "opencode");
+          await Bun.write(
+            opencode,
+            '#!/bin/sh\nsleep 0.3\nprintf \'%s\\n\' \'{"type":"text","part":{"text":"late success"}}\'\n',
+          );
+          await chmod(opencode, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 
-        const { inference } = await import("../../src/inference");
-        const start = performance.now();
-        const result = await inference(
-          { userPrompt: "slow", timeout: 25 },
-          { claude: false, opencode: true, codex: false },
-        );
-        const elapsedMs = performance.now() - start;
+          const { inference } = await import("../../src/inference");
+          const start = performance.now();
+          const result = await inference(
+            { userPrompt: "slow", timeout: 25 },
+            { claude: false, opencode: true, codex: false },
+          );
+          const elapsedMs = performance.now() - start;
 
-        expect(result.success).toBe(false);
-        expect(result.error).toContain("Timeout after 25ms");
-        expect(elapsedMs).toBeLessThan(250);
-      } finally {
-        if (oldPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = oldPath;
+          expect(result.success).toBe(false);
+          expect(result.error).toContain("Timeout after 25ms");
+          expect(elapsedMs).toBeLessThan(250);
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
         }
-        await rm(root, { recursive: true, force: true });
-      }
-    });
+      },
+    );
 
-    test.skipIf(process.platform === "win32")("cleans up OpenCode sessions discovered before timeout", async () => {
-      const root = join(
-        tmpdir(),
-        `shaka-inference-opencode-timeout-cleanup-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      );
-      const binDir = join(root, "bin");
-      const cleanupFile = join(root, "cleanup.txt");
-      const oldPath = process.env.PATH;
-      try {
-        await mkdir(binDir, { recursive: true });
-        const opencode = join(binDir, "opencode");
-        await Bun.write(
-          opencode,
-          [
-            "#!/bin/sh",
-            'if [ "$1" = "--pure" ] && [ "$2" = "session" ] && [ "$3" = "delete" ]; then',
-            `  printf "%s" "$4" > ${shellQuote(cleanupFile)}`,
-            "  exit 0",
-            "fi",
-            "echo '{\"type\":\"step_start\",\"sessionID\":\"ses_timeout_cleanup\"}'",
-            "sleep 2",
-            "",
-          ].join("\n"),
+    test.skipIf(process.platform === "win32")(
+      "cleans up OpenCode sessions discovered before timeout",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-opencode-timeout-cleanup-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         );
-        await chmod(opencode, 0o755);
-        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+        const binDir = join(root, "bin");
+        const cleanupFile = join(root, "cleanup.txt");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const opencode = join(binDir, "opencode");
+          await Bun.write(
+            opencode,
+            [
+              "#!/bin/sh",
+              'if [ "$1" = "--pure" ] && [ "$2" = "session" ] && [ "$3" = "delete" ]; then',
+              `  printf "%s" "$4" > ${shellQuote(cleanupFile)}`,
+              "  exit 0",
+              "fi",
+              'echo \'{"type":"step_start","sessionID":"ses_timeout_cleanup"}\'',
+              "sleep 2",
+              "",
+            ].join("\n"),
+          );
+          await chmod(opencode, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 
-        const { inference } = await import("../../src/inference");
-        const result = await inference(
-          { userPrompt: "slow", timeout: 1000 },
-          { claude: false, opencode: true, codex: false },
-        );
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "slow", timeout: 1000 },
+            { claude: false, opencode: true, codex: false },
+          );
 
-        expect(result.success).toBe(false);
-        expect(result.error).toContain("Timeout after 1000ms");
-        await expect(readEventually(cleanupFile, 1000)).resolves.toBe("ses_timeout_cleanup");
-      } finally {
-        if (oldPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = oldPath;
+          expect(result.success).toBe(false);
+          expect(result.error).toContain("Timeout after 1000ms");
+          await expect(readEventually(cleanupFile, 1000)).resolves.toBe("ses_timeout_cleanup");
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
         }
-        await rm(root, { recursive: true, force: true });
-      }
-    });
+      },
+    );
   });
 
   describe("resolveInferenceAttempts", () => {

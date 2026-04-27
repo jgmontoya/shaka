@@ -200,7 +200,7 @@ export {
 } from "./domain/agent-execution";
 
 // Import commands and version
-import { createAutoresearchCommand } from "./commands/autoresearch";
+import { createAutoresearchCommand, createOptimizeCommand } from "./commands/autoresearch";
 import { createCommandsCommand } from "./commands/commands";
 import { createConfigCommand } from "./commands/config";
 import { createDoctorCommand } from "./commands/doctor";
@@ -225,6 +225,7 @@ if (import.meta.main) {
 
   program.addCommand(createInitCommand());
   program.addCommand(createAutoresearchCommand());
+  program.addCommand(createOptimizeCommand());
   program.addCommand(createUpdateCommand());
   program.addCommand(createUninstallCommand());
   program.addCommand(createReloadCommand());

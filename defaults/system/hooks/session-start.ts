@@ -182,50 +182,52 @@ async function main() {
     const codexGlob = new Bun.Glob(".codex-pending-*.json");
     for await (const file of codexGlob.scan({ cwd: memoryDir })) {
       try {
-      const filePath = join(memoryDir, file);
-      const stat = await Bun.file(filePath).stat();
-      if (stat && stat.mtimeMs < oneHourAgo) {
-        // Read marker data for crash recovery
-        let marker: { session_id?: string; transcript_path?: string; cwd?: string } | null = null;
-        try {
-          marker = await Bun.file(filePath).json();
-        } catch {
-          // Corrupted marker — just delete it
+        const filePath = join(memoryDir, file);
+        const stat = await Bun.file(filePath).stat();
+        if (stat && stat.mtimeMs < oneHourAgo) {
+          // Read marker data for crash recovery
+          let marker: { session_id?: string; transcript_path?: string; cwd?: string } | null = null;
+          try {
+            marker = await Bun.file(filePath).json();
+          } catch {
+            // Corrupted marker — just delete it
+            await unlink(filePath).catch(() => {});
+            continue;
+          }
+
+          if (marker?.session_id && marker?.transcript_path) {
+            // Write a session-end input file and spawn a worker
+            await mkdir(memoryDir, { recursive: true });
+            const tmpPath = join(
+              memoryDir,
+              `.session-end-input-${marker.session_id.slice(0, 8)}-${process.pid}.json`,
+            );
+            const sessionEndInput = {
+              session_id: marker.session_id,
+              transcript_path: marker.transcript_path,
+              cwd: marker.cwd ?? process.cwd(),
+              provider: "codex",
+            };
+            await Bun.write(tmpPath, JSON.stringify(sessionEndInput));
+
+            // Find session-end hook path (same directory as this hook)
+            const sessionEndHookPath = join(import.meta.dir, "session-end.ts");
+            const logPath = join(memoryDir, ".session-end-worker.log");
+            const proc = Bun.spawn(["bun", "run", sessionEndHookPath, "--worker", tmpPath], {
+              stdin: "ignore",
+              stdout: "ignore",
+              stderr: Bun.file(logPath),
+            });
+            proc.unref();
+
+            console.error(
+              `[session-start] Recovered stale Codex marker for session ${marker.session_id}`,
+            );
+          }
+
+          // Delete the stale marker
           await unlink(filePath).catch(() => {});
-          continue;
         }
-
-        if (marker?.session_id && marker?.transcript_path) {
-          // Write a session-end input file and spawn a worker
-          await mkdir(memoryDir, { recursive: true });
-          const tmpPath = join(
-            memoryDir,
-            `.session-end-input-${marker.session_id.slice(0, 8)}-${process.pid}.json`,
-          );
-          const sessionEndInput = {
-            session_id: marker.session_id,
-            transcript_path: marker.transcript_path,
-            cwd: marker.cwd ?? process.cwd(),
-            provider: "codex",
-          };
-          await Bun.write(tmpPath, JSON.stringify(sessionEndInput));
-
-          // Find session-end hook path (same directory as this hook)
-          const sessionEndHookPath = join(import.meta.dir, "session-end.ts");
-          const logPath = join(memoryDir, ".session-end-worker.log");
-          const proc = Bun.spawn(["bun", "run", sessionEndHookPath, "--worker", tmpPath], {
-            stdin: "ignore",
-            stdout: "ignore",
-            stderr: Bun.file(logPath),
-          });
-          proc.unref();
-
-          console.error(`[session-start] Recovered stale Codex marker for session ${marker.session_id}`);
-        }
-
-        // Delete the stale marker
-        await unlink(filePath).catch(() => {});
-      }
       } catch {
         /* file may have been deleted between scan and stat */
       }

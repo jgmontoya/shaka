@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  renderStatus,
-  shouldRenderWidget,
-} from "../../../src/services/autoresearch-widget";
+import { renderStatus, shouldRenderWidget } from "../../../src/services/autoresearch-widget";
 
 describe("renderStatus", () => {
   test("shows iter / kept / discarded and baseline→best with current metric", () => {

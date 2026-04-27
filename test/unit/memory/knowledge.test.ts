@@ -233,9 +233,7 @@ A fact.
     });
 
     test("fragment with multiple matching existing topics goes to best match", () => {
-      const fragments = [
-        makeFragment("Auth Scaling", ["auth-system", "scaling", "architecture"]),
-      ];
+      const fragments = [makeFragment("Auth Scaling", ["auth-system", "scaling", "architecture"])];
       // Two existing topics match — "auth-system" matches the first tag
       const existingSlugs = ["auth-system", "architecture"];
       const groups = groupFragmentsByTopic(fragments, existingSlugs);
@@ -323,7 +321,7 @@ The auth layer uses JWT.
       expect(prompt).toContain("JWT auth with rotating refresh tokens");
       expect(prompt).toContain("Token Rotation Policy");
       expect(prompt).toContain("2026-04-03-def67890");
-      expect(prompt).toContain("3500");  // soft size limit
+      expect(prompt).toContain("3500"); // soft size limit
     });
   });
 
@@ -490,19 +488,27 @@ ${knowledgeContent}
       await mkdir(sessionsDir, { recursive: true });
 
       // Create two session summaries with knowledge fragments about "auth"
-      await createSessionSummary(sessionsDir, "2026-04-01-abc12345.md", `## Knowledge
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-01-abc12345.md",
+        `## Knowledge
 
 ### Auth Middleware Design
 
 The auth layer uses JWT with rotating refresh tokens for stateless auth.
-Topics: auth, architecture`);
+Topics: auth, architecture`,
+      );
 
-      await createSessionSummary(sessionsDir, "2026-04-03-def67890.md", `## Knowledge
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-03-def67890.md",
+        `## Knowledge
 
 ### Token Rotation Policy
 
 Refresh tokens rotate every 7 days for compliance requirements.
-Topics: auth`);
+Topics: auth`,
+      );
 
       // Mock inferFn: returns a valid topic page when called
       const inferFn = async (_prompt: string): Promise<string> => {
@@ -567,12 +573,16 @@ The auth layer uses JWT with rotating refresh tokens. Session state is stateless
       const sessionsDir = join(memoryDir, "sessions");
       await mkdir(sessionsDir, { recursive: true });
 
-      await createSessionSummary(sessionsDir, "2026-04-01-abc12345.md", `## Knowledge
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-01-abc12345.md",
+        `## Knowledge
 
 ### Auth Design
 
 Auth uses JWT.
-Topics: auth`);
+Topics: auth`,
+      );
 
       // First compilation
       const inferFn = async (_prompt: string): Promise<string> => {
@@ -615,11 +625,15 @@ Auth uses JWT.
       const sessionsDir = join(memoryDir, "sessions");
       await mkdir(sessionsDir, { recursive: true });
 
-      await createSessionSummary(sessionsDir, "2026-04-01-abc12345.md", `## Learnings
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-01-abc12345.md",
+        `## Learnings
 
 ### (fact) Some Fact
 
-Just a learning, no knowledge.`);
+Just a learning, no knowledge.`,
+      );
 
       const inferFn = async (_prompt: string): Promise<string> => "";
 
