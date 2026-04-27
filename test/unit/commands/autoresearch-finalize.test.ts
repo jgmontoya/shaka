@@ -14,6 +14,17 @@ async function sh(args: string[], cwd: string): Promise<void> {
   if (code !== 0) throw new Error(`${args.join(" ")} failed: ${err}`);
 }
 
+async function runStdout(args: string[], cwd: string): Promise<string> {
+  const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });
+  const [out, err, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`${args.join(" ")} failed: ${err}`);
+  return out.trim();
+}
+
 describe("commitFinalizeIfDirty", () => {
   const createdDirs: string[] = [];
 
@@ -138,6 +149,50 @@ describe("commitFinalizeIfDirty", () => {
     ]);
     expect(exit).toBe(0);
   });
+
+  test("no-ops when the only dirt is gitignored toolchain output, not setup artifacts", async () => {
+    // Reproduces the user-reported false-positive: a Cargo project's
+    // benchmark writes `target/` during the setup oneshot, the source repo
+    // gitignores it, and the prior `includeIgnored: true` query surfaced
+    // every gitignored path in the tree as "dirty" — tripping
+    // assertOnlySetupDirty even though no setup artifact actually changed.
+    const dir = await makeRepo();
+    await Bun.write(join(dir, ".gitignore"), "target/\n");
+    await sh(["git", "add", ".gitignore"], dir);
+    await sh(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "add gitignore"], dir);
+    await mkdir(join(dir, "target"), { recursive: true });
+    await Bun.write(join(dir, "target", "build.log"), "compile output\n");
+
+    const headBefore = await runStdout(["git", "rev-parse", "HEAD"], dir);
+    await commitFinalizeIfDirty(dir); // must not throw
+    const headAfter = await runStdout(["git", "rev-parse", "HEAD"], dir);
+    expect(headAfter).toBe(headBefore); // genuine early-return, no commit made
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "still finalizes a setup artifact whose name matches the source repo's .gitignore",
+    async () => {
+      // Asymmetric guarantee: we relaxed `assertOnlySetupDirty` for ignored
+      // *non-setup* paths, but a gitignored *setup artifact* (e.g. repo
+      // ignores `*.sh`) must still ride the finalize commit — otherwise
+      // every iteration sees it untracked and the loop breaks.
+      const dir = await makeRepo();
+      await Bun.write(join(dir, ".gitignore"), "*.sh\n");
+      await sh(["git", "add", ".gitignore"], dir);
+      await sh(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "ignore sh"], dir);
+      await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
+
+      await commitFinalizeIfDirty(dir);
+
+      const lsProc = Bun.spawn(["git", "ls-tree", "HEAD", "autoresearch.checks.sh"], {
+        cwd: dir,
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [lsOut] = await Promise.all([new Response(lsProc.stdout).text(), lsProc.exited]);
+      expect(lsOut).toContain("autoresearch.checks.sh");
+    },
+  );
 
   test("throws when the worktree has unrelated dirty files, preserving them on disk", async () => {
     // The function's contract is "finalize benchmark setup" — it should not

@@ -289,12 +289,15 @@ export const SETUP_ARTIFACTS = [
  * layers share one source of truth for dirty-path partitioning.
  */
 export async function assertOnlySetupDirty(worktreePath: string): Promise<void> {
-  // `includeIgnored: true` catches agent-dropped foreign files that match a
-  // .gitignore pattern (e.g. `.env`, `tmp/cache`). Without it, plain git
-  // status would hide the file and the gate would pass even though the
-  // worktree is no longer "setup artifacts only" — asymmetric with
-  // setupArtifactsDirty's own ignored-aware check.
-  const dirty = await listDirtyPaths(worktreePath, { includeIgnored: true });
+  // Gitignored paths are deliberately out of scope here. Modern toolchains
+  // (Cargo `target/`, Node `node_modules/`, build caches, runtime data dirs)
+  // produce gitignored output during the benchmark itself; surfacing that
+  // would make the dirty gate trip on every clean setup. The user's
+  // `.gitignore` is the source of truth for what counts as noise.
+  // Setup-artifact tamper detection is handled separately by
+  // `setupArtifactsDirty`, which IS ignored-aware but pathspec-scoped to
+  // SETUP_ARTIFACTS — that's the asymmetric guarantee we still want.
+  const dirty = await listDirtyPaths(worktreePath);
   if (dirty.length === 0) return;
 
   const setupSet = new Set<string>(SETUP_ARTIFACTS);
@@ -313,7 +316,7 @@ export async function assertOnlySetupDirty(worktreePath: string): Promise<void> 
  * use `git status --porcelain` rather than `git diff HEAD` because the latter
  * only sees tracked changes and silently misses new untracked files.
  */
-async function setupArtifactsDirty(cwd: string): Promise<boolean> {
+export async function setupArtifactsDirty(cwd: string): Promise<boolean> {
   // `--ignored=matching` so a setup artifact matching a .gitignore pattern
   // (e.g. the user's repo ignores `*.sh`) is still reported as dirty —
   // otherwise defaultChecks would keep running autoresearch.checks.sh while
