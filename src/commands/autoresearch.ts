@@ -21,6 +21,7 @@ import {
   resolveResumeTarget,
   runLoop,
   runResume,
+  setupArtifactsDirty,
   setupWorkspace,
   summarizeHypothesis,
   validateSetup,
@@ -87,14 +88,22 @@ export async function commitFinalizeIfDirty(
   worktreePath: string,
   opts?: { readonly message?: string },
 ): Promise<void> {
-  // `includeIgnored: true` so a gitignored setup artifact (repo ignoring
-  // `*.sh` etc.) still triggers the finalize flow. Without it, the user
-  // drops a valid autoresearch.checks.sh that matches .gitignore and
-  // listDirtyPaths hides it; this function early-returns, the file never
-  // gets chmod/staged/committed, and the next resume's tamper check
-  // treats it as agent-dropped and deletes it.
-  const dirty = await listDirtyPaths(worktreePath, { includeIgnored: true });
-  if (dirty.length === 0) return;
+  // Two signals decide whether there's anything to finalize:
+  //   1. Plain `git status` for tracked + untracked-non-ignored changes.
+  //   2. `setupArtifactsDirty` (pathspec-scoped + ignored-aware) so a
+  //      gitignored setup artifact (e.g. repo ignores `*.sh`) still
+  //      triggers the finalize flow. Without (2), a valid autoresearch.
+  //      checks.sh that matches .gitignore would be hidden, the function
+  //      would early-return, the file would never get chmod/staged/
+  //      committed, and the next resume's tamper check would treat it as
+  //      agent-dropped and delete it.
+  // We deliberately do NOT pass `includeIgnored: true` to listDirtyPaths
+  // here — that would surface every gitignored toolchain output (Cargo
+  // `target/`, Node `node_modules/`, runtime data dirs) the benchmark
+  // legitimately produced and trip assertOnlySetupDirty.
+  const dirty = await listDirtyPaths(worktreePath);
+  const setupDirty = await setupArtifactsDirty(worktreePath);
+  if (dirty.length === 0 && !setupDirty) return;
 
   await assertOnlySetupDirty(worktreePath);
 

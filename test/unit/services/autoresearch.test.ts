@@ -2032,16 +2032,24 @@ describe("assertOnlySetupDirty", () => {
     await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/rogue\.js/);
   });
 
-  test("throws when an unrelated file is dropped AND matches .gitignore", async () => {
-    // Regression guard: listDirtyPaths needs --ignored=matching here,
-    // otherwise git hides the gitignored .env and the gate falsely passes.
+  test("ignores gitignored non-setup paths produced by the user's toolchain", async () => {
+    // The benchmark itself writes gitignored build artifacts (Cargo's
+    // `target/`, Node's `node_modules/`, runtime `dev/data/`, …) — every
+    // modern toolchain does. The user's `.gitignore` is the source of
+    // truth for "what counts as noise"; surfacing those paths here would
+    // make the dirty gate trip on every clean run. Tamper detection on
+    // setup artifacts is handled separately and IS ignored-aware
+    // (setupArtifactsDirty is pathspec-scoped to SETUP_ARTIFACTS).
     const dir = await makeRepo();
-    await Bun.write(join(dir, ".gitignore"), ".env\n");
+    await Bun.write(join(dir, ".gitignore"), "target/\ndev/data/\n");
     await run(["git", "add", ".gitignore"], dir);
     await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "add gitignore"], dir);
-    await Bun.write(join(dir, ".env"), "SECRET=1\n");
+    await mkdir(join(dir, "target"), { recursive: true });
+    await Bun.write(join(dir, "target", "build.log"), "compile output\n");
+    await mkdir(join(dir, "dev", "data"), { recursive: true });
+    await Bun.write(join(dir, "dev", "data", "fixture.json"), "{}\n");
 
-    await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/\.env/);
+    await expect(assertOnlySetupDirty(dir)).resolves.toBeUndefined();
   });
 });
 
