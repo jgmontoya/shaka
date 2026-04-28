@@ -3,7 +3,7 @@
 # Interactive session: the agent authors autoresearch.md + autoresearch.sh
 # + optional autoresearch.checks.sh in a git worktree, self-verifies by
 # running the script, and exits. Body is kept in sync with
-# defaults/system/skills/AutoresearchSetup/SKILL.md (enforced by test).
+# defaults/system/skills/autoresearch-setup/SKILL.md (enforced by test).
 name: autoresearch-setup
 description: Interactive setup agent — produces autoresearch.md + autoresearch.sh + optional autoresearch.checks.sh from a natural-language objective so the loop can run.
 
@@ -29,7 +29,7 @@ permission:
   websearch: deny
 ---
 
-# Autoresearch Setup Protocol
+# autoresearch-setup protocol
 
 You have been handed a git worktree and a natural-language objective. You are in an interactive terminal session with the user. Produce a working benchmark harness that the autoresearch loop can consume. Ask the user if the objective is genuinely ambiguous — you are talking to them in real time.
 

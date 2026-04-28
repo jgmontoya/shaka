@@ -107,7 +107,9 @@ async function loadTranscript(input: SessionEndInput): Promise<NormalizedMessage
     case "opencode":
       return await loadOpencodeTranscript(input.session_id);
     default:
-      console.error(`Unknown provider "${input.provider}", falling back to opencode transcript parser`);
+      console.error(
+        `Unknown provider "${input.provider}", falling back to opencode transcript parser`,
+      );
       return await loadOpencodeTranscript(input.session_id);
   }
 }
@@ -117,7 +119,9 @@ async function loadClaudeTranscript(transcriptPath: string): Promise<NormalizedM
   return parseClaudeCodeTranscript(content);
 }
 
-async function loadCodexTranscript(transcriptPath: string | undefined): Promise<NormalizedMessage[]> {
+async function loadCodexTranscript(
+  transcriptPath: string | undefined,
+): Promise<NormalizedMessage[]> {
   if (!transcriptPath) return [];
   try {
     const content = await Bun.file(transcriptPath).text();
@@ -381,13 +385,19 @@ async function worker(tmpPath: string) {
       if (result.sessionsProcessed === 0) {
         mark("Knowledge compilation skipped", t, "no unprocessed sessions");
       } else {
-        mark("Knowledge compilation complete", t, `${result.topicsCreated.length} created, ${result.topicsUpdated.length} updated`);
+        mark(
+          "Knowledge compilation complete",
+          t,
+          `${result.topicsCreated.length} created, ${result.topicsUpdated.length} updated`,
+        );
       }
     } else {
       mark("Knowledge compilation disabled", t);
     }
   } catch (err) {
-    console.error(`Knowledge compilation failed: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(
+      `Knowledge compilation failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
     mark("Knowledge compilation failed", t);
   }
 

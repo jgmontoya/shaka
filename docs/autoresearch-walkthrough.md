@@ -38,7 +38,7 @@ Worktree: /path/to/project.ar-cut-prime-count-from-80ms
 Branch:   autoresearch/cut-prime-count-from-80ms
 ```
 
-Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, or codex) with a setup agent seeded by the `AutoresearchSetup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
+Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, or codex) with a setup agent seeded by the `autoresearch-setup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
 
 - `autoresearch.md` — the spec (metric name, direction, unit, which benchmark is being wrapped)
 - `autoresearch.sh` — the executable harness that emits one `METRIC name=... value=... unit=...` line on stdout
@@ -67,7 +67,7 @@ If no provider CLI is installed, the default fails the same way. Run `shaka init
 
 Each iteration, Shaka builds a prompt that contains:
 
-- The Autoresearch skill (protocol, off-limits, JIT-bait warning)
+- The `autoresearch` skill (protocol, off-limits, JIT-bait warning)
 - Your `autoresearch.md` body
 - The last 5 entries from `autoresearch.jsonl`
 - An instruction to propose one change and respond with `HYPOTHESIS:`

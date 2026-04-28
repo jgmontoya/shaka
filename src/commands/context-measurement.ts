@@ -374,7 +374,7 @@ async function measureFormatReminder(shakaHome: string): Promise<FormatReminderC
   const stripEta = (s: string) => s.replace(/<%[\s\S]*?%>/g, "").trim();
 
   const typicalCapLine = "• Engineer → Engineer (subagent_type=Engineer)\n";
-  const typicalToolLine = "• Council — Multi-agent debate for complex decisions\n";
+  const typicalToolLine = "• council — Multi-agent debate for complex decisions\n";
   const fullRendered =
     stripEta(fullRaw).length + typicalCapLine.length * 2 + typicalToolLine.length * 2;
 

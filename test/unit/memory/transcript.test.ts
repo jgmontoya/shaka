@@ -367,7 +367,11 @@ describe("Transcript", () => {
     });
 
     test("handles malformed lines gracefully (no throw)", () => {
-      const input = ["not valid json", `{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}`, "{incomplete"].join("\n");
+      const input = [
+        "not valid json",
+        `{"type":"event_msg","payload":{"type":"user_message","message":"hello"}}`,
+        "{incomplete",
+      ].join("\n");
       const result = parseCodexTranscript(input);
       expect(result).toHaveLength(1);
       expect(result[0]!.role).toBe("user");

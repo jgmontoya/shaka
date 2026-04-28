@@ -102,13 +102,13 @@ describe("SkillRemoveService", () => {
 
   test("fails on system skill", async () => {
     // Create a system skill
-    await mkdir(join(tempDir, "system", "skills", "Council"), { recursive: true });
+    await mkdir(join(tempDir, "system", "skills", "council"), { recursive: true });
     await writeFile(
-      join(tempDir, "system", "skills", "Council", "SKILL.md"),
-      "---\nname: Council\n---",
+      join(tempDir, "system", "skills", "council", "SKILL.md"),
+      "---\nname: council\n---",
     );
 
-    const result = await removeSkill(tempDir, "Council");
+    const result = await removeSkill(tempDir, "council");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error.message).toContain("built-in system skill");

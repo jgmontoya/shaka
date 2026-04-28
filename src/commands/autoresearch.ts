@@ -13,11 +13,13 @@ import { Command } from "commander";
 import {
   type ExperimentWorktree,
   type LoopState,
+  RUNNER_STATE_EXCLUDES,
   SETUP_ARTIFACTS,
   type WizardAnswers,
   assertOnlySetupDirty,
   findExperimentWorktree,
   forceStageSetupArtifacts,
+  parseAutoresearchSpec,
   resolveResumeTarget,
   runLoop,
   runResume,
@@ -25,9 +27,14 @@ import {
   setupWorkspace,
   summarizeHypothesis,
   validateSetup,
+  writeBaselineMetaFromMeasurement,
 } from "../services/autoresearch";
+import {
+  buildAutoresearchReportModel,
+  renderAutoresearchHtml,
+} from "../services/autoresearch-report";
 import { renderStatus, shouldRenderWidget } from "../services/autoresearch-widget";
-import { commitAllExcept, listDirtyPaths } from "../services/git";
+import { commitAllExcept, listDirtyPaths, listWorktrees } from "../services/git";
 import {
   type DetectedProviders,
   type ProviderName,
@@ -36,6 +43,12 @@ import {
 import { runSetupInteractive, runSetupOneshot } from "../services/setup-session";
 import { loadSkill } from "../services/skills";
 import { readlineAsk, runWizard } from "./autoresearch-wizard";
+
+type OpenFile = (path: string) => Promise<void>;
+
+interface AutoresearchCommandDeps {
+  readonly openFile?: OpenFile;
+}
 
 async function resolveRepoRoot(cwd: string): Promise<string | null> {
   const proc = Bun.spawn(["git", "rev-parse", "--show-toplevel"], {
@@ -103,7 +116,9 @@ export async function commitFinalizeIfDirty(
   // legitimately produced and trip assertOnlySetupDirty.
   const dirty = await listDirtyPaths(worktreePath);
   const setupDirty = await setupArtifactsDirty(worktreePath);
-  if (dirty.length === 0 && !setupDirty) return;
+  const runnerState = new Set<string>(RUNNER_STATE_EXCLUDES);
+  const userDirty = dirty.filter((path) => !runnerState.has(path));
+  if (userDirty.length === 0 && !setupDirty) return;
 
   await assertOnlySetupDirty(worktreePath);
 
@@ -119,7 +134,7 @@ export async function commitFinalizeIfDirty(
   await forceStageSetupArtifacts(worktreePath);
 
   const message = opts?.message ?? "autoresearch: finalize benchmark";
-  await commitAllExcept(["autoresearch.jsonl"], message, worktreePath);
+  await commitAllExcept(RUNNER_STATE_EXCLUDES, message, worktreePath);
 }
 
 /**
@@ -128,7 +143,7 @@ export async function commitFinalizeIfDirty(
  * call (editor ran and its edits were committed) and the caller may proceed
  * into the loop. Returns `false` when the user still needs to edit manually
  * (no `$EDITOR` set, or not a TTY) — the caller must exit and wait for a
- * subsequent `shaka autoresearch resume`, which finalizes on its own.
+ * subsequent resume command, which finalizes on its own.
  */
 async function maybeOpenEditorOnBench(worktreePath: string): Promise<boolean> {
   if (process.stdin.isTTY !== true) return false;
@@ -136,7 +151,7 @@ async function maybeOpenEditorOnBench(worktreePath: string): Promise<boolean> {
   if (!editor) {
     const shPath = `${worktreePath}/autoresearch.sh`;
     console.log(
-      `\nFinish the benchmark by editing: ${shPath}\nThen run \`shaka autoresearch resume\` to continue.\nTip: set $EDITOR and Shaka will open it for you next time.`,
+      `\nFinish the benchmark by editing: ${shPath}\nThen run \`shaka optimize resume\` to continue (\`shaka autoresearch resume\` also works).\nTip: set $EDITOR and Shaka will open it for you next time.`,
     );
     return false;
   }
@@ -319,7 +334,7 @@ async function enterLoop(
   opts: LoopFlags,
   loopFn: typeof runLoop,
 ): Promise<void> {
-  const skillContent = await loadSkill("Autoresearch");
+  const skillContent = await loadSkill("autoresearch");
   const controller = new AbortController();
   const widget = buildOnTick();
   try {
@@ -368,13 +383,14 @@ async function runWizardStart(
 function reportValidationFailure(
   worktreePath: string,
   validation: Extract<Awaited<ReturnType<typeof validateSetup>>, { ok: false }>,
+  commandName: "autoresearch" | "optimize",
 ): never {
   console.error(`\nSetup validation failed at phase '${validation.phase}': ${validation.message}`);
   if (validation.stdout) console.error(`\nSTDOUT:\n${validation.stdout}`);
   if (validation.stderr) console.error(`\nSTDERR:\n${validation.stderr}`);
   console.error(`\nWorktree left at: ${worktreePath}`);
   console.error(
-    "Re-run `shaka autoresearch start` with a more specific objective, or open the worktree and fix the setup by hand.",
+    `Re-run \`shaka ${commandName} start\` with a more specific objective, or open the worktree and fix the setup by hand.`,
   );
   process.exit(1);
 }
@@ -394,6 +410,7 @@ async function runFullAutoStart(
   interactiveFn: typeof runSetupInteractive,
   oneshotFn: typeof runSetupOneshot,
   loopFn: typeof runLoop,
+  commandName: "autoresearch" | "optimize",
 ): Promise<void> {
   // --oneshot runs the setup agent without a TTY handoff, so the TTY guard is
   // skipped — that's the entire point of the flag (unattended / CI / scripted).
@@ -419,7 +436,7 @@ async function runFullAutoStart(
   console.log(`\nWorktree: ${setup.worktreePath}`);
   console.log(`Branch:   ${setup.branch}`);
 
-  const setupSkill = await loadSkill("AutoresearchSetup");
+  const setupSkill = await loadSkill("autoresearch-setup");
   const sessionFn = opts.oneshot === true ? oneshotFn : interactiveFn;
   await sessionFn(setup.worktreePath, objective, provider, setupSkill);
 
@@ -430,7 +447,7 @@ async function runFullAutoStart(
   // Shaka is working rather than hung.
   console.log("\nSetup session ended. Validating generated artifacts...");
   const validation = await validateSetup(setup.worktreePath);
-  if (!validation.ok) reportValidationFailure(setup.worktreePath, validation);
+  if (!validation.ok) reportValidationFailure(setup.worktreePath, validation, commandName);
   console.log(
     `✓ Setup validated (${validation.measurement.name}=${validation.measurement.value}${validation.measurement.unit}).`,
   );
@@ -444,7 +461,11 @@ async function runFullAutoStart(
   await commitFinalizeIfDirty(setup.worktreePath, {
     message: "autoresearch: finalize agent-generated setup",
   });
-  console.log("Entering optimization loop. Measuring baseline (runs your benchmark once more)...");
+  const spec = parseAutoresearchSpec(
+    await Bun.file(join(setup.worktreePath, "autoresearch.md")).text(),
+  );
+  await writeBaselineMetaFromMeasurement(setup.worktreePath, validation.measurement, spec);
+  console.log("Entering optimization loop...");
   await enterLoop(setup.worktreePath, providers, opts, loopFn);
 }
 
@@ -452,6 +473,7 @@ export async function runStart(
   objective: string,
   opts: StartFlags,
   deps: StartDeps = {},
+  commandName: "autoresearch" | "optimize" = "autoresearch",
 ): Promise<void> {
   const detect = deps.detectProviders ?? detectInstalledProviders;
   const interactiveFn = deps.runSetupInteractive ?? runSetupInteractive;
@@ -461,7 +483,7 @@ export async function runStart(
   const repoRoot = await resolveRepoRoot(process.cwd());
   if (!repoRoot) {
     console.error(
-      "Not inside a git repository. Run `shaka autoresearch start` from within the repo you want to optimize.",
+      `Not inside a git repository. Run \`shaka ${commandName} start\` from within the repo you want to optimize.`,
     );
     process.exit(1);
   }
@@ -473,7 +495,16 @@ export async function runStart(
     return runWizardStart(objective, opts, repoRoot, providers, loopFn);
   }
 
-  return runFullAutoStart(objective, opts, repoRoot, detected, interactiveFn, oneshotFn, loopFn);
+  return runFullAutoStart(
+    objective,
+    opts,
+    repoRoot,
+    detected,
+    interactiveFn,
+    oneshotFn,
+    loopFn,
+    commandName,
+  );
 }
 
 async function runResumeCommand(slug: string | undefined, opts: LoopFlags): Promise<void> {
@@ -555,14 +586,93 @@ async function runStatusCommand(): Promise<void> {
   }
 }
 
-export function createAutoresearchCommand(): Command {
-  const cmd = new Command("autoresearch").description(
+async function defaultOpenFile(path: string): Promise<void> {
+  const args =
+    process.platform === "darwin"
+      ? ["open", path]
+      : process.platform === "win32"
+        ? ["cmd", "/c", "start", "", path]
+        : ["xdg-open", path];
+  const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
+  const [, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) {
+    throw new Error(stderr.trim() || `${args[0]} exited ${code}`);
+  }
+}
+
+async function resolveHtmlTarget(
+  cwd: string,
+  repoRoot: string,
+  slug: string | undefined,
+  output: string | undefined,
+): Promise<{ readonly worktreePath: string; readonly slug: string; readonly output: string }> {
+  const worktreePath = await resolveResumeTarget(cwd, repoRoot, slug);
+  const experiments = await findExperimentWorktree(repoRoot);
+  const experiment = experiments.find((exp) => exp.worktreePath === worktreePath);
+  const reportSlug = slug ?? experiment?.slug;
+  if (reportSlug === undefined) {
+    throw new Error("Could not determine autoresearch experiment slug for report output.");
+  }
+  if (output !== undefined) return { worktreePath, slug: reportSlug, output };
+
+  const source = (await listWorktrees(repoRoot)).find(
+    (wt) => wt.branch !== null && !wt.branch.startsWith("autoresearch/"),
+  );
+  if (source === undefined) {
+    throw new Error(
+      "Could not determine source repo root for default report output. Pass --output.",
+    );
+  }
+  return {
+    worktreePath,
+    slug: reportSlug,
+    output: join(source.path, `autoresearch-report-${reportSlug}.html`),
+  };
+}
+
+async function runHtmlCommand(
+  slug: string | undefined,
+  opts: { readonly output?: string; readonly open?: boolean },
+  deps: AutoresearchCommandDeps,
+): Promise<void> {
+  const repoRoot = await resolveRepoRoot(process.cwd());
+  if (!repoRoot) {
+    console.error("Not inside a git repository.");
+    process.exit(1);
+  }
+  const target = await resolveHtmlTarget(process.cwd(), repoRoot, slug, opts.output);
+  const model = await buildAutoresearchReportModel(target.worktreePath);
+  const html = renderAutoresearchHtml(model);
+  await Bun.write(target.output, html);
+  console.log(`Wrote ${target.output}`);
+  if (opts.open !== false) {
+    const opener = deps.openFile ?? defaultOpenFile;
+    try {
+      await opener(target.output);
+    } catch (err) {
+      console.warn(
+        `Could not open report automatically: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      console.warn(`Report written to: ${target.output}`);
+    }
+  }
+}
+
+function createAutoresearchCommandNamed(
+  name: "autoresearch" | "optimize",
+  deps: AutoresearchCommandDeps = {},
+): Command {
+  const cmd = new Command(name).description(
     "Hypothesize → benchmark → keep/discard optimization loop",
   );
 
   cmd
     .command("start <objective>")
-    .description("Begin a new autoresearch experiment")
+    .description("Begin a new optimization experiment")
     .option("--provider <name>", "Force a specific provider (claude|opencode|codex)")
     .option("--max-iterations <n>", "Stop after N iterations", parsePositiveInt("--max-iterations"))
     .option(
@@ -598,25 +708,39 @@ export function createAutoresearchCommand(): Command {
             "--oneshot and --wizard cannot be combined: --oneshot is a non-interactive variant of full-auto, --wizard opts out of full-auto entirely.",
           );
         }
-        await runStart(objective, {
-          provider: validateProviderFlag(opts.provider),
-          maxIterations: opts.maxIterations,
-          stopAfter: opts.stopAfter,
-          wizard: opts.wizard,
-          dryRun: opts.dryRun,
-          oneshot: opts.oneshot,
-        });
+        await runStart(
+          objective,
+          {
+            provider: validateProviderFlag(opts.provider),
+            maxIterations: opts.maxIterations,
+            stopAfter: opts.stopAfter,
+            wizard: opts.wizard,
+            dryRun: opts.dryRun,
+            oneshot: opts.oneshot,
+          },
+          {},
+          name,
+        );
       },
     );
 
   cmd
     .command("status")
-    .description("Show autoresearch experiments in the current repo")
+    .description("Show optimization experiments in the current repo")
     .action(() => runStatusCommand());
 
   cmd
+    .command("html [slug]")
+    .description("Generate an HTML report for an optimization experiment")
+    .option("--output <path>", "Write report to an explicit file")
+    .option("--no-open", "Do not open the generated report")
+    .action((slug: string | undefined, opts: { output?: string; open?: boolean }) =>
+      runHtmlCommand(slug, opts, deps),
+    );
+
+  cmd
     .command("resume [slug]")
-    .description("Resume a paused autoresearch experiment")
+    .description("Resume a paused optimization experiment")
     .option("--provider <name>", "Force a specific provider (claude|opencode|codex)")
     .option("--max-iterations <n>", "Stop after N iterations", parsePositiveInt("--max-iterations"))
     .option(
@@ -638,4 +762,12 @@ export function createAutoresearchCommand(): Command {
     );
 
   return cmd;
+}
+
+export function createAutoresearchCommand(deps: AutoresearchCommandDeps = {}): Command {
+  return createAutoresearchCommandNamed("autoresearch", deps);
+}
+
+export function createOptimizeCommand(deps: AutoresearchCommandDeps = {}): Command {
+  return createAutoresearchCommandNamed("optimize", deps);
 }

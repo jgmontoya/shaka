@@ -5,16 +5,16 @@ import { parseFrontmatter } from "../../../src/domain/frontmatter";
 /**
  * Drift guard: the autoresearch-setup agent body (installed into each
  * provider's agents directory at init time) must match the
- * AutoresearchSetup SKILL body byte-for-byte. Plan content policy:
+ * autoresearch-setup SKILL body byte-for-byte. Plan content policy:
  * "one source of truth, installed into two provider-specific paths."
  */
 
 const repoRoot = resolve(import.meta.dir, "..", "..", "..");
 const agentPath = resolve(repoRoot, "defaults/system/agents/autoresearch-setup.md");
-const skillPath = resolve(repoRoot, "defaults/system/skills/AutoresearchSetup/SKILL.md");
+const skillPath = resolve(repoRoot, "defaults/system/skills/autoresearch-setup/SKILL.md");
 
 describe("autoresearch-setup agent file", () => {
-  test("body below frontmatter matches AutoresearchSetup SKILL body byte-for-byte", async () => {
+  test("body below frontmatter matches autoresearch-setup SKILL body byte-for-byte", async () => {
     const agentRaw = await Bun.file(agentPath).text();
     const skillRaw = await Bun.file(skillPath).text();
 

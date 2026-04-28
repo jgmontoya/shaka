@@ -561,9 +561,9 @@ describe("CodexProviderConfigurer", () => {
       );
 
       // Create a skill directory with a SKILL.md
-      const skillDir = join(testShakaHome, "system", "skills", "Council");
+      const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
-      await Bun.write(join(skillDir, "SKILL.md"), "# Council Skill\n");
+      await Bun.write(join(skillDir, "SKILL.md"), "# council skill\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -572,10 +572,10 @@ describe("CodexProviderConfigurer", () => {
       });
       await configurer.install({ shakaHome: testShakaHome });
 
-      // Skill symlink should exist: skillsDir/Council -> shakaHome/system/skills/Council
+      // Skill symlink should exist: skillsDir/council -> shakaHome/system/skills/council
       const { lstat, readlink } = await import("node:fs/promises");
       const { resolve } = await import("node:path");
-      const linkPath = join(testSkillsDir, "Council");
+      const linkPath = join(testSkillsDir, "council");
       const stat = await lstat(linkPath);
       expect(stat.isSymbolicLink()).toBe(true);
       const target = await readlink(linkPath);
@@ -745,7 +745,9 @@ describe("CodexProviderConfigurer", () => {
       });
       await configurer.uninstall({ shakaHome: testShakaHome });
 
-      expect(await Bun.file(join(testCodexHome, "agents", "my-custom-agent.toml")).exists()).toBe(true);
+      expect(await Bun.file(join(testCodexHome, "agents", "my-custom-agent.toml")).exists()).toBe(
+        true,
+      );
     });
 
     test("checkInstallation verifies TOML files exist for non-hidden agents", async () => {
@@ -785,14 +787,8 @@ describe("CodexProviderConfigurer", () => {
       );
 
       // Set up valid hooks but NO TOML files
-      await Bun.write(
-        join(testCodexHome, "hooks.json"),
-        JSON.stringify({ hooks: {} }),
-      );
-      await Bun.write(
-        join(testCodexHome, "shaka-hook-wrapper.ts"),
-        "// wrapper",
-      );
+      await Bun.write(join(testCodexHome, "hooks.json"), JSON.stringify({ hooks: {} }));
+      await Bun.write(join(testCodexHome, "shaka-hook-wrapper.ts"), "// wrapper");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -872,10 +868,7 @@ describe("CodexProviderConfigurer", () => {
       const { CodexProviderConfigurer } = await import(
         "../../../../src/providers/codex/configurer"
       );
-      await Bun.write(
-        join(testShakaHome, "system", "agents", "architect.md"),
-        "# Architect\n",
-      );
+      await Bun.write(join(testShakaHome, "system", "agents", "architect.md"), "# Architect\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -890,7 +883,11 @@ describe("CodexProviderConfigurer", () => {
 
       await configurer.uninstall({ shakaHome: testShakaHome });
       let exists = true;
-      try { await lstat(agentLink); } catch { exists = false; }
+      try {
+        await lstat(agentLink);
+      } catch {
+        exists = false;
+      }
       expect(exists).toBe(false);
     });
 
@@ -898,9 +895,9 @@ describe("CodexProviderConfigurer", () => {
       const { CodexProviderConfigurer } = await import(
         "../../../../src/providers/codex/configurer"
       );
-      const skillDir = join(testShakaHome, "system", "skills", "Council");
+      const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
-      await Bun.write(join(skillDir, "SKILL.md"), "# Council\n");
+      await Bun.write(join(skillDir, "SKILL.md"), "# council\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -910,12 +907,16 @@ describe("CodexProviderConfigurer", () => {
 
       await configurer.install({ shakaHome: testShakaHome });
       const { lstat } = await import("node:fs/promises");
-      const skillLink = join(testSkillsDir, "Council");
+      const skillLink = join(testSkillsDir, "council");
       expect((await lstat(skillLink)).isSymbolicLink()).toBe(true);
 
       await configurer.uninstall({ shakaHome: testShakaHome });
       let exists = true;
-      try { await lstat(skillLink); } catch { exists = false; }
+      try {
+        await lstat(skillLink);
+      } catch {
+        exists = false;
+      }
       expect(exists).toBe(false);
     });
 

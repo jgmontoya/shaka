@@ -394,13 +394,13 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 
 | Skill           | Purpose                                          |
 | --------------- | ------------------------------------------------ |
-| TDD             | Test-driven development (default for all builds) |
-| BeCreative      | Extended thinking + diverse option generation    |
-| Council         | Multi-perspective debate (3-7 agents)            |
-| RedTeam         | Adversarial validation (32 agents)               |
-| Science         | Scientific method workflows                      |
-| FirstPrinciples | Deconstruct → Challenge → Reconstruct            |
-| WritingRules    | Anti-slop prose constraints + `shaka scan`       |
+| tdd              | Test-driven development (default for all builds) |
+| be-creative      | Extended thinking + diverse option generation    |
+| council          | Multi-perspective debate (3-7 agents)            |
+| red-team         | Adversarial validation (32 agents)               |
+| science          | Scientific method workflows                      |
+| first-principles | Deconstruct → Challenge → Reconstruct            |
+| writing-rules    | Anti-slop prose constraints + `shaka scan`       |
 
 Skills are invoked by context ("review this PR") or explicitly ("use the code-review skill").
 
@@ -503,13 +503,16 @@ Persistent context that survives sessions. The memory system captures what happe
 Autoresearch is a stateful optimization loop: an agent proposes a change, a scripted benchmark measures it, winners get committed, losers get reverted, and an append-only log accumulates across context resets. The "research" is algorithmic — hypothesize, test, keep or discard — not web research. Inspired by [Shopify's Autoresearch post](https://shopify.engineering/autoresearch).
 
 ```bash
-shaka autoresearch start "cut bun test from 45s to <20s"
-shaka autoresearch status
-shaka autoresearch resume            # continue the unique active experiment
-shaka autoresearch resume <slug>     # continue a specific one from anywhere
+shaka optimize start "cut bun test from 45s to <20s"
+shaka optimize status
+shaka optimize resume            # continue the unique active experiment
+shaka optimize resume <slug>     # continue a specific one from anywhere
+shaka optimize html <slug>       # generate and open a single-page HTML report
 ```
 
-`start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (excluded from runner commits; preserved across reverts).
+`shaka autoresearch ...` remains available as the original command spelling. `optimize` is the friendlier alias.
+
+`start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (excluded from runner commits; preserved across reverts). The baseline is stored in `autoresearch.meta.json` so reports and resumes can distinguish the original baseline from candidate iterations.
 
 **State files** used in the worktree:
 
@@ -519,6 +522,7 @@ shaka autoresearch resume <slug>     # continue a specific one from anywhere
 | `autoresearch.sh`        | Benchmark script. Must print `METRIC name=<n> value=<v> unit=<u>`   |
 | `autoresearch.checks.sh` | Optional setup artifact. Exit 0 = acceptable candidate              |
 | `autoresearch.jsonl`     | Created/appended during iterations. Excluded from runner commits    |
+| `autoresearch.meta.json` | Runner-owned metadata including the baseline. Excluded from commits |
 
 **Verdict classes:** `keep` (improved + checks pass), `discard` (didn't improve), `incorrect` (checks failed or commit hook rejected), `crash` (benchmark errored), `timeout` (agent timed out).
 

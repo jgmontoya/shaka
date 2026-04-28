@@ -14,10 +14,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-  createAutoresearchCommand,
-  runStart,
-} from "../../../src/commands/autoresearch";
+import { createAutoresearchCommand, runStart } from "../../../src/commands/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 async function sh(args: string[], cwd: string): Promise<void> {
@@ -114,10 +111,7 @@ describe("autoresearch start — flag parsing", () => {
     for (const sub of cmd.commands) sub.exitOverride();
 
     await expect(
-      cmd.parseAsync(
-        ["start", "test objective", "--wizard", "--dry-run"],
-        { from: "user" },
-      ),
+      cmd.parseAsync(["start", "test objective", "--wizard", "--dry-run"], { from: "user" }),
     ).rejects.toThrow(/--dry-run.*--wizard|--wizard.*--dry-run/i);
   });
 
@@ -127,10 +121,7 @@ describe("autoresearch start — flag parsing", () => {
     for (const sub of cmd.commands) sub.exitOverride();
 
     await expect(
-      cmd.parseAsync(
-        ["start", "test objective", "--oneshot", "--wizard"],
-        { from: "user" },
-      ),
+      cmd.parseAsync(["start", "test objective", "--oneshot", "--wizard"], { from: "user" }),
     ).rejects.toThrow(/--oneshot.*--wizard|--wizard.*--oneshot/i);
   });
 });

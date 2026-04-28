@@ -92,10 +92,7 @@ describe("slop-scanner", () => {
     });
 
     test("detects Unicode arrows", () => {
-      const result = scanContent(
-        "Click here \u2192 to continue, then \u21D2 profit.",
-        "arrows.md",
-      );
+      const result = scanContent("Click here \u2192 to continue, then \u21D2 profit.", "arrows.md");
       const arrows = result.violations.filter((v) => v.text === "Unicode arrow detected");
       expect(arrows.length).toBe(2);
       expect(arrows[0]!.type).toBe("ai_tell");
@@ -263,10 +260,7 @@ describe("slop-scanner", () => {
       });
 
       test("does not flag 'People tend to prefer the default.'", () => {
-        const result = scanContent(
-          "People tend to prefer the default.",
-          "negative-default.md",
-        );
+        const result = scanContent("People tend to prefer the default.", "negative-default.md");
         const sins = result.violations.filter((v) => v.type === "cardinal_sin");
         expect(sins).toHaveLength(0);
       });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, realpath, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdir, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
@@ -10,6 +10,7 @@ import {
   type BenchResult,
   type Direction,
   type LogEntry,
+  readAutoresearchMeta,
   type VerdictInput,
   type WidgetState,
   type WizardAnswers,
@@ -37,6 +38,7 @@ import { isCleanExcept } from "../../../src/services/git";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false };
+const RUNNER_STATE_FILES = ["autoresearch.jsonl", "autoresearch.meta.json"] as const;
 
 async function headSha(cwd: string): Promise<string> {
   const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -67,7 +69,10 @@ async function gitOutput(args: string[], cwd: string): Promise<string> {
 }
 
 async function setupExperimentRepo(opts: { direction: Direction }): Promise<string> {
-  const dir = join(tmpdir(), `shaka-ar-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+  const dir = join(
+    tmpdir(),
+    `shaka-ar-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
   await mkdir(dir, { recursive: true });
   await run(["git", "init", "-q", "-b", "main"], dir);
   await run(["git", "config", "user.email", "test@shaka"], dir);
@@ -77,7 +82,10 @@ async function setupExperimentRepo(opts: { direction: Direction }): Promise<stri
     join(dir, "autoresearch.md"),
     `# Autoresearch: test\n\n## Metric\n- direction: ${opts.direction}\n- unit: ms\n`,
   );
-  await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n");
+  await Bun.write(
+    join(dir, "autoresearch.sh"),
+    "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n",
+  );
 
   await run(["git", "add", "-A"], dir);
   await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "setup"], dir);
@@ -86,7 +94,10 @@ async function setupExperimentRepo(opts: { direction: Direction }): Promise<stri
 
 function scriptedAgent(responses: Array<{ stdout: string; timedOut?: boolean }>) {
   let i = 0;
-  return async (_opts: AgentExecutionOptions, _det: DetectedProviders): Promise<AgentExecutionResult> => {
+  return async (
+    _opts: AgentExecutionOptions,
+    _det: DetectedProviders,
+  ): Promise<AgentExecutionResult> => {
     const r = responses[i++];
     if (!r) throw new Error(`scriptedAgent exhausted after ${i - 1} calls`);
     return {
@@ -226,9 +237,9 @@ describe("classifyVerdict", () => {
   });
 
   test("timeout beats crash when both would apply", () => {
-    expect(
-      classifyVerdict({ ...goodRun, agentTimedOut: true, benchmarkExitCode: 1 }),
-    ).toBe("timeout");
+    expect(classifyVerdict({ ...goodRun, agentTimedOut: true, benchmarkExitCode: 1 })).toBe(
+      "timeout",
+    );
   });
 
   test("crash beats incorrect and discard", () => {
@@ -288,7 +299,7 @@ describe("runLoop", () => {
     expect(entries[0].provider).toBe("claude");
 
     expect(await headSha(cwd)).toBe(headBefore);
-    expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+    expect(await isCleanExcept(RUNNER_STATE_FILES, cwd)).toBe(true);
   });
 
   test("metric beats baseline → keep; commit advances HEAD, jsonl stays untracked", async () => {
@@ -335,7 +346,7 @@ describe("runLoop", () => {
     expect(entries[0].commit).toMatch(/^[0-9a-f]{7}$/);
 
     // The jsonl is untracked and clean-except-jsonl still holds
-    expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+    expect(await isCleanExcept(RUNNER_STATE_FILES, cwd)).toBe(true);
 
     // The keep commit must not contain the jsonl
     const lsTreeProc = Bun.spawn(["git", "ls-tree", "-r", "HEAD", "--name-only"], {
@@ -406,7 +417,7 @@ describe("runLoop", () => {
     expect(entries[0].verdict).toBe("incorrect");
     expect(entries[0].commit).toBeNull();
     expect(await headSha(cwd)).toBe(headBefore);
-    expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+    expect(await isCleanExcept(RUNNER_STATE_FILES, cwd)).toBe(true);
   });
 
   test("commit hook failures are recorded in jsonl diagnostics", async () => {
@@ -419,7 +430,10 @@ describe("runLoop", () => {
     await chmod(join(cwd, ".git", "hooks", "pre-commit"), 0o755);
     await Bun.write(join(cwd, "slow.ts"), "export const x = 1;\n");
     await run(["git", "add", "-A"], cwd);
-    await run(["git", "-c", "commit.gpgSign=false", "commit", "--no-verify", "-q", "-m", "add slow"], cwd);
+    await run(
+      ["git", "-c", "commit.gpgSign=false", "commit", "--no-verify", "-q", "-m", "add slow"],
+      cwd,
+    );
 
     const editingAgent = async (): Promise<AgentExecutionResult> => {
       await Bun.write(join(cwd, "slow.ts"), "export const x = 2;\n");
@@ -447,7 +461,7 @@ describe("runLoop", () => {
     expect(entry.commitError).toContain("blocked by hook");
   });
 
-  test("resumes from existing jsonl: next iter continues numbering, no baseline re-measurement", async () => {
+  test("resume with legacy keep history does not synthesize baseline metadata", async () => {
     cwd = await setupExperimentRepo({ direction: "minimize" });
 
     // Pre-seed a jsonl with a single keep entry at iter 1
@@ -465,25 +479,12 @@ describe("runLoop", () => {
     };
     await Bun.write(join(cwd, "autoresearch.jsonl"), `${JSON.stringify(seedEntry)}\n`);
 
-    let benchCalls = 0;
-    const benchmark = async (_cwd: string): Promise<BenchResult> => {
-      benchCalls++;
-      // Only iter 2's call should happen — no baseline remeasurement
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 70 }]);
+    const agent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "legacy-improvement.txt"), "keep this");
       return {
         exitCode: 0,
-        stdout: "METRIC name=t value=70 unit=ms",
-        stderr: "",
-        measurement: { name: "t", value: 70, unit: "ms" },
-      };
-    };
-    const editingAgent = async (
-      _opts: AgentExecutionOptions,
-      _det: DetectedProviders,
-    ): Promise<AgentExecutionResult> => {
-      await Bun.write(join(cwd, "new.txt"), "touched");
-      return {
-        exitCode: 0,
-        stdout: "HYPOTHESIS: resumed",
+        stdout: "HYPOTHESIS: continue legacy run",
         stderr: "",
         provider: "claude",
         timedOut: false,
@@ -492,20 +493,17 @@ describe("runLoop", () => {
 
     await runLoop(
       { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 2 },
-      { agent: editingAgent, benchmark },
+      { agent, benchmark },
     );
 
-    expect(benchCalls).toBe(1); // only iter 2, no baseline
-
+    expect(await readAutoresearchMeta(cwd)).toBeNull();
     const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
       .trim()
       .split("\n")
-      .map((l) => JSON.parse(l));
+      .map((line) => JSON.parse(line));
     expect(entries).toHaveLength(2);
-    expect(entries[0].iter).toBe(1);
-    expect(entries[0].hypothesis).toBe("prior run win");
     expect(entries[1].iter).toBe(2);
-    expect(entries[1].verdict).toBe("keep"); // 70 beat prior best of 80
+    expect(entries[1].verdict).toBe("keep");
   });
 
   test("resume drops an entirely truncated jsonl tail before appending", async () => {
@@ -660,7 +658,7 @@ describe("runLoop", () => {
 
     // HEAD is unchanged and the worktree is back to clean-except-jsonl.
     expect(await headSha(cwd)).toBe(headBefore);
-    expect(await isCleanExcept(["autoresearch.jsonl"], cwd)).toBe(true);
+    expect(await isCleanExcept(RUNNER_STATE_FILES, cwd)).toBe(true);
   });
 
   test("benchmark drifts to a different unit → crash; revert, no commit", async () => {
@@ -793,7 +791,7 @@ describe("runLoop", () => {
       { agent: tamperingAgent, benchmark },
     );
 
-    expect(benchCalls).toBe(0);
+    expect(benchCalls).toBe(1); // baseline only; jsonl tamper short-circuits iteration benchmark
     expect(await Bun.file(join(cwd, "candidate.txt")).exists()).toBe(false);
     const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
       .trim()
@@ -804,6 +802,80 @@ describe("runLoop", () => {
     expect(entries[1].iter).toBe(2);
     expect(entries[1].verdict).toBe("incorrect");
     expect(entries[1].hypothesis).toBe("tamper with history");
+  });
+
+  test("agent tampering with metadata is restored and classified incorrect", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const meta = {
+      schemaVersion: 1,
+      baseline: {
+        ts: "2026-04-27T00:00:00.000Z",
+        metric: 100,
+        unit: "ms",
+        direction: "minimize",
+        command: "./autoresearch.sh",
+        commit: (await headSha(cwd)).slice(0, 7),
+      },
+    };
+    await Bun.write(join(cwd, "autoresearch.meta.json"), `${JSON.stringify(meta)}\n`);
+
+    const tamperingAgent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "candidate.txt"), "should be reverted");
+      await Bun.write(join(cwd, "autoresearch.meta.json"), '{"schemaVersion":1}');
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: tamper with metadata",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent: tamperingAgent, benchmark: scriptedBenchmark([{ value: 80 }]) },
+    );
+
+    expect(await Bun.file(join(cwd, "candidate.txt")).exists()).toBe(false);
+    expect(JSON.parse(await Bun.file(join(cwd, "autoresearch.meta.json")).text())).toEqual(meta);
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries[0].verdict).toBe("incorrect");
+  });
+
+  test("agent swapping jsonl to a symlink is restored safely", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const outside = join(tmpdir(), `shaka-ar-outside-${process.pid}-${Date.now()}.txt`);
+    await Bun.write(outside, "outside state\n");
+
+    const tamperingAgent = async (): Promise<AgentExecutionResult> => {
+      await Bun.write(join(cwd, "candidate.txt"), "should be reverted");
+      await symlink(outside, join(cwd, "autoresearch.jsonl"));
+      return {
+        exitCode: 0,
+        stdout: "HYPOTHESIS: replace jsonl with symlink",
+        stderr: "",
+        provider: "claude",
+        timedOut: false,
+      };
+    };
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      { agent: tamperingAgent, benchmark: scriptedBenchmark([{ value: 100 }]) },
+    );
+
+    expect(await Bun.file(outside).text()).toBe("outside state\n");
+    const jsonlStat = await lstat(join(cwd, "autoresearch.jsonl"));
+    expect(jsonlStat.isSymbolicLink()).toBe(false);
+    expect(jsonlStat.isFile()).toBe(true);
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries[0].verdict).toBe("incorrect");
   });
 
   test("resume with only reverted (discard/incorrect) history re-measures baseline against HEAD", async () => {
@@ -826,10 +898,7 @@ describe("runLoop", () => {
       asi: [],
       duration_ms: 100,
     };
-    await Bun.write(
-      join(cwd, "autoresearch.jsonl"),
-      `${JSON.stringify(revertedEntry)}\n`,
-    );
+    await Bun.write(join(cwd, "autoresearch.jsonl"), `${JSON.stringify(revertedEntry)}\n`);
 
     // True baseline (HEAD state) is 100; new iter measures 80 — a real improvement.
     let benchCalls = 0;
@@ -930,13 +999,10 @@ describe("runLoop", () => {
     };
     // Last line is deliberately truncated mid-JSON — simulates SIGKILL during appendLog
     const truncated = `{"iter":4,"ts":"2026-04-18T00:00:01.000Z","provider":"claude","hypothesis":"cut off`;
-    await Bun.write(
-      join(cwd, "autoresearch.jsonl"),
-      `${JSON.stringify(validEntry)}\n${truncated}`,
-    );
+    await Bun.write(join(cwd, "autoresearch.jsonl"), `${JSON.stringify(validEntry)}\n${truncated}`);
 
     const agent = scriptedAgent([{ stdout: "HYPOTHESIS: after recovery" }]);
-    const benchmark = scriptedBenchmark([{ value: 35 }]); // beats prior best 40
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 35 }]); // baseline, then beats prior best 40
 
     await runLoop(
       { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 4 },
@@ -998,7 +1064,7 @@ describe("runLoop", () => {
         timedOut: false,
       };
     };
-    const benchmark = scriptedBenchmark([{ value: 80 }]); // beats prior best of 90
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 80 }]); // baseline, then beats prior best of 90
 
     await runLoop(
       {
@@ -1066,6 +1132,103 @@ describe("runLoop", () => {
     expect(ticks[1]?.best).toBe(60);
     expect(ticks[1]?.currentMetric).toBe(60);
     expect(ticks[1]?.baseline).toBe(100);
+  });
+
+  test("writes baseline metadata when no metadata exists", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    const fixedNow = new Date("2026-04-27T12:34:56.000Z");
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      {
+        agent: scriptedAgent([{ stdout: "HYPOTHESIS: worse" }]),
+        benchmark: scriptedBenchmark([{ value: 100 }, { value: 150 }]),
+        now: () => fixedNow,
+      },
+    );
+
+    const meta = await readAutoresearchMeta(cwd);
+    expect(meta?.schemaVersion).toBe(1);
+    expect(meta?.baseline.ts).toBe(fixedNow.toISOString());
+    expect(meta?.baseline.metric).toBe(100);
+    expect(meta?.baseline.unit).toBe("ms");
+    expect(meta?.baseline.direction).toBe("minimize");
+    expect(meta?.baseline.command).toBe("./autoresearch.sh");
+    expect(meta?.baseline.commit).toHaveLength(7);
+  });
+
+  test("uses existing baseline metadata without re-measuring baseline", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    await Bun.write(
+      join(cwd, "autoresearch.meta.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        baseline: {
+          ts: "2026-04-27T00:00:00.000Z",
+          metric: 100,
+          unit: "ms",
+          direction: "minimize",
+          command: "./autoresearch.sh",
+          commit: (await headSha(cwd)).slice(0, 7),
+        },
+      })}\n`,
+    );
+
+    await runLoop(
+      { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+      {
+        agent: async () => {
+          await Bun.write(join(cwd, "candidate.txt"), "changed");
+          return {
+            exitCode: 0,
+            stdout: "HYPOTHESIS: improve",
+            stderr: "",
+            provider: "claude" as const,
+            timedOut: false,
+          };
+        },
+        benchmark: scriptedBenchmark([{ value: 80 }]),
+      },
+    );
+
+    const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(entries[0].metric).toBe(80);
+    expect(entries[0].verdict).toBe("keep");
+  });
+
+  test("baseline metadata mismatch errors point to shaka optimize start", async () => {
+    cwd = await setupExperimentRepo({ direction: "minimize" });
+    await Bun.write(
+      join(cwd, "autoresearch.meta.json"),
+      `${JSON.stringify({
+        schemaVersion: 1,
+        baseline: {
+          ts: "2026-04-27T00:00:00.000Z",
+          metric: 100,
+          unit: "s",
+          direction: "minimize",
+          command: "./autoresearch.sh",
+          commit: (await headSha(cwd)).slice(0, 7),
+        },
+      })}\n`,
+    );
+
+    await expect(
+      runLoop(
+        { cwd, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 1 },
+        {
+          agent: async () => {
+            throw new Error("agent should not run when metadata mismatches spec");
+          },
+          benchmark: async () => {
+            throw new Error("benchmark should not run when metadata mismatches spec");
+          },
+        },
+      ),
+    ).rejects.toThrow(/shaka optimize start/);
   });
 
   test("AbortSignal ends the loop after the current iteration completes", async () => {
@@ -1306,11 +1469,11 @@ describe("renderTemplates", () => {
     const todoLike = {
       ...fullAnswers,
       benchmarkCommand:
-        '# TODO: replace with a real benchmark\necho "autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`." >&2\nexit 1',
+        '# TODO: replace with a real benchmark\necho "autoresearch.sh has a TODO marker — edit it and run `shaka optimize resume`." >&2\nexit 1',
     };
     const out = renderTemplates(todoLike);
     expect(out.sh).toContain("TODO");
-    expect(out.sh).toContain("shaka autoresearch resume");
+    expect(out.sh).toContain("shaka optimize resume");
   });
 
   test("sh does NOT append a TODO exit to a valid wizard-provided benchmarkCommand", () => {
@@ -1322,30 +1485,33 @@ describe("renderTemplates", () => {
     expect(out.sh).not.toContain("exit 1");
   });
 
-  test.skipIf(process.platform === "win32")("sh parses under `sh -n` with the TODO placeholder, with no latent command substitution", async () => {
-    // Regression guard for a sneaky bug where TODO_ANSWERS' echo used double
-    // quotes with literal backticks around `shaka autoresearch resume` — POSIX
-    // would treat the backticks as command substitution and silently try to
-    // run shaka. The single-quoted sh form prints them literally. Assert (a)
-    // the script is syntactically valid under `sh -n`, and (b) it doesn't
-    // contain the double-quoted-backtick-invocation shape.
-    const todoLike = {
-      ...fullAnswers,
-      benchmarkCommand:
-        "# TODO: replace with a real benchmark\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka autoresearch resume`.' >&2\nexit 1",
-    };
-    const out = renderTemplates(todoLike);
-    // No inline `"..."` wrapping of the backtick phrase in the rendered sh.
-    expect(out.sh).not.toMatch(/"[^"]*`shaka[^`]*`[^"]*"/);
-    // Parses cleanly.
-    const proc = Bun.spawn(["sh", "-n", "-c", out.sh], { stdout: "pipe", stderr: "pipe" });
-    const [, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
-  });
+  test.skipIf(process.platform === "win32")(
+    "sh parses under `sh -n` with the TODO placeholder, with no latent command substitution",
+    async () => {
+      // Regression guard for a sneaky bug where TODO_ANSWERS' echo used double
+      // quotes with literal backticks around `shaka optimize resume` — POSIX
+      // would treat the backticks as command substitution and silently try to
+      // run shaka. The single-quoted sh form prints them literally. Assert (a)
+      // the script is syntactically valid under `sh -n`, and (b) it doesn't
+      // contain the double-quoted-backtick-invocation shape.
+      const todoLike = {
+        ...fullAnswers,
+        benchmarkCommand:
+          "# TODO: replace with a real benchmark\necho 'autoresearch.sh has a TODO marker — edit it and run `shaka optimize resume`.' >&2\nexit 1",
+      };
+      const out = renderTemplates(todoLike);
+      // No inline `"..."` wrapping of the backtick phrase in the rendered sh.
+      expect(out.sh).not.toMatch(/"[^"]*`shaka[^`]*`[^"]*"/);
+      // Parses cleanly.
+      const proc = Bun.spawn(["sh", "-n", "-c", out.sh], { stdout: "pipe", stderr: "pipe" });
+      const [, stderr, code] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+    },
+  );
 
   test("checks file is produced only when a checks command is provided", () => {
     expect(renderTemplates(fullAnswers).checks).not.toBeNull();
@@ -1573,10 +1739,7 @@ describe("setupWorkspace", () => {
     await Bun.write(join(repo, "autoresearch.md"), trackedSpec);
     await Bun.write(join(repo, "autoresearch.sh"), trackedSh);
     await run(["git", "add", "-A"], repo);
-    await run(
-      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "seed templates"],
-      repo,
-    );
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "seed templates"], repo);
 
     const result = await setupWorkspace({
       repoRoot: repo,
@@ -1589,8 +1752,12 @@ describe("setupWorkspace", () => {
     // ("defer mode does not rewrite inherited files") holds cross-platform;
     // only the byte-encoding of line endings differs.
     const norm = (s: string): string => s.replace(/\r\n/g, "\n");
-    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.md")).text())).toBe(trackedSpec);
-    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.sh")).text())).toBe(trackedSh);
+    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.md")).text())).toBe(
+      trackedSpec,
+    );
+    expect(norm(await Bun.file(join(result.worktreePath, "autoresearch.sh")).text())).toBe(
+      trackedSh,
+    );
 
     // Still no setup commit — nothing was written
     const lastMsg = (await gitOutput(["log", "-1", "--format=%s"], result.worktreePath)).trim();
@@ -1654,7 +1821,10 @@ describe("runResume (in-worktree)", () => {
       asi: [],
       duration_ms: 100,
     };
-    await Bun.write(join(setup.worktreePath, "autoresearch.jsonl"), `${JSON.stringify(seedEntry)}\n`);
+    await Bun.write(
+      join(setup.worktreePath, "autoresearch.jsonl"),
+      `${JSON.stringify(seedEntry)}\n`,
+    );
 
     const editingAgent = async (
       _opts: AgentExecutionOptions,
@@ -1669,7 +1839,7 @@ describe("runResume (in-worktree)", () => {
         timedOut: false,
       };
     };
-    const benchmark = scriptedBenchmark([{ value: 15 }]); // beats prior best of 20
+    const benchmark = scriptedBenchmark([{ value: 100 }, { value: 15 }]); // baseline, then beats prior best of 20
 
     await runResume(
       { cwd: setup.worktreePath, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 6 },
@@ -1688,9 +1858,9 @@ describe("runResume (in-worktree)", () => {
   test("rejects cwd that isn't an autoresearch worktree", async () => {
     const repo = await makeSourceRepo();
     // Source repo is not an experiment worktree — branch is not autoresearch/*
-    await expect(
-      runResume({ cwd: repo, providers: NO_PROVIDERS }, {}),
-    ).rejects.toThrow(/not inside an autoresearch worktree/i);
+    await expect(runResume({ cwd: repo, providers: NO_PROVIDERS }, {})).rejects.toThrow(
+      /not inside an autoresearch worktree/i,
+    );
   });
 
   test("rejects a worktree missing autoresearch.md", async () => {
@@ -1742,7 +1912,10 @@ describe("runResume (in-worktree)", () => {
   test("rejects a main checkout masquerading as an autoresearch branch", async () => {
     const repo = await makeSourceRepo();
     await run(["git", "checkout", "-b", "autoresearch/fake"], repo);
-    await Bun.write(join(repo, "autoresearch.md"), "# Autoresearch\n\n## Metric\n- direction: minimize\n- unit: ms\n");
+    await Bun.write(
+      join(repo, "autoresearch.md"),
+      "# Autoresearch\n\n## Metric\n- direction: minimize\n- unit: ms\n",
+    );
     await run(["git", "add", "-A"], repo);
     await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "fake spec"], repo);
 
@@ -1779,10 +1952,7 @@ describe("runResume (in-worktree)", () => {
       "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n",
     );
     await run(["git", "add", "-A"], submodule);
-    await run(
-      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"],
-      submodule,
-    );
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"], submodule);
 
     await expect(
       runResume(
@@ -1830,7 +2000,11 @@ describe("experiment worktree discovery", () => {
 
   test("resolveExperimentWorktree finds a worktree by slug", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    const alpha = await setupWorkspace({
+      repoRoot: repo,
+      objective: "alpha",
+      templateMode: "todo",
+    });
     await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const resolved = await resolveExperimentWorktree(repo, "alpha");
@@ -1872,7 +2046,11 @@ describe("experiment worktree discovery", () => {
 
   test("resolveResumeTarget returns the worktree path when cwd is inside it", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    const alpha = await setupWorkspace({
+      repoRoot: repo,
+      objective: "alpha",
+      templateMode: "todo",
+    });
     await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     // Inside the alpha worktree — even with no slug specified, we should get alpha.
@@ -1883,7 +2061,11 @@ describe("experiment worktree discovery", () => {
 
   test("resolveResumeTarget resolves from a nested cwd inside the worktree", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    const alpha = await setupWorkspace({
+      repoRoot: repo,
+      objective: "alpha",
+      templateMode: "todo",
+    });
     await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const nested = join(alpha.worktreePath, "src", "deep");
@@ -1896,14 +2078,17 @@ describe("experiment worktree discovery", () => {
 
   test("resolveResumeTarget honors an explicit slug over the current worktree", async () => {
     const repo = await makeSourceRepo();
-    const alpha = await setupWorkspace({ repoRoot: repo, objective: "alpha", templateMode: "todo" });
+    const alpha = await setupWorkspace({
+      repoRoot: repo,
+      objective: "alpha",
+      templateMode: "todo",
+    });
     const beta = await setupWorkspace({ repoRoot: repo, objective: "beta", templateMode: "todo" });
 
     const target = await resolveResumeTarget(alpha.worktreePath, repo, "beta");
     const realBeta = await realpath(beta.worktreePath);
     expect(resolve(target)).toBe(resolve(realBeta));
   });
-
 
   test("resolveResumeTarget rejects a main repo on an autoresearch/* branch with no matching experiment", async () => {
     // Regression: the command-layer short-circuit used to trust the branch
@@ -1917,10 +2102,7 @@ describe("experiment worktree discovery", () => {
       "# Decoy\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await run(["git", "add", "-A"], repo);
-    await run(
-      ["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"],
-      repo,
-    );
+    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"], repo);
 
     await expect(resolveResumeTarget(repo, repo, undefined)).rejects.toThrow(
       /no active autoresearch/i,
@@ -2007,12 +2189,25 @@ describe("assertOnlySetupDirty", () => {
 
   test("resolves silently when only setup artifacts are dirty", async () => {
     const dir = await makeRepo();
-    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(
+      join(dir, "autoresearch.sh"),
+      "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n",
+    );
     await Bun.write(
       join(dir, "autoresearch.md"),
       "# spec\n\n## Metric\n- direction: minimize\n- unit: ms\n",
     );
     await Bun.write(join(dir, "autoresearch.checks.sh"), "#!/bin/sh\nexit 0\n");
+
+    await expect(assertOnlySetupDirty(dir)).resolves.toBeUndefined();
+  });
+
+  test("resolves silently when only runner-owned metadata is dirty", async () => {
+    const dir = await makeRepo();
+    await Bun.write(
+      join(dir, "autoresearch.meta.json"),
+      '{"schemaVersion":1,"baseline":{"ts":"2026-04-27T00:00:00.000Z","metric":1,"unit":"ms","direction":"minimize","command":"./autoresearch.sh","commit":"abc1234"}}\n',
+    );
 
     await expect(assertOnlySetupDirty(dir)).resolves.toBeUndefined();
   });
@@ -2026,7 +2221,10 @@ describe("assertOnlySetupDirty", () => {
 
   test("throws when unrelated paths coexist with legitimate setup edits", async () => {
     const dir = await makeRepo();
-    await Bun.write(join(dir, "autoresearch.sh"), "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n");
+    await Bun.write(
+      join(dir, "autoresearch.sh"),
+      "#!/bin/sh\necho METRIC name=t value=1 unit=ms\n",
+    );
     await Bun.write(join(dir, "rogue.js"), "// rogue\n");
 
     await expect(assertOnlySetupDirty(dir)).rejects.toThrow(/rogue\.js/);
@@ -2091,10 +2289,7 @@ describe.skipIf(process.platform === "win32")("validateSetup", () => {
       await chmod(benchPath, opts.benchMode ?? 0o755);
     } else {
       const benchPath = join(dir, "autoresearch.sh");
-      await Bun.write(
-        benchPath,
-        "#!/bin/sh\necho 'METRIC name=runtime value=1.5 unit=ms'\n",
-      );
+      await Bun.write(benchPath, "#!/bin/sh\necho 'METRIC name=runtime value=1.5 unit=ms'\n");
       await chmod(benchPath, opts?.benchMode ?? 0o755);
     }
 
