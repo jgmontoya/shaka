@@ -7,6 +7,10 @@ import {
   renderAutoresearchHtml,
 } from "../../../src/services/autoresearch-report";
 
+function countOccurrences(value: string, needle: string): number {
+  return value.split(needle).length - 1;
+}
+
 async function makeReportDir(): Promise<string> {
   const dir = join(
     tmpdir(),
@@ -237,6 +241,7 @@ describe("autoresearch report HTML", () => {
       expect(html).toContain("Inline alert(1)");
       expect(html).not.toContain("Inline script alert 1 /script");
       expect(html).toContain("data-tooltip");
+      expect(html).toContain("label: Inline &lt;script&gt;alert(1)&lt;/script&gt;");
       expect(html).toContain("20.0%");
       expect(html).toContain("#cache");
       expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
@@ -284,6 +289,128 @@ describe("autoresearch report HTML", () => {
       expect(html).toContain("metric: 0.3");
       expect(html).toContain("<td>0.3</td>");
       expect(html).not.toContain("0.30000000000000004");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("rounds long decimal metric values on chart ticks", async () => {
+    const dir = await makeReportDir();
+    try {
+      await Bun.write(
+        join(dir, "autoresearch.meta.json"),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          baseline: {
+            ts: "2026-04-27T00:00:00.000Z",
+            metric: 0.965095091,
+            unit: "ms",
+            direction: "minimize",
+            command: "./autoresearch.sh",
+            commit: "abc1234",
+          },
+        })}\n`,
+      );
+      await Bun.write(
+        join(dir, "autoresearch.jsonl"),
+        `${JSON.stringify({
+          iter: 1,
+          ts: "2026-04-27T00:01:00.000Z",
+          provider: "claude",
+          hypothesis: "Decimal display",
+          metric: 0.875095091,
+          unit: "ms",
+          verdict: "keep",
+          commit: "def5678",
+          asi: [],
+          duration_ms: 1000,
+        })}\n`,
+      );
+
+      const html = renderAutoresearchHtml(await buildAutoresearchReportModel(dir));
+
+      expect(html).toContain("metric: 0.965095091");
+      expect(html).toContain("<td>0.875095091</td>");
+      expect(html).toContain(">0.9651</text>");
+      expect(html).toContain(">0.8751</text>");
+      expect(html).not.toContain(">0.965095091</text>");
+      expect(html).not.toContain(">0.875095091</text>");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("keeps dense chart labels readable without losing hover detail", async () => {
+    const dir = await makeReportDir();
+    try {
+      await Bun.write(
+        join(dir, "autoresearch.meta.json"),
+        `${JSON.stringify({
+          schemaVersion: 1,
+          baseline: {
+            ts: "2026-04-27T00:00:00.000Z",
+            metric: 105,
+            unit: "ms",
+            direction: "minimize",
+            command: "./autoresearch.sh",
+            commit: "abc1234",
+          },
+        })}\n`,
+      );
+      const entries = Array.from({ length: 30 }, (_, idx) => ({
+        iter: idx + 1,
+        ts: "2026-04-27T00:01:00.000Z",
+        provider: "claude",
+        hypothesis: `Dense point ${idx + 1} has a long hypothesis label that would collide`,
+        metric: 100 + idx,
+        unit: "ms",
+        verdict: idx % 3 === 0 ? "keep" : "discard",
+        commit: idx % 3 === 0 ? `def${idx}` : null,
+        asi: [],
+        duration_ms: 1000,
+      }));
+      await Bun.write(
+        join(dir, "autoresearch.jsonl"),
+        entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      );
+
+      const html = renderAutoresearchHtml(await buildAutoresearchReportModel(dir));
+
+      expect(html).toContain(".axis-tick-label{fill:#475569;font-size:10px}");
+      expect(html).toContain(".point-label{fill:#475569;font-size:9px}");
+      expect(html).toContain('r="3"');
+      expect(html).toContain(".trend{fill:none;stroke:#166534;stroke-width:1}");
+      expect(html).not.toContain('r="6"');
+      expect(html).toContain(">100</text>");
+      expect(html).toContain(">105</text>");
+      expect(html).not.toContain(">101</text>");
+      expect(html).not.toContain(">106</text>");
+      expect(countOccurrences(html, 'class="axis-tick axis-tick-y"')).toBeLessThan(30);
+      expect(countOccurrences(html, '<text class="point-label"')).toBeLessThan(
+        countOccurrences(html, "data-tooltip="),
+      );
+      expect(html).toContain(
+        "label: Dense point 30 has a long hypothesis label that would collide",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("allows iteration tables to be filtered by verdict", async () => {
+    const dir = await makeReportDir();
+    try {
+      const html = renderAutoresearchHtml(await buildAutoresearchReportModel(dir));
+
+      expect(html).toContain(
+        '<div class="table-heading"><h2>Iterations</h2><div class="table-tools">',
+      );
+      expect(html).toContain('id="verdict-filter"');
+      expect(html).toContain('data-verdict="keep"');
+      expect(html).toContain('data-verdict="discard"');
+      expect(html).not.toContain('data-verdict="crash"');
+      expect(html).toContain('querySelectorAll("#iterations-table-body tr[data-verdict]")');
+      expect(html).toContain('verdictFilter.addEventListener("change"');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
