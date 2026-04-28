@@ -190,7 +190,7 @@ When asked to recommend capabilities:
 - **Research**: ClaudeResearcher, GeminiResearcher, GrokResearcher, CodexResearcher
 - **Implementation**: Engineer, CreateSkill, CreateCLI
 - **Design**: Architect, Designer
-- **Analysis**: FirstPrinciples, RedTeam, Council
+- **Analysis**: first-principles, red-team, council
 - **Content**: Art, Parser, Fabric
 - **Verification**: QATester, Browser, Evals
 

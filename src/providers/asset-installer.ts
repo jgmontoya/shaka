@@ -6,7 +6,7 @@
  * - Agents: ~/.claude/agents/shaka/ → ${shakaHome}/system/agents/
  *
  * Skills use per-skill symlinks so providers discover them as direct children:
- * - Skills: ~/.claude/skills/Council/ → ${shakaHome}/system/skills/Council/
+ * - Skills: ~/.claude/skills/council/ → ${shakaHome}/system/skills/council/
  */
 
 import { access, lstat, mkdir, readdir, symlink } from "node:fs/promises";
@@ -137,7 +137,7 @@ export async function verifyAssetSymlink(
  * create a symlink targetDir/<name> → sourceDir/<name>.
  *
  * Used for skills so each appears as a direct child of the provider's skills dir
- * (e.g., ~/.claude/skills/Council/ → system/skills/Council/).
+ * (e.g., ~/.claude/skills/council/ → system/skills/council/).
  */
 async function installPerSkillSymlinks(sourceDir: string, targetDir: string): Promise<void> {
   try {

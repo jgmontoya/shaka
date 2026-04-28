@@ -561,9 +561,9 @@ describe("CodexProviderConfigurer", () => {
       );
 
       // Create a skill directory with a SKILL.md
-      const skillDir = join(testShakaHome, "system", "skills", "Council");
+      const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
-      await Bun.write(join(skillDir, "SKILL.md"), "# Council Skill\n");
+      await Bun.write(join(skillDir, "SKILL.md"), "# council skill\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -572,10 +572,10 @@ describe("CodexProviderConfigurer", () => {
       });
       await configurer.install({ shakaHome: testShakaHome });
 
-      // Skill symlink should exist: skillsDir/Council -> shakaHome/system/skills/Council
+      // Skill symlink should exist: skillsDir/council -> shakaHome/system/skills/council
       const { lstat, readlink } = await import("node:fs/promises");
       const { resolve } = await import("node:path");
-      const linkPath = join(testSkillsDir, "Council");
+      const linkPath = join(testSkillsDir, "council");
       const stat = await lstat(linkPath);
       expect(stat.isSymbolicLink()).toBe(true);
       const target = await readlink(linkPath);
@@ -895,9 +895,9 @@ describe("CodexProviderConfigurer", () => {
       const { CodexProviderConfigurer } = await import(
         "../../../../src/providers/codex/configurer"
       );
-      const skillDir = join(testShakaHome, "system", "skills", "Council");
+      const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
-      await Bun.write(join(skillDir, "SKILL.md"), "# Council\n");
+      await Bun.write(join(skillDir, "SKILL.md"), "# council\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -907,7 +907,7 @@ describe("CodexProviderConfigurer", () => {
 
       await configurer.install({ shakaHome: testShakaHome });
       const { lstat } = await import("node:fs/promises");
-      const skillLink = join(testSkillsDir, "Council");
+      const skillLink = join(testSkillsDir, "council");
       expect((await lstat(skillLink)).isSymbolicLink()).toBe(true);
 
       await configurer.uninstall({ shakaHome: testShakaHome });

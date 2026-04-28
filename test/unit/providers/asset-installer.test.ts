@@ -175,31 +175,31 @@ describe("asset-installer", () => {
   describe("installPerSkillSymlinks", () => {
     test("creates individual symlinks for each subdirectory", async () => {
       // Create skill subdirectories in source
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
-      await mkdir(join(testSourceDir, "RedTeam"), { recursive: true });
-      await Bun.write(join(testSourceDir, "Council", "SKILL.md"), "# Council");
-      await Bun.write(join(testSourceDir, "RedTeam", "SKILL.md"), "# RedTeam");
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
+      await mkdir(join(testSourceDir, "red-team"), { recursive: true });
+      await Bun.write(join(testSourceDir, "council", "SKILL.md"), "# council");
+      await Bun.write(join(testSourceDir, "red-team", "SKILL.md"), "# red-team");
 
       await installPerSkillSymlinks(testSourceDir, testTargetDir);
 
       // Each skill should have its own symlink
-      const councilLink = join(testTargetDir, "Council");
-      const redteamLink = join(testTargetDir, "RedTeam");
+      const councilLink = join(testTargetDir, "council");
+      const redteamLink = join(testTargetDir, "red-team");
 
       expect((await lstat(councilLink)).isSymbolicLink()).toBe(true);
       expect((await lstat(redteamLink)).isSymbolicLink()).toBe(true);
-      expect(await readlink(councilLink)).toBe(join(testSourceDir, "Council"));
-      expect(await readlink(redteamLink)).toBe(join(testSourceDir, "RedTeam"));
+      expect(await readlink(councilLink)).toBe(join(testSourceDir, "council"));
+      expect(await readlink(redteamLink)).toBe(join(testSourceDir, "red-team"));
     });
 
     test("skips files in source directory", async () => {
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
       await Bun.write(join(testSourceDir, "README.md"), "readme");
 
       await installPerSkillSymlinks(testSourceDir, testTargetDir);
 
       // Only directory gets a symlink
-      expect((await lstat(join(testTargetDir, "Council"))).isSymbolicLink()).toBe(true);
+      expect((await lstat(join(testTargetDir, "council"))).isSymbolicLink()).toBe(true);
       try {
         await lstat(join(testTargetDir, "README.md"));
         expect(false).toBe(true);
@@ -218,15 +218,15 @@ describe("asset-installer", () => {
   describe("uninstallPerSkillSymlinks", () => {
     test("removes symlinks pointing into source directory", async () => {
       // Create per-skill symlinks
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
-      await mkdir(join(testSourceDir, "RedTeam"), { recursive: true });
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
+      await mkdir(join(testSourceDir, "red-team"), { recursive: true });
       await installPerSkillSymlinks(testSourceDir, testTargetDir);
 
       await uninstallPerSkillSymlinks(testSourceDir, testTargetDir);
 
       // Both symlinks should be removed
       try {
-        await lstat(join(testTargetDir, "Council"));
+        await lstat(join(testTargetDir, "council"));
         expect(false).toBe(true);
       } catch (e: unknown) {
         expect((e as NodeJS.ErrnoException).code).toBe("ENOENT");
@@ -235,7 +235,7 @@ describe("asset-installer", () => {
 
     test("preserves symlinks pointing elsewhere", async () => {
       // Create a per-skill symlink from shaka
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
       await installPerSkillSymlinks(testSourceDir, testTargetDir);
 
       // Create a non-shaka symlink
@@ -247,7 +247,7 @@ describe("asset-installer", () => {
 
       // Shaka symlink removed, other preserved
       try {
-        await lstat(join(testTargetDir, "Council"));
+        await lstat(join(testTargetDir, "council"));
         expect(false).toBe(true);
       } catch (e: unknown) {
         expect((e as NodeJS.ErrnoException).code).toBe("ENOENT");
@@ -264,8 +264,8 @@ describe("asset-installer", () => {
 
   describe("verifyPerSkillSymlinks", () => {
     test("returns ok when all skills have correct symlinks", async () => {
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
-      await mkdir(join(testSourceDir, "RedTeam"), { recursive: true });
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
+      await mkdir(join(testSourceDir, "red-team"), { recursive: true });
       await installPerSkillSymlinks(testSourceDir, testTargetDir);
 
       const result = await verifyPerSkillSymlinks(testSourceDir, testTargetDir, "skills");
@@ -284,12 +284,12 @@ describe("asset-installer", () => {
     });
 
     test("returns not ok when symlink is missing", async () => {
-      await mkdir(join(testSourceDir, "Council"), { recursive: true });
+      await mkdir(join(testSourceDir, "council"), { recursive: true });
       // Don't create the symlink
 
       const result = await verifyPerSkillSymlinks(testSourceDir, testTargetDir, "skills");
       expect(result.ok).toBe(false);
-      expect(result.issue).toContain("Council");
+      expect(result.issue).toContain("council");
     });
   });
 });

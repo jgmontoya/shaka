@@ -129,6 +129,7 @@ describe("autoresearch walking skeleton", () => {
     // ── Assert the jsonl is NOT tracked at HEAD ──────────────────────────
     const treeFiles = await sh(["git", "ls-tree", "-r", setup.branch, "--name-only"], repo);
     expect(treeFiles.split("\n")).not.toContain("autoresearch.jsonl");
+    expect(treeFiles.split("\n")).not.toContain("autoresearch.meta.json");
 
     // ── Original checkout remained untouched ─────────────────────────────
     expect(await sh(["git", "rev-parse", "HEAD"], repo)).toBe(sourceHead);

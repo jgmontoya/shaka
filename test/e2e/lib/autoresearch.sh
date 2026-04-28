@@ -31,11 +31,11 @@ run_autoresearch_e2e() {
 
   section "Autoresearch"
 
-  local skill_path="$SHAKA_HOME/system/skills/Autoresearch/SKILL.md"
+  local skill_path="$SHAKA_HOME/system/skills/autoresearch/SKILL.md"
   if [ -f "$skill_path" ]; then
-    pass "Autoresearch skill deployed"
+    pass "autoresearch skill deployed"
   else
-    fail "Autoresearch SKILL.md missing from $skill_path"
+    fail "autoresearch SKILL.md missing from $skill_path"
     fail_autoresearch
     return $?
   fi

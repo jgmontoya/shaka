@@ -1,32 +1,8 @@
 ---
-# Autonomous setup agent for `shaka autoresearch start` (full-auto default).
-# Interactive session: the agent authors autoresearch.md + autoresearch.sh
-# + optional autoresearch.checks.sh in a git worktree, self-verifies by
-# running the script, and exits. Body is kept in sync with
-# defaults/system/skills/autoresearch-setup/SKILL.md (enforced by test).
 name: autoresearch-setup
-description: Interactive setup agent — produces autoresearch.md + autoresearch.sh + optional autoresearch.checks.sh from a natural-language objective so the loop can run.
-
-# Claude Code — deny the provider's web tools (WebFetch / WebSearch). Note:
-# this does NOT prevent network access via shell (curl, wget, git fetch,
-# package managers remain available under Bash). Shell network use stays
-# possible and is intentional: the agent may need to `bun install` a dep to
-# get a benchmark running. The web-tool denial is about limiting the
-# provider's own browsing surface for setup.
-permissions:
-  deny:
-    - "WebFetch(domain:*)"
-    - "WebSearch"
-
-# OpenCode — primary (not sub-agent); grant edit + bash so the agent can
-# author and self-verify the script. Provider web tools denied (same scope
-# note as above: shell-based network use is unrestricted).
-mode: primary
-permission:
-  edit: allow
-  bash: allow
-  webfetch: deny
-  websearch: deny
+description: Creates the benchmark harness for a new autoresearch run from a natural-language objective. Use when starting an interactive `shaka autoresearch start` setup session.
+key: autoresearch-setup
+include_when: Only inside `shaka autoresearch start` (full-auto default) before the loop begins. Loaded via provider-specific system-prompt / agent mechanism at session spawn time.
 ---
 
 # autoresearch-setup protocol

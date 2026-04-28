@@ -14,7 +14,10 @@ import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStart } from "../../../src/commands/autoresearch";
-import { readAutoresearchMeta } from "../../../src/services/autoresearch";
+import {
+  type AutoresearchMeta,
+  readAutoresearchMeta,
+} from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 async function sh(args: string[], cwd: string): Promise<void> {
@@ -186,6 +189,8 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
     envs.push(env);
     const oldCwd = process.cwd();
     const restoreTTY = swapIsTTY(true);
+    let loopCalls = 0;
+    const metasFromLoop: AutoresearchMeta[] = [];
     try {
       process.chdir(env.repo);
       await runStart(
@@ -198,15 +203,21 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
             return { exitCode: 0, provider, resumeHint: null, sessionId: null };
           },
           runLoop: async (args) => {
+            loopCalls += 1;
             const meta = await readAutoresearchMeta(args.cwd);
-            expect(meta?.baseline.metric).toBe(1);
-            expect(meta?.baseline.unit).toBe("s");
-            expect(meta?.baseline.direction).toBe("minimize");
-            expect(meta?.baseline.command).toBe("./autoresearch.sh");
-            expect(meta?.baseline.commit).toMatch(/^[0-9a-f]{7}$/);
+            if (meta === null) throw new Error("runLoop was entered without readable metadata");
+            metasFromLoop.push(meta);
           },
         },
       );
+      expect(loopCalls).toBe(1);
+      expect(metasFromLoop).toHaveLength(1);
+      const capturedMeta = metasFromLoop[0] as AutoresearchMeta;
+      expect(capturedMeta.baseline.metric).toBe(1);
+      expect(capturedMeta.baseline.unit).toBe("s");
+      expect(capturedMeta.baseline.direction).toBe("minimize");
+      expect(capturedMeta.baseline.command).toBe("./autoresearch.sh");
+      expect(capturedMeta.baseline.commit).toMatch(/^[0-9a-f]{7}$/);
     } finally {
       restoreTTY();
       process.chdir(oldCwd);

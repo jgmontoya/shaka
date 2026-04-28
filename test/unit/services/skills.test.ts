@@ -24,24 +24,24 @@ describe("loadSkill", () => {
   });
 
   test("returns customizations/ body when both customizations/ and system/ exist", async () => {
-    const customDir = join(testDir, "customizations", "skills", "Autoresearch");
-    const systemDir = join(testDir, "system", "skills", "Autoresearch");
+    const customDir = join(testDir, "customizations", "skills", "autoresearch");
+    const systemDir = join(testDir, "system", "skills", "autoresearch");
     await mkdir(customDir, { recursive: true });
     await mkdir(systemDir, { recursive: true });
     await Bun.write(join(customDir, "SKILL.md"), "CUSTOM BODY");
     await Bun.write(join(systemDir, "SKILL.md"), "SYSTEM BODY");
 
-    const body = await loadSkill("Autoresearch");
+    const body = await loadSkill("autoresearch");
 
     expect(body).toBe("CUSTOM BODY");
   });
 
   test("falls back to system/ when only system/ exists", async () => {
-    const systemDir = join(testDir, "system", "skills", "AutoresearchSetup");
+    const systemDir = join(testDir, "system", "skills", "autoresearch-setup");
     await mkdir(systemDir, { recursive: true });
     await Bun.write(join(systemDir, "SKILL.md"), "SYSTEM BODY");
 
-    const body = await loadSkill("AutoresearchSetup");
+    const body = await loadSkill("autoresearch-setup");
 
     expect(body).toBe("SYSTEM BODY");
   });
@@ -52,13 +52,13 @@ describe("loadSkill", () => {
     expect(body).toBe("");
   });
 
-  test("resolves shipped AutoresearchSetup skill with expected markers", async () => {
+  test("resolves shipped autoresearch-setup skill with expected markers", async () => {
     // Point SHAKA_HOME at the repo's defaults/ so loadSkill resolves the
     // committed SKILL.md — verifies the file exists and has stable shape.
     const defaultsDir = resolve(import.meta.dir, "..", "..", "..", "defaults");
     process.env.SHAKA_HOME = defaultsDir;
 
-    const body = await loadSkill("AutoresearchSetup");
+    const body = await loadSkill("autoresearch-setup");
 
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("Output contract");

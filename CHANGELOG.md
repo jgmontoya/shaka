@@ -10,14 +10,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
-- **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. By default, Shaka hands your terminal to your installed provider CLI's interactive TUI (Claude Code, opencode, or Codex) with a setup agent seeded by the new `AutoresearchSetup` skill; the agent authors `autoresearch.md` + `autoresearch.sh` + optional `autoresearch.checks.sh` while you watch, Shaka validates the result on disk, and the loop starts when you `/exit` (or Ctrl-D). Pick a backend with `--provider <name>` (claude / opencode / codex) or let Shaka use the first it detects
+- **Autoresearch** — `shaka autoresearch start "<objective>"` runs a hypothesize → benchmark → keep-or-discard loop in an isolated git worktree next to your repo. By default, Shaka hands your terminal to your installed provider CLI's interactive TUI (Claude Code, opencode, or Codex) with a setup agent seeded by the new `autoresearch-setup` skill; the agent authors `autoresearch.md` + `autoresearch.sh` + optional `autoresearch.checks.sh` while you watch, Shaka validates the result on disk, and the loop starts when you `/exit` (or Ctrl-D). Pick a backend with `--provider <name>` (claude / opencode / codex) or let Shaka use the first it detects
   - `--oneshot` — run the setup agent non-interactively (no TUI handoff). Useful for unattended queues, CI, or unambiguous objectives; bypasses the TTY requirement
   - `--dry-run` — generate + validate the setup but stop before committing or entering the loop. Prints the worktree path and the generated `autoresearch.sh` for review; pick up later with `shaka autoresearch resume <slug>`
   - `--wizard` — opt out of the agent-driven default and use the original six-question hand-fill wizard + TODO-template flow. Handy if no provider is installed or you'd rather author the setup manually
 - **Resume and inspect** — `shaka autoresearch resume` continues the current experiment from any directory inside its worktree (pass a slug to disambiguate across multiple actives). `shaka autoresearch status` lists active, locked, and prunable experiments with their latest metric
 - **Live progress widget** — TTY sessions show a one-line in-place status (iteration, kept/discarded, current best). Ctrl+C pauses between iterations and exits with code 130 so shell wrappers can distinguish interruption from clean completion
 - **Stop conditions** — `--max-iterations` and `--stop-after` (consecutive discards) bound the loop; otherwise it runs until you interrupt. Both caps are cumulative across `start` + `resume`
-- **Experiment skill** — Default skill packaging the hypothesis → method → findings structure so the assistant uses a consistent shape for spikes, A/B tests, and uncertainty-reducing work. Installed alongside the other system skills on `shaka init`
+- **`experiment` skill** — Default skill packaging the hypothesis → method → findings structure so the assistant uses a consistent shape for spikes, A/B tests, and uncertainty-reducing work. Installed alongside the other system skills on `shaka init`
 
 ### Changed
 
@@ -97,18 +97,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Fixed
 
-- **System skill discovery** — System skills (TDD, Council, RedTeam, etc.) were not discoverable by Claude Code or opencode because they were nested under a single `shaka/` directory symlink. Providers do single-level skill discovery, so skills two levels deep were invisible. Changed to per-skill symlinks so each system skill appears as a direct child of the provider's skills directory. Legacy `shaka/` symlinks are cleaned up automatically on reload
+- **System skill discovery** — System skills (`tdd`, `council`, `red-team`, etc.) were not discoverable by Claude Code or opencode because they were nested under a single `shaka/` directory symlink. Providers do single-level skill discovery, so skills two levels deep were invisible. Changed to per-skill symlinks so each system skill appears as a direct child of the provider's skills directory. Legacy `shaka/` symlinks are cleaned up automatically on reload
 
 ## [0.7.1] — 2026-03-13
 
 ### Added
 
-- **TDD skill** — Default-on test-driven development skill with red-green-refactor discipline, horizontal slicing anti-pattern, mock boundary guidelines, and per-cycle gate. Adapted from [Matt Pocock's TDD skill](https://github.com/mattpocock/skills/tree/main/tdd) with modifications for AI agent context
+- **`tdd` skill** — Default-on test-driven development skill with red-green-refactor discipline, horizontal slicing anti-pattern, mock boundary guidelines, and per-cycle gate. Adapted from [Matt Pocock's TDD skill](https://github.com/mattpocock/skills/tree/main/tdd) with modifications for AI agent context
 
 ### Changed
 
-- **Engineer agent** — Improved TDD section with vertical slice workflow, tracer bullet approach, and horizontal slicing anti-pattern warning
-- **Skills cleanup** — Removed dead Customization boilerplate from BeCreative, Council, FirstPrinciples, and RedTeam skills (section referenced a `customizations/skills/` path with no backing infrastructure)
+- **Engineer agent** — Improved `tdd` section with vertical slice workflow, tracer bullet approach, and horizontal slicing anti-pattern warning
+- **Skills cleanup** — Removed dead Customization boilerplate from `be-creative`, `council`, `first-principles`, and `red-team` skills (section referenced a `customizations/skills/` path with no backing infrastructure)
 
 ## [0.7.0] — 2026-03-12
 
@@ -141,7 +141,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
-- **WritingRules skill** — Anti-slop writing constraints that the Algorithm autonomously selects for prose-writing tasks (blog posts, docs, emails). Detects banned words, AI patterns, hedging, rhythm issues, and structural anti-patterns. Customizable via override in `customizations/skills/WritingRules/`.
+- **`writing-rules` skill** — Anti-slop writing constraints that the Algorithm autonomously selects for prose-writing tasks (blog posts, docs, emails). Detects banned words, AI patterns, hedging, rhythm issues, and structural anti-patterns. Customizable via override in `customizations/skills/writing-rules/`.
 - **`shaka scan` command** — CLI tool to scan prose files for AI writing patterns
   - Scores content on a 100-point scale (pass threshold: 80+)
   - Single file, directory (`--dir`), and stdin (`--stdin`) input modes
@@ -388,7 +388,7 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **Security validation** — Bash command and file path validation via PreToolUse hook with YAML patterns
 - **Base reasoning framework** — 7-phase algorithm loaded at session start
 - **Customization overrides** — `customizations/` directory overrides `system/` counterparts
-- **Skills** — 5 markdown-based skills: BeCreative, Council, RedTeam, Science, FirstPrinciples
+- **Skills** — 5 markdown-based skills: `be-creative`, `council`, `red-team`, `science`, `first-principles`
 - **Agents** — 12 markdown agent definitions
 - **Doctor command** — `shaka doctor` for installation health checks
 - **Inference tool** — Provider-agnostic AI inference via CLI wrappers

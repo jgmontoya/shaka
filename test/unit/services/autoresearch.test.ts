@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, realpath, rm, stat, symlink } from "node:fs/promises";
+import { chmod, lstat, mkdir, realpath, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type {
@@ -868,7 +868,9 @@ describe("runLoop", () => {
     );
 
     expect(await Bun.file(outside).text()).toBe("outside state\n");
-    expect((await stat(join(cwd, "autoresearch.jsonl"))).isFile()).toBe(true);
+    const jsonlStat = await lstat(join(cwd, "autoresearch.jsonl"));
+    expect(jsonlStat.isSymbolicLink()).toBe(false);
+    expect(jsonlStat.isFile()).toBe(true);
     const entries = (await Bun.file(join(cwd, "autoresearch.jsonl")).text())
       .trim()
       .split("\n")

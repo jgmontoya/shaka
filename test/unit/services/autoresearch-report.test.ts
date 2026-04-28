@@ -232,6 +232,8 @@ describe("autoresearch report HTML", () => {
       expect(html).toContain(">100</text>");
       expect(html).toContain(">130</text>");
       expect(html).toContain(".point-label{");
+      // shortLabel strips the script tags from the hypothesis before HTML escaping,
+      // so the chart label renders as plain "Inline alert(1)" text.
       expect(html).toContain("Inline alert(1)");
       expect(html).not.toContain("Inline script alert 1 /script");
       expect(html).toContain("data-tooltip");

@@ -394,13 +394,13 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 
 | Skill           | Purpose                                          |
 | --------------- | ------------------------------------------------ |
-| TDD             | Test-driven development (default for all builds) |
-| BeCreative      | Extended thinking + diverse option generation    |
-| Council         | Multi-perspective debate (3-7 agents)            |
-| RedTeam         | Adversarial validation (32 agents)               |
-| Science         | Scientific method workflows                      |
-| FirstPrinciples | Deconstruct → Challenge → Reconstruct            |
-| WritingRules    | Anti-slop prose constraints + `shaka scan`       |
+| tdd              | Test-driven development (default for all builds) |
+| be-creative      | Extended thinking + diverse option generation    |
+| council          | Multi-perspective debate (3-7 agents)            |
+| red-team         | Adversarial validation (32 agents)               |
+| science          | Scientific method workflows                      |
+| first-principles | Deconstruct → Challenge → Reconstruct            |
+| writing-rules    | Anti-slop prose constraints + `shaka scan`       |
 
 Skills are invoked by context ("review this PR") or explicitly ("use the code-review skill").
 

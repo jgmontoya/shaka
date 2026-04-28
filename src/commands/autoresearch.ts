@@ -334,7 +334,7 @@ async function enterLoop(
   opts: LoopFlags,
   loopFn: typeof runLoop,
 ): Promise<void> {
-  const skillContent = await loadSkill("Autoresearch");
+  const skillContent = await loadSkill("autoresearch");
   const controller = new AbortController();
   const widget = buildOnTick();
   try {
@@ -436,7 +436,7 @@ async function runFullAutoStart(
   console.log(`\nWorktree: ${setup.worktreePath}`);
   console.log(`Branch:   ${setup.branch}`);
 
-  const setupSkill = await loadSkill("AutoresearchSetup");
+  const setupSkill = await loadSkill("autoresearch-setup");
   const sessionFn = opts.oneshot === true ? oneshotFn : interactiveFn;
   await sessionFn(setup.worktreePath, objective, provider, setupSkill);
 
