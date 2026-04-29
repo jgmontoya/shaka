@@ -208,6 +208,15 @@ export async function removeWorktree(path: string, cwd: string): Promise<void> {
   await git(["worktree", "remove", path, "--force"], cwd);
 }
 
+/** Delete a local branch. Uses safe deletion unless forced. */
+export async function deleteBranch(
+  name: string,
+  cwd: string,
+  opts?: { force?: boolean },
+): Promise<void> {
+  await git(["branch", opts?.force === true ? "-D" : "-d", name], cwd);
+}
+
 export interface WorktreeInfo {
   readonly path: string;
   readonly head: string;

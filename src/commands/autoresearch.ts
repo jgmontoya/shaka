@@ -20,6 +20,7 @@ import {
   findExperimentWorktree,
   forceStageSetupArtifacts,
   parseAutoresearchSpec,
+  resolveExperimentWorktree,
   resolveResumeTarget,
   runLoop,
   runResume,
@@ -34,7 +35,13 @@ import {
   renderAutoresearchHtml,
 } from "../services/autoresearch-report";
 import { renderStatus, shouldRenderWidget } from "../services/autoresearch-widget";
-import { commitAllExcept, listDirtyPaths, listWorktrees } from "../services/git";
+import {
+  commitAllExcept,
+  deleteBranch,
+  listDirtyPaths,
+  listWorktrees,
+  removeWorktree,
+} from "../services/git";
 import {
   type DetectedProviders,
   type ProviderName,
@@ -662,6 +669,183 @@ async function runHtmlCommand(
   }
 }
 
+interface CleanupFlags {
+  readonly worktree?: boolean;
+  readonly branch?: boolean;
+  readonly keepBranch?: boolean;
+  readonly yes?: boolean;
+  readonly force?: boolean;
+  readonly dryRun?: boolean;
+}
+
+interface CleanupPlan {
+  readonly experiment: ExperimentWorktree;
+  readonly removeWorktree: boolean;
+  readonly deleteBranch: boolean;
+}
+
+function shortBranchName(branch: string): string {
+  return branch.startsWith("refs/heads/") ? branch.slice("refs/heads/".length) : branch;
+}
+
+function explicitCleanupPlan(exp: ExperimentWorktree, opts: CleanupFlags): CleanupPlan | null {
+  if (opts.branch === true && opts.keepBranch === true) {
+    throw new Error("--branch and --keep-branch cannot be combined.");
+  }
+  if (opts.branch === true && opts.worktree !== true) {
+    throw new Error("--branch must be combined with --worktree for active experiment worktrees.");
+  }
+  if (opts.keepBranch === true && opts.worktree !== true) {
+    throw new Error("--keep-branch only applies when deleting a worktree.");
+  }
+  if (opts.yes === true && opts.worktree !== true) {
+    throw new Error("--yes requires an explicit cleanup scope such as --worktree.");
+  }
+  if (opts.worktree !== true) return null;
+  return {
+    experiment: exp,
+    removeWorktree: true,
+    deleteBranch: opts.branch === true,
+  };
+}
+
+async function interactiveCleanupPlan(exp: ExperimentWorktree): Promise<CleanupPlan | null> {
+  if (process.stdin.isTTY !== true) {
+    throw new Error(
+      "Cleanup is interactive by default. Pass --worktree --yes to remove the worktree while keeping the branch, or --worktree --branch --yes to remove both.",
+    );
+  }
+
+  console.log(`\nCleanup target: ${exp.slug}`);
+  console.log(`  worktree: ${exp.worktreePath}`);
+  console.log(`  branch:   ${shortBranchName(exp.branch)}`);
+
+  const { ask, close } = readlineAsk();
+  try {
+    const answer = (
+      await ask("Delete [w]orktree only, [b]oth worktree and branch, or [c]ancel? ", "c")
+    )
+      .trim()
+      .toLowerCase();
+    if (answer === "w" || answer === "worktree") {
+      return { experiment: exp, removeWorktree: true, deleteBranch: false };
+    }
+    if (answer === "b" || answer === "both") {
+      return { experiment: exp, removeWorktree: true, deleteBranch: true };
+    }
+    return null;
+  } finally {
+    close();
+  }
+}
+
+function describeCleanupPlan(plan: CleanupPlan): string[] {
+  return [
+    `This will remove worktree: ${plan.experiment.worktreePath}`,
+    plan.deleteBranch
+      ? `This will delete branch: ${shortBranchName(plan.experiment.branch)}`
+      : `This will keep branch: ${shortBranchName(plan.experiment.branch)}`,
+  ];
+}
+
+async function confirmCleanup(plan: CleanupPlan): Promise<boolean> {
+  if (process.stdin.isTTY !== true) return false;
+  for (const line of describeCleanupPlan(plan)) console.log(line);
+  const { ask, close } = readlineAsk();
+  try {
+    const answer = (await ask("Proceed? [y/N] ", "n")).trim().toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    close();
+  }
+}
+
+async function branchMergedIntoHead(repoRoot: string, branch: string): Promise<boolean> {
+  const proc = Bun.spawn(["git", "merge-base", "--is-ancestor", branch, "HEAD"], {
+    cwd: repoRoot,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code === 0) return true;
+  if (code === 1) return false;
+  throw new Error(`git merge-base failed (exit ${code}): ${stderr.trim()}`);
+}
+
+async function assertCleanupSafe(
+  repoRoot: string,
+  plan: CleanupPlan,
+  force: boolean,
+): Promise<void> {
+  if (force) return;
+  if (plan.removeWorktree) {
+    const allowed = new Set<string>(RUNNER_STATE_EXCLUDES);
+    const dirty = (await listDirtyPaths(plan.experiment.worktreePath)).filter(
+      (path) => !allowed.has(path),
+    );
+    if (dirty.length > 0) {
+      throw new Error(
+        `Refusing to remove dirty autoresearch worktree. Commit or stash changes, or re-run with --force. Dirty paths: ${dirty.join(", ")}`,
+      );
+    }
+  }
+  if (plan.deleteBranch) {
+    const branch = shortBranchName(plan.experiment.branch);
+    if (!(await branchMergedIntoHead(repoRoot, branch))) {
+      throw new Error(`Refusing to delete unmerged branch '${branch}'. Re-run with --force.`);
+    }
+  }
+}
+
+async function executeCleanupPlan(
+  repoRoot: string,
+  plan: CleanupPlan,
+  force: boolean,
+): Promise<void> {
+  if (plan.removeWorktree) {
+    await removeWorktree(plan.experiment.worktreePath, repoRoot);
+    console.log(`Removed worktree: ${plan.experiment.worktreePath}`);
+  }
+  if (plan.deleteBranch) {
+    const branch = shortBranchName(plan.experiment.branch);
+    await deleteBranch(branch, repoRoot, { force });
+    console.log(`Deleted branch: ${branch}`);
+  }
+}
+
+async function runCleanupCommand(slug: string | undefined, opts: CleanupFlags): Promise<void> {
+  const repoRoot = await resolveRepoRoot(process.cwd());
+  if (!repoRoot) {
+    console.error("Not inside a git repository.");
+    process.exit(1);
+  }
+
+  const exp = await resolveExperimentWorktree(repoRoot, slug);
+  const plan = explicitCleanupPlan(exp, opts) ?? (await interactiveCleanupPlan(exp));
+  if (plan === null) {
+    console.log("Cleanup cancelled.");
+    return;
+  }
+
+  await assertCleanupSafe(repoRoot, plan, opts.force === true);
+
+  if (opts.dryRun === true) {
+    for (const line of describeCleanupPlan(plan)) console.log(line);
+    return;
+  }
+
+  if (opts.yes !== true && !(await confirmCleanup(plan))) {
+    console.log("Cleanup cancelled.");
+    return;
+  }
+
+  await executeCleanupPlan(repoRoot, plan, opts.force === true);
+}
+
 function createAutoresearchCommandNamed(
   name: "autoresearch" | "optimize",
   deps: AutoresearchCommandDeps = {},
@@ -728,6 +912,17 @@ function createAutoresearchCommandNamed(
     .command("status")
     .description("Show optimization experiments in the current repo")
     .action(() => runStatusCommand());
+
+  cmd
+    .command("cleanup [slug]")
+    .description("Clean up an optimization experiment worktree")
+    .option("--worktree", "Remove the experiment worktree")
+    .option("--branch", "Delete the experiment branch after removing the worktree")
+    .option("--keep-branch", "Keep the experiment branch when removing the worktree")
+    .option("--yes", "Skip confirmation when cleanup scope is explicit")
+    .option("--force", "Allow dirty worktrees and force branch deletion")
+    .option("--dry-run", "Print what would be removed without deleting anything")
+    .action((slug: string | undefined, opts: CleanupFlags) => runCleanupCommand(slug, opts));
 
   cmd
     .command("html [slug]")

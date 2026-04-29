@@ -508,11 +508,14 @@ shaka optimize status
 shaka optimize resume            # continue the unique active experiment
 shaka optimize resume <slug>     # continue a specific one from anywhere
 shaka optimize html <slug>       # generate and open a single-page HTML report
+shaka optimize cleanup <slug>    # remove the experiment worktree, optionally the branch
 ```
 
 `shaka autoresearch ...` remains available as the original command spelling. `optimize` is the friendlier alias.
 
 `start` creates a dedicated git worktree + branch (`autoresearch/<slug>`) so the loop never touches your main checkout. Each iteration runs the agent against a prompt assembled from the skill protocol, your `autoresearch.md` spec, and the last few jsonl entries — then executes `./autoresearch.sh` to measure. The runner commits on a metric improvement, reverts otherwise, and appends one JSON line per iteration to `autoresearch.jsonl` (excluded from runner commits; preserved across reverts). The baseline is stored in `autoresearch.meta.json` so reports and resumes can distinguish the original baseline from candidate iterations.
+
+`cleanup` is interactive by default and shows what it will remove before deleting anything. Use `shaka optimize cleanup <slug> --worktree --keep-branch --yes` to remove the temporary worktree while keeping `autoresearch/<slug>` available locally, or `--worktree --branch --yes` to remove both. Dirty worktrees and unmerged branch deletion require `--force`.
 
 **State files** used in the worktree:
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -18,6 +18,47 @@ async function run(args: string[], cwd: string): Promise<void> {
   if (code !== 0) throw new Error(`${args.join(" ")} failed (exit ${code}): ${stderr}`);
 }
 
+async function gitOutput(args: string[], cwd: string): Promise<string> {
+  const proc = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (code !== 0) throw new Error(`git ${args.join(" ")} failed (exit ${code}): ${stderr}`);
+  return stdout.trim();
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  return stat(path)
+    .then(() => true)
+    .catch(() => false);
+}
+
+async function makeRepoWithAutoresearchWorktree(prefix: string): Promise<{
+  readonly parent: string;
+  readonly repo: string;
+  readonly worktree: string;
+}> {
+  const parent = join(
+    tmpdir(),
+    `${prefix}-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  );
+  const repo = join(parent, "repo");
+  const worktree = join(parent, "repo.ar-speed");
+
+  await mkdir(repo, { recursive: true });
+  await run(["git", "init", "-q", "-b", "main"], repo);
+  await run(["git", "config", "user.email", "t@t"], repo);
+  await run(["git", "config", "user.name", "t"], repo);
+  await Bun.write(join(repo, ".gitkeep"), "");
+  await run(["git", "add", "-A"], repo);
+  await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], repo);
+  await run(["git", "worktree", "add", "-q", worktree, "-b", "autoresearch/speed"], repo);
+
+  return { parent, repo, worktree };
+}
+
 describe("autoresearch command surface", () => {
   test("top-level command is named 'autoresearch' with a description", () => {
     const cmd = createAutoresearchCommand();
@@ -25,17 +66,17 @@ describe("autoresearch command surface", () => {
     expect(cmd.description()).toBeTruthy();
   });
 
-  test("exposes start | status | resume subcommands", () => {
+  test("exposes start | status | resume | cleanup subcommands", () => {
     const cmd = createAutoresearchCommand();
     const names = cmd.commands.map((c) => c.name()).sort();
-    expect(names).toEqual(["html", "resume", "start", "status"]);
+    expect(names).toEqual(["cleanup", "html", "resume", "start", "status"]);
   });
 
   test("optimize command is an alias-shaped command tree", () => {
     const cmd = createOptimizeCommand();
     expect(cmd.name()).toBe("optimize");
     const names = cmd.commands.map((c) => c.name()).sort();
-    expect(names).toEqual(["html", "resume", "start", "status"]);
+    expect(names).toEqual(["cleanup", "html", "resume", "start", "status"]);
   });
 
   test("optimize command descriptions do not mention autoresearch", () => {
@@ -51,6 +92,9 @@ describe("autoresearch command surface", () => {
       "autoresearch",
     );
     expect(cmd.commands.find((c) => c.name() === "resume")?.description()).not.toContain(
+      "autoresearch",
+    );
+    expect(cmd.commands.find((c) => c.name() === "cleanup")?.description()).not.toContain(
       "autoresearch",
     );
   });
@@ -172,6 +216,202 @@ describe("autoresearch status", () => {
         process.chdir(oldCwd);
         await run(["git", "worktree", "unlock", worktree], repo).catch(() => {});
         await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+});
+
+describe("autoresearch cleanup", () => {
+  test.skipIf(process.platform === "win32")(
+    "can remove an experiment worktree while keeping its branch",
+    async () => {
+      const { parent, repo, worktree } = await makeRepoWithAutoresearchWorktree("shaka-cleanup");
+      const oldCwd = process.cwd();
+      try {
+        process.chdir(repo);
+        await createAutoresearchCommand().parseAsync(
+          ["cleanup", "speed", "--worktree", "--keep-branch", "--yes"],
+          { from: "user" },
+        );
+
+        expect(await pathExists(worktree)).toBe(false);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toContain(
+          "autoresearch/speed",
+        );
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "can remove an experiment worktree and its branch",
+    async () => {
+      const { parent, repo, worktree } =
+        await makeRepoWithAutoresearchWorktree("shaka-cleanup-branch");
+      const oldCwd = process.cwd();
+      try {
+        process.chdir(repo);
+        await createAutoresearchCommand().parseAsync(
+          ["cleanup", "speed", "--worktree", "--branch", "--yes"],
+          { from: "user" },
+        );
+
+        expect(await pathExists(worktree)).toBe(false);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toBe("");
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "refuses to delete an unmerged branch before removing the worktree",
+    async () => {
+      const { parent, repo, worktree } =
+        await makeRepoWithAutoresearchWorktree("shaka-cleanup-unmerged");
+      const oldCwd = process.cwd();
+      try {
+        await Bun.write(join(worktree, "change.txt"), "unmerged\n");
+        await run(["git", "add", "-A"], worktree);
+        await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "change"], worktree);
+
+        process.chdir(repo);
+        await expect(
+          createAutoresearchCommand().parseAsync(
+            ["cleanup", "speed", "--worktree", "--branch", "--yes"],
+            { from: "user" },
+          ),
+        ).rejects.toThrow(/unmerged branch/i);
+
+        expect(await pathExists(worktree)).toBe(true);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toContain(
+          "autoresearch/speed",
+        );
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "can force-remove an experiment worktree and unmerged branch",
+    async () => {
+      const { parent, repo, worktree } = await makeRepoWithAutoresearchWorktree(
+        "shaka-cleanup-unmerged-force",
+      );
+      const oldCwd = process.cwd();
+      try {
+        await Bun.write(join(worktree, "change.txt"), "discard branch\n");
+        await run(["git", "add", "-A"], worktree);
+        await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "change"], worktree);
+
+        process.chdir(repo);
+        await createAutoresearchCommand().parseAsync(
+          ["cleanup", "speed", "--worktree", "--branch", "--force", "--yes"],
+          { from: "user" },
+        );
+
+        expect(await pathExists(worktree)).toBe(false);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toBe("");
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "refuses to remove a worktree with user changes unless forced",
+    async () => {
+      const { parent, repo, worktree } =
+        await makeRepoWithAutoresearchWorktree("shaka-cleanup-dirty");
+      const oldCwd = process.cwd();
+      try {
+        await Bun.write(join(worktree, "notes.txt"), "keep me\n");
+
+        process.chdir(repo);
+        await expect(
+          createAutoresearchCommand().parseAsync(
+            ["cleanup", "speed", "--worktree", "--keep-branch", "--yes"],
+            { from: "user" },
+          ),
+        ).rejects.toThrow(/dirty autoresearch worktree/i);
+
+        expect(await pathExists(worktree)).toBe(true);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toContain(
+          "autoresearch/speed",
+        );
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "can force-remove a dirty experiment worktree while keeping the branch",
+    async () => {
+      const { parent, repo, worktree } =
+        await makeRepoWithAutoresearchWorktree("shaka-cleanup-force");
+      const oldCwd = process.cwd();
+      try {
+        await Bun.write(join(worktree, "notes.txt"), "discard me\n");
+
+        process.chdir(repo);
+        await createAutoresearchCommand().parseAsync(
+          ["cleanup", "speed", "--worktree", "--keep-branch", "--force", "--yes"],
+          { from: "user" },
+        );
+
+        expect(await pathExists(worktree)).toBe(false);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toContain(
+          "autoresearch/speed",
+        );
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
+        await rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "dry-run leaves the worktree and branch intact",
+    async () => {
+      const { parent, repo, worktree } =
+        await makeRepoWithAutoresearchWorktree("shaka-cleanup-dry-run");
+      const oldCwd = process.cwd();
+      try {
+        process.chdir(repo);
+        await createAutoresearchCommand().parseAsync(
+          ["cleanup", "speed", "--worktree", "--branch", "--dry-run", "--yes"],
+          { from: "user" },
+        );
+
+        expect(await pathExists(worktree)).toBe(true);
+        expect(await gitOutput(["branch", "--list", "autoresearch/speed"], repo)).toContain(
+          "autoresearch/speed",
+        );
+      } finally {
+        process.chdir(oldCwd);
+        await run(["git", "worktree", "remove", worktree, "--force"], repo).catch(() => {});
+        await run(["git", "branch", "-D", "autoresearch/speed"], repo).catch(() => {});
         await rm(parent, { recursive: true, force: true });
       }
     },
