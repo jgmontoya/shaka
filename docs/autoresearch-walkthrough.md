@@ -105,6 +105,23 @@ cut-prime-count-from-80ms  [active]
   iter 1 [keep] metric=3.2 commit=a3f4c21 — replace O(n²) trial division with a sieve of Eratosthenes
 ```
 
+## HTML report
+
+For a richer view than the terminal status, generate an HTML report:
+
+```bash
+shaka autoresearch html cut-prime-count-from-80ms
+```
+
+Without a slug, Shaka picks the active experiment in the current repo. The report writes to `autoresearch-report-<slug>.html` next to your source repo and opens in your default browser. It shows the metric trajectory across iterations, baseline vs current best with improvement %, the full hypothesis log with kept/discarded verdicts, and per-iteration deltas (vs baseline and vs previous accepted).
+
+Two flags:
+
+- `--output <path>` — write the report to an explicit file
+- `--no-open` — skip the auto-open (useful for CI artifact generation)
+
+The report reads `autoresearch.jsonl` in place, so it's safe to run mid-experiment to peek at progress.
+
 ## Pausing and resuming
 
 Ctrl+C at any point pauses the loop between iterations — the in-flight iteration finishes its cleanup (commit or revert), then the process exits with code 130.
