@@ -12,10 +12,12 @@
 #   docker compose run --rm opencode bash test/e2e/opencode.sh
 #   docker compose run --rm claudecode bash test/e2e/claudecode.sh
 #   docker compose run --rm codex bash test/e2e/codex.sh
+#   docker compose run --rm pi bash test/e2e/pi.sh
 #
 # Auth:
 #   CLAUDE_CODE_OAUTH_TOKEN — from root .env (gitignored) for Claude Code LLM tests
 #   ~/.codex/auth.json — bind-mounted read-only for Codex LLM tests (from `codex login`)
+#   ~/.pi/agent/auth.json — bind-mounted read-only for Pi LLM tests (from `pi /login`)
 
 services:
   opencode:
@@ -38,6 +40,31 @@ services:
       dockerfile: dockerfile-codex
     image: shaka-codex
     volumes:
-      # Mount host Codex auth for LLM integration tests (read-only, optional)
-      # If ~/.codex/auth.json doesn't exist, Docker creates an empty dir — the test detects this and skips
-      - ${HOME}/.codex/auth.json:/home/shakaUser/.codex/auth.json:ro
+      # Mount host Codex auth for LLM integration tests (read-only, optional).
+      # Long syntax + create_host_path: false so Docker doesn't auto-create
+      # the host file as a directory when it's missing — that polluted
+      # ~/.codex/ on fresh dev boxes and broke real `codex login` flows.
+      # Requires Docker Engine v23+ (API v1.42+); silently ignored on older.
+      - type: bind
+        source: ${HOME}/.codex/auth.json
+        target: /home/shakaUser/.codex/auth.json
+        read_only: true
+        bind:
+          create_host_path: false
+
+  pi:
+    build:
+      context: .
+      dockerfile: dockerfile-pi
+    image: shaka-pi
+    volumes:
+      # Mount host Pi auth for LLM integration tests (read-only, optional).
+      # Same long-syntax + create_host_path: false story as codex above —
+      # the short form would create a directory at ~/.pi/agent/auth.json
+      # and break the real `pi /login` flow.
+      - type: bind
+        source: ${HOME}/.pi/agent/auth.json
+        target: /home/shakaUser/.pi/agent/auth.json
+        read_only: true
+        bind:
+          create_host_path: false

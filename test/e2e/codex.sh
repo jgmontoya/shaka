@@ -135,7 +135,7 @@ section "Hook command format"
 
 HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$HOOKS_JSON")
 
-if echo "$HOOK_CMD" | grep -q "bun run.*shaka-hook-wrapper.ts"; then
+if echo "$HOOK_CMD" | grep -q "bun .*shaka-hook-wrapper.ts"; then
   pass "Hook command uses wrapper script"
 else
   fail "Hook command missing wrapper: $HOOK_CMD"
@@ -149,8 +149,17 @@ else
   exit 1
 fi
 
-# Verify the hook file referenced in the command exists
+# Verify the hook file referenced in the command exists. The configurer now
+# wraps each path in double quotes so spaces in $HOME survive Codex's shell
+# parsing, so strip wrapping quotes off the last token before stat-ing.
 HOOK_FILE=$(echo "$HOOK_CMD" | awk '{print $NF}')
+# Configurer wraps paths in POSIX single quotes (defends against $VAR/$()
+# expansion under the shell). Strip both quote styles so the test works
+# whether double or single quotes are used.
+HOOK_FILE="${HOOK_FILE#\"}"
+HOOK_FILE="${HOOK_FILE%\"}"
+HOOK_FILE="${HOOK_FILE#\'}"
+HOOK_FILE="${HOOK_FILE%\'}"
 if [ -f "$HOOK_FILE" ]; then
   pass "Referenced hook file exists: $HOOK_FILE"
 else

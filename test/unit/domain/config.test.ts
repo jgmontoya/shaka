@@ -347,6 +347,15 @@ describe("Config", () => {
       expect(model).toBeUndefined();
     });
 
+    test("defaults to undefined (auto) for pi — explicit, not via the trailing fallback", async () => {
+      // Pi was the only provider absent from the hardcoded defaults map
+      // and worked only via the `?? "auto"` final fallback. If that
+      // fallback is ever removed (because "every provider is in the map"),
+      // Pi silently regresses. This test pins the contract.
+      const model = await getSummarizationModel("pi", testShakaHome);
+      expect(model).toBeUndefined();
+    });
+
     test("reads claude model from config", async () => {
       const config: ShakaConfig = {
         version: "0.1.0",
@@ -463,6 +472,14 @@ describe("Config", () => {
     test("returns false when SHAKA_CODEX_SUBAGENT is not true", () => {
       expect(isSubagent({ SHAKA_CODEX_SUBAGENT: "false" })).toBe(false);
     });
+
+    test("returns true when SHAKA_PI_SUBAGENT is true", () => {
+      expect(isSubagent({ SHAKA_PI_SUBAGENT: "true" })).toBe(true);
+    });
+
+    test("returns false when SHAKA_PI_SUBAGENT is not true", () => {
+      expect(isSubagent({ SHAKA_PI_SUBAGENT: "false" })).toBe(false);
+    });
   });
 
   describe("ensureConfigComplete", () => {
@@ -503,6 +520,7 @@ describe("Config", () => {
           claude: { enabled: true },
           opencode: { enabled: false },
           codex: { enabled: false, summarization_model: "auto" },
+          pi: { enabled: false, summarization_model: "auto" },
         },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },
@@ -589,6 +607,36 @@ describe("Config", () => {
       });
     });
 
+    test("backfills providers.pi when missing", async () => {
+      const config = {
+        version: "0.4.0",
+        reasoning: { enabled: true },
+        permissions: { managed: true },
+        providers: {
+          claude: { enabled: true },
+          opencode: { enabled: false },
+          codex: { enabled: false, summarization_model: "auto" },
+        },
+        assistant: { name: "Shaka" },
+        principal: { name: "Chief" },
+        memory: {
+          learnings_budget: 6000,
+          sessions_budget: 5000,
+          recency_window_days: 90,
+          search_max_results: 10,
+          knowledge_enabled: true,
+          maintenance: { enabled: true },
+        },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
+
+      const changed = await ensureConfigComplete(testShakaHome);
+
+      expect(changed).toBe(true);
+      const updated = await Bun.file(`${testShakaHome}/config.json`).json();
+      expect(updated.providers.pi).toEqual({ enabled: false, summarization_model: "auto" });
+    });
+
     test("backfills missing fields in partial memory section", async () => {
       const config = {
         version: "0.4.0",
@@ -624,6 +672,7 @@ describe("Config", () => {
           claude: { enabled: true },
           opencode: { enabled: false },
           codex: { enabled: false, summarization_model: "auto" },
+          pi: { enabled: false, summarization_model: "auto" },
         },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },
@@ -692,6 +741,7 @@ describe("Config", () => {
           claude: { enabled: false },
           opencode: { enabled: false },
           codex: { enabled: false, summarization_model: "auto" },
+          pi: { enabled: false, summarization_model: "auto" },
         },
         assistant: { name: "Shaka" },
         principal: { name: "Chief" },

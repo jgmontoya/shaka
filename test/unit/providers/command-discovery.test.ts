@@ -432,4 +432,26 @@ Body`,
     expect(commands[0]?.providers?.claude).toEqual({ model: "opus" });
     expect(commands[0]?.providers?.opencode).toBeUndefined();
   });
+
+  test("providers.pi override is accepted (Pi is a first-class provider)", async () => {
+    // Pi parity: command authors must be able to scope a model/description
+    // override to Pi the same way they can for claude/opencode/codex.
+    // Earlier the parser rejected providers.pi as "Unknown provider" because
+    // KNOWN_PROVIDERS hadn't been updated when Pi shipped.
+    await Bun.write(
+      join(testHome, "system", "commands", "pi-scoped.md"),
+      `---
+description: Pi-tuned
+providers:
+  pi:
+    model: anthropic/claude-haiku-4.5
+---
+Body`,
+    );
+
+    const { commands, errors } = await discoverCommands(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(commands[0]?.providers?.pi).toEqual({ model: "anthropic/claude-haiku-4.5" });
+  });
 });

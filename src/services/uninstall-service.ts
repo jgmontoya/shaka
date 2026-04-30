@@ -10,7 +10,7 @@
 
 import { lstat, readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { type Result, ok } from "../domain/result";
+import { type Result, err, ok } from "../domain/result";
 import { readSymlinkTarget, removeLink } from "../platform/paths";
 import { createProvider, getProviderNames } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
@@ -25,6 +25,13 @@ export interface UninstallServiceConfig {
 export interface UninstallOptions {
   /** Delete user-owned directories (user/, customizations/, memory/) */
   deleteUserData: boolean;
+  /**
+   * Scope the uninstall to a subset of providers. When omitted, runs the
+   * full teardown (every provider + framework files + symlinks). When
+   * provided, only the named providers are uninstalled — framework files,
+   * system/ symlink, and user data are left untouched.
+   */
+  only?: readonly ProviderName[];
 }
 
 export interface UninstallResult {
@@ -45,13 +52,17 @@ export class UninstallService {
   /**
    * Uninstall provider configuration (hooks, agents, skills) via each provider's uninstall().
    */
-  async uninstallProviders(): Promise<UninstallResult["providers"]> {
+  async uninstallProviders(only?: readonly ProviderName[]): Promise<UninstallResult["providers"]> {
     const detected = await this.detectProviders();
     const result = {} as UninstallResult["providers"];
+    // Empty array is truthy in JS — normalize so `only:[]` means "no scope"
+    // (full teardown) rather than "scope to nothing" (silent no-op).
+    const scope = only && only.length > 0 ? new Set(only) : null;
 
     for (const name of getProviderNames()) {
       result[name] = { detected: detected[name], uninstalled: false };
       if (!detected[name]) continue;
+      if (scope && !scope.has(name)) continue;
 
       const provider = createProvider(name);
       const uninstallResult = await provider.uninstall({ shakaHome: this.shakaHome });
@@ -159,10 +170,48 @@ export class UninstallService {
    * Run full uninstallation.
    */
   async uninstall(options: UninstallOptions): Promise<Result<UninstallResult, Error>> {
+    // Normalize `only:[]` to "no scope" (see uninstallProviders for why).
+    const scopedOnly = options.only && options.only.length > 0 ? options.only : undefined;
+
+    if (scopedOnly && options.deleteUserData) {
+      return err(
+        new Error(
+          "per-provider uninstall cannot be combined with --delete-data; user data belongs to the whole install, not one provider",
+        ),
+      );
+    }
+
+    if (scopedOnly) return this.uninstallScoped(scopedOnly);
+    return this.uninstallFull(options);
+  }
+
+  /**
+   * Per-provider scope: remove just the named providers' artifacts.
+   * Framework files (`system/`, `config.json`, `node_modules`) and user
+   * data belong to the install as a whole, so they're untouched here.
+   */
+  private async uninstallScoped(
+    scopedOnly: readonly ProviderName[],
+  ): Promise<Result<UninstallResult, Error>> {
+    const providers = await this.uninstallProviders(scopedOnly);
+    const errors = scopedOnly
+      .filter((name) => providers[name].detected && !providers[name].uninstalled)
+      .map((name) => `Failed to uninstall ${name} configuration`);
+    // Return err so the CLI exits non-zero. The full-uninstall path leaves
+    // these in `errors` (alongside framework cleanup) — there's value in a
+    // partial success there. For scoped, "remove THIS provider" either
+    // worked or it didn't.
+    if (errors.length > 0) {
+      return err(new Error(errors.join("; ")));
+    }
+    return ok({ providers, removed: [], errors });
+  }
+
+  private async uninstallFull(options: UninstallOptions): Promise<Result<UninstallResult, Error>> {
     const removed: string[] = [];
     const errors: string[] = [];
 
-    // 1. Uninstall provider configuration
+    // 1. Uninstall provider configuration (full set).
     const providers = await this.uninstallProviders();
 
     for (const name of getProviderNames()) {

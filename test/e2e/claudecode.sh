@@ -146,12 +146,25 @@ fi
 section "Command format"
 
 HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$SETTINGS")
-HOOK_PATH="${HOOK_CMD#bun run }"
+# Strip the `bun ` prefix and any wrapping quotes (the configurer quotes the
+# path so spaces in $HOME survive Claude's shell parsing).
+HOOK_PATH="${HOOK_CMD#bun }"
+# Configurer wraps paths in POSIX single quotes (defends against $VAR/$()
+# expansion under the shell). Strip both quote styles for compat.
+HOOK_PATH="${HOOK_PATH#\"}"
+HOOK_PATH="${HOOK_PATH%\"}"
+HOOK_PATH="${HOOK_PATH#\'}"
+HOOK_PATH="${HOOK_PATH%\'}"
 
+# Per CLAUDE.md: `bun <file>` for direct execution; `bun run <script>` is for
+# package.json scripts only. Settings entries point at hook .ts files.
 if echo "$HOOK_CMD" | grep -q "^bun run "; then
-  pass "Hook command uses 'bun run' prefix"
+  fail "Hook command uses legacy 'bun run' prefix (should be 'bun <file>'): $HOOK_CMD"
+  exit 1
+elif echo "$HOOK_CMD" | grep -q "^bun "; then
+  pass "Hook command uses 'bun <file>' prefix"
 else
-  fail "Hook command missing 'bun run' prefix: $HOOK_CMD"
+  fail "Hook command missing 'bun' prefix: $HOOK_CMD"
   exit 1
 fi
 

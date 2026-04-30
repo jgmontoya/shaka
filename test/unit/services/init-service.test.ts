@@ -19,7 +19,7 @@ describe("InitService", () => {
     return new InitService({
       shakaHome: testHome,
       defaultsPath,
-      detectProviders: async () => ({ claude: true, opencode: false, codex: false }),
+      detectProviders: async () => ({ claude: true, opencode: false, codex: false, pi: false }),
       runBunLink: mockBunLink,
       ...overrides,
     });
@@ -345,7 +345,7 @@ describe("InitService", () => {
   describe("init", () => {
     test("returns error when no providers detected", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false, pi: false }),
       });
 
       const result = await service.init();
@@ -395,7 +395,7 @@ describe("InitService", () => {
 
     test("respects providers array — installs only selected", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false, pi: false }),
       });
 
       const result = await service.init({ providers: ["claude"] });
@@ -407,9 +407,27 @@ describe("InitService", () => {
       }
     });
 
+    test("respects providers array — installs Pi when selected", async () => {
+      // Symmetric coverage: every other provider has a positive-path
+      // selection test; Pi was added later and didn't get one. The branch
+      // is identical, but pin it so a future regression in Pi-only init
+      // surfaces here rather than only in e2e.
+      const service = createService({
+        detectProviders: async () => ({ claude: false, opencode: true, codex: false, pi: true }),
+      });
+
+      const result = await service.init({ providers: ["pi"] });
+
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.providers.pi.installed).toBe(true);
+        expect(result.value.providers.opencode.installed).toBe(false);
+      }
+    });
+
     test("skips unavailable providers in selection", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: true, codex: false }),
+        detectProviders: async () => ({ claude: false, opencode: true, codex: false, pi: false }),
       });
 
       const result = await service.init({ providers: ["claude", "opencode"] });
@@ -425,7 +443,7 @@ describe("InitService", () => {
 
     test("returns error if all selected providers are unavailable", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: false, opencode: false, codex: false }),
+        detectProviders: async () => ({ claude: false, opencode: false, codex: false, pi: false }),
       });
 
       const result = await service.init({ providers: ["claude"] });
@@ -438,7 +456,7 @@ describe("InitService", () => {
 
     test("installs all detected when no providers specified", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false, pi: false }),
       });
 
       const result = await service.init();
@@ -452,7 +470,7 @@ describe("InitService", () => {
 
     test("providers result has an entry for every registered provider", async () => {
       const service = createService({
-        detectProviders: async () => ({ claude: true, opencode: true, codex: false }),
+        detectProviders: async () => ({ claude: true, opencode: true, codex: false, pi: false }),
       });
 
       const result = await service.init();

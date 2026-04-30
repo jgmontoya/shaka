@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { runAgentStep } from "../../../src/domain/agent-execution";
 
-const NO_PROVIDERS = { claude: false, opencode: false, codex: false } as const;
+const NO_PROVIDERS = { claude: false, opencode: false, codex: false, pi: false } as const;
 
 describe("agent-execution", () => {
   test("module exports runAgentStep", () => {
@@ -18,12 +18,13 @@ describe("agent-execution", () => {
     expect(result.stderr).toContain("No agent provider available");
   });
 
-  test("error message names all three providers when none are available", async () => {
+  test("error message names all four providers when none are available", async () => {
     const result = await runAgentStep({ prompt: "test" }, NO_PROVIDERS);
 
     expect(result.stderr).toContain("claude");
     expect(result.stderr).toContain("opencode");
     expect(result.stderr).toContain("codex");
+    expect(result.stderr).toContain("pi");
   });
 
   test("no-provider result exposes provider=null and timedOut=false", async () => {
@@ -58,7 +59,7 @@ describe("agent-execution", () => {
 
       const result = await runAgentStep(
         { prompt: "test", cwd: workDir },
-        { claude: false, opencode: false, codex: true },
+        { claude: false, opencode: false, codex: true, pi: false },
       );
 
       expect(result.exitCode).toBe(0);
@@ -90,7 +91,7 @@ describe("agent-execution", () => {
 
       const result = await runAgentStep(
         { prompt: "---\nread this prompt from stdin" },
-        { claude: false, opencode: false, codex: true },
+        { claude: false, opencode: false, codex: true, pi: false },
       );
 
       expect(result.exitCode).toBe(0);
@@ -105,6 +106,99 @@ describe("agent-execution", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test.skipIf(process.platform === "win32")(
+    "dispatches to Pi when only pi is detected",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-pi-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
+      const binDir = join(root, "bin");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const pi = join(binDir, "pi");
+        // Stub `pi` echoes its argv and stdin so the test can assert on what
+        // the runner actually sent to the binary (provider/model pinning,
+        // print mode, prompt via stdin).
+        await Bun.write(
+          pi,
+          "#!/bin/sh\nprintf 'args=%s\\n' \"$*\"\nprintf 'stdin='\ncat\n",
+        );
+        await chmod(pi, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+        const result = await runAgentStep(
+          { prompt: "do the thing" },
+          { claude: false, opencode: false, codex: false, pi: true },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.provider).toBe("pi");
+        // Pi defaults to google (Exp 42); the runner MUST pin Anthropic.
+        expect(result.stdout).toContain("--provider anthropic");
+        expect(result.stdout).toContain("--model anthropic/");
+        // Token-bounded: `--provider` already contains `-p` as a substring,
+        // so a bare `toContain("-p")` would silently pass even if the
+        // print-mode flag were dropped. Parse the argv line into tokens
+        // and assert standalone `-p` membership.
+        const argvLine = result.stdout.split("\n").find((l) => l.startsWith("args="));
+        const argv = argvLine?.replace(/^args=/, "").split(/\s+/) ?? [];
+        expect(argv).toContain("-p");
+        // Prompt arrives via stdin (avoids the `-`-prefix yargs hazard).
+        expect(result.stdout).toContain("stdin=do the thing");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "treats Pi exit-0-with-provider-error as a runner failure",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-pi-err-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
+      const binDir = join(root, "bin");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const pi = join(binDir, "pi");
+        // Pi exits 0 even on 401 (Exp 43). The runner must scan stdout and
+        // surface the failure to the caller so autoresearch / agent loops
+        // don't treat the error body as a successful response.
+        await Bun.write(
+          pi,
+          `#!/bin/sh\nprintf '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}\\n'\nexit 0\n`,
+        );
+        await chmod(pi, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+        const result = await runAgentStep(
+          { prompt: "test" },
+          { claude: false, opencode: false, codex: false, pi: true },
+        );
+
+        expect(result.provider).toBe("pi");
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toContain("401");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.skipIf(process.platform === "win32")(
     "does not crash when a provider closes stdin early",
@@ -124,7 +218,7 @@ describe("agent-execution", () => {
 
         const result = await runAgentStep(
           { prompt: "x".repeat(8 * 1024 * 1024), timeout: 1000 },
-          { claude: false, opencode: false, codex: true },
+          { claude: false, opencode: false, codex: true, pi: false },
         );
 
         expect(result.provider).toBe("codex");
@@ -160,7 +254,7 @@ describe("agent-execution", () => {
       const start = performance.now();
       const result = await runAgentStep(
         { prompt: "test", timeout: 600 },
-        { claude: false, opencode: false, codex: true },
+        { claude: false, opencode: false, codex: true, pi: false },
       );
       const elapsedMs = performance.now() - start;
 

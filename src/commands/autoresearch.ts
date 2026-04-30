@@ -53,6 +53,25 @@ import { readlineAsk, runWizard } from "./autoresearch-wizard";
 
 type OpenFile = (path: string) => Promise<void>;
 
+/**
+ * Canonical ordered provider list — single source of truth for the
+ * `--provider` flag's accepted values, the dispatch order in
+ * `pickProvider`, and the help text. The `satisfies` clause asks
+ * TypeScript to check that every entry IS a `ProviderName` at the
+ * cost of one type assertion at the use sites; full exhaustiveness
+ * (every `ProviderName` MUST appear) lives in
+ * `src/providers/command-discovery.ts` via the `Record<ProviderName, true>`
+ * pattern — apply the same shape here when a 5th provider lands.
+ */
+const SUPPORTED_PROVIDERS = [
+  "claude",
+  "opencode",
+  "codex",
+  "pi",
+] as const satisfies readonly ProviderName[];
+const SUPPORTED_PROVIDERS_SET = new Set<string>(SUPPORTED_PROVIDERS);
+const PROVIDER_HELP = `Force a specific provider (${SUPPORTED_PROVIDERS.join("|")})`;
+
 interface AutoresearchCommandDeps {
   readonly openFile?: OpenFile;
 }
@@ -198,11 +217,15 @@ export function resolveProviders(
       claude: forced === "claude",
       opencode: forced === "opencode",
       codex: forced === "codex",
+      pi: forced === "pi",
     };
   }
-  if (!detected.claude && !detected.opencode && !detected.codex) {
+  // Provider-agnostic guard: future additions to `DetectedProviders` are
+  // covered automatically. Spelling out the four flags by hand was how Pi
+  // got missed earlier in this PR.
+  if (Object.values(detected).every((installed) => !installed)) {
     throw new Error(
-      "No agent providers available. Install claude, opencode, or codex, then run `shaka init`.",
+      `No agent providers available. Install ${SUPPORTED_PROVIDERS.join(", ")}, then run \`shaka init\`.`,
     );
   }
   return detected;
@@ -218,10 +241,10 @@ function parsePositiveInt(flag: string): (v: string) => number {
 
 function validateProviderFlag(value: string | undefined): ProviderName | undefined {
   if (value === undefined) return undefined;
-  if (value !== "claude" && value !== "opencode" && value !== "codex") {
-    throw new Error("--provider must be one of: claude, opencode, codex");
+  if (!SUPPORTED_PROVIDERS_SET.has(value)) {
+    throw new Error(`--provider must be one of: ${SUPPORTED_PROVIDERS.join(", ")}`);
   }
-  return value;
+  return value as ProviderName;
 }
 
 function buildStopWhen(opts: {
@@ -327,11 +350,11 @@ export interface StartDeps {
   readonly runLoop?: typeof runLoop;
 }
 
-/** First available provider in the standard resolution order: claude → opencode → codex. */
+/** First available provider in the standard resolution order: claude → opencode → codex → pi. */
 function pickProvider(providers: DetectedProviders): ProviderName {
-  if (providers.claude) return "claude";
-  if (providers.opencode) return "opencode";
-  if (providers.codex) return "codex";
+  for (const name of SUPPORTED_PROVIDERS) {
+    if (providers[name]) return name;
+  }
   throw new Error("No providers available — guarded upstream");
 }
 
@@ -428,10 +451,13 @@ async function runFullAutoStart(
     );
     process.exit(1);
   }
-  if (!detected.claude && !detected.opencode && !detected.codex) {
+  // Same provider-agnostic shape as `resolveProviders` above — adding a
+  // future provider to `DetectedProviders` doesn't require updating this
+  // disjunction by hand.
+  if (Object.values(detected).every((installed) => !installed)) {
     console.error(
-      "No agent provider installed (claude, opencode, or codex).\n" +
-        "Run `shaka init` to install one, or re-run with `--wizard` to fill the setup fields by hand.",
+      `No agent provider installed (${SUPPORTED_PROVIDERS.join(", ")}).
+Run \`shaka init\` to install one, or re-run with \`--wizard\` to fill the setup fields by hand.`,
     );
     process.exit(1);
   }
@@ -857,7 +883,7 @@ function createAutoresearchCommandNamed(
   cmd
     .command("start <objective>")
     .description("Begin a new optimization experiment")
-    .option("--provider <name>", "Force a specific provider (claude|opencode|codex)")
+    .option("--provider <name>", PROVIDER_HELP)
     .option("--max-iterations <n>", "Stop after N iterations", parsePositiveInt("--max-iterations"))
     .option(
       "--stop-after <n>",
@@ -936,7 +962,7 @@ function createAutoresearchCommandNamed(
   cmd
     .command("resume [slug]")
     .description("Resume a paused optimization experiment")
-    .option("--provider <name>", "Force a specific provider (claude|opencode|codex)")
+    .option("--provider <name>", PROVIDER_HELP)
     .option("--max-iterations <n>", "Stop after N iterations", parsePositiveInt("--max-iterations"))
     .option(
       "--stop-after <n>",

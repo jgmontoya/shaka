@@ -45,8 +45,12 @@ e2e-opencode:
 e2e-codex:
     docker compose run --rm --build codex bash test/e2e/codex.sh
 
+# Run Pi e2e tests in Docker
+e2e-pi:
+    docker compose run --rm --build pi bash test/e2e/pi.sh
+
 # Run all e2e tests
-e2e: e2e-claude e2e-opencode e2e-codex
+e2e: e2e-claude e2e-opencode e2e-codex e2e-pi
 
 # ── Docker shells ─────────────────────────────────────────────────────
 
@@ -61,3 +65,7 @@ shell-opencode:
 # Open interactive shell in Codex container
 shell-codex:
     docker compose run --rm --build codex sh
+
+# Open interactive shell in Pi container
+shell-pi:
+    docker compose run --rm --build pi sh

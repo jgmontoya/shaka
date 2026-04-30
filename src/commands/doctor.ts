@@ -3,7 +3,9 @@
  * Checks system health, installation status, and config-vs-reality alignment.
  */
 
+import { statSync } from "node:fs";
 import { stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import {
@@ -13,6 +15,7 @@ import {
   resolveShakaHome,
 } from "../domain/config";
 import { loadManifest } from "../domain/skills-manifest";
+import { checkPiCredentials } from "../providers/pi/credentials";
 import { getAllProviders } from "../providers/registry";
 import type { InstallationStatus, ProviderConfigurer, ProviderName } from "../providers/types";
 import { measureContext } from "./context-measurement";
@@ -35,7 +38,7 @@ function formatStatus(ok: boolean, issue?: string): string {
   return issue ? `✗ no (${issue})` : "✗ no";
 }
 
-function logProviderStatus(
+export function logProviderStatus(
   provider: ProviderConfigurer,
   cliInstalled: boolean,
   status: InstallationStatus,
@@ -65,7 +68,42 @@ function logProviderStatus(
     console.log("    Installed:     – skipped (not enabled)");
     console.log("    Commands:      – skipped (not enabled)");
   }
+
+  // Pi-specific: surface a credential warning when the CLI is installed but
+  // headless dispatch would silently fail (Exp 43). Missing credentials mark
+  // the run as having issues so doctor exits non-zero — headless workflows
+  // (autoresearch, agent steps) would otherwise fail silently mid-run.
+  // Gated on `enabled` so a user who explicitly disabled Pi doesn't get
+  // unrelated env-state complaints.
+  if (provider.name === "pi" && cliInstalled && enabled) {
+    const creds = checkPiCredentials({
+      env: {
+        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
+        ANTHROPIC_OAUTH_TOKEN: process.env.ANTHROPIC_OAUTH_TOKEN,
+      },
+      hasAuthFile: piAuthFileExists(),
+    });
+    if (!creds.ok) {
+      console.log(`    Credentials:   ${formatStatus(false, creds.issue)}`);
+      // Match the per-provider verdict: a Credentials ✗ line shouldn't be
+      // followed by a ✓ All systems operational summary at the bottom.
+      hasIssues = true;
+    }
+  }
   return hasIssues;
+}
+
+function piAuthFileExists(): boolean {
+  const piHome = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+  // statSync.isFile() — explicitly rejects directories, which Docker
+  // bind-mounts create at the host path when the file is missing.
+  // `Bun.file().size > 0` returned a non-zero block size for directories
+  // (upstream Bun behavior) and silently suppressed the credential warning.
+  try {
+    return statSync(join(piHome, "auth.json")).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /** Check if all installation components are ok. */
@@ -303,13 +341,20 @@ async function runDoctor(shakaHome: string, options: { fix?: boolean }): Promise
   hasIssues = hasIssues || providerIssues;
 
   const mismatches = findConfigMismatches(config, statuses);
+  // Snapshot the pre-alignment state so a successful `--fix` doesn't carry
+  // alignmentIssues forward into the post-fix verdict — without this,
+  // `--fix` could repair the only outstanding issue and still exit 1.
+  const preAlignmentIssues = hasIssues;
   const alignmentIssues = logConfigAlignment(mismatches);
   hasIssues = hasIssues || alignmentIssues;
 
   if (options.fix && mismatches.length > 0) {
     await fixConfigAlignment(shakaHome, mismatches);
     fixedSomething = true;
-    hasIssues = await recheckAfterFix(shakaHome);
+    // After fix: only pre-alignment issues (e.g. Pi credential warnings
+    // from `logProviderStatuses`) plus anything the recheck still flags
+    // count. Alignment is what we just fixed — drop it from the verdict.
+    hasIssues = preAlignmentIssues || (await recheckAfterFix(shakaHome));
   }
 
   if (fixedSomething) {

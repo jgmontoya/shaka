@@ -50,3 +50,16 @@ export async function removeLink(path: string): Promise<void> {
     await rm(path);
   }
 }
+
+/**
+ * Quote a string for safe inclusion in a POSIX shell command. Uses single
+ * quotes (which never expand) with the canonical `'\''` escape for any
+ * embedded single quote. Use this whenever a path or argument is being
+ * baked into a shell-parsed `command` string (Claude `settings.json`
+ * hooks, Codex `hooks.json`, etc.) — double-quoted forms still expand
+ * `$VAR`, `$(...)`, and backticks, which is a shell-injection vector for
+ * crafted hook paths.
+ */
+export function shellQuotePosix(arg: string): string {
+  return `'${arg.replaceAll("'", "'\\''")}'`;
+}

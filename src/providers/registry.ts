@@ -6,6 +6,7 @@
 import { ClaudeProviderConfigurer } from "./claude/configurer";
 import { CodexProviderConfigurer } from "./codex/configurer";
 import { OpencodeProviderConfigurer } from "./opencode/configurer";
+import { PiProviderConfigurer } from "./pi/configurer";
 import type { ProviderConfigurer, ProviderName } from "./types";
 
 export function createProvider(name: ProviderName): ProviderConfigurer {
@@ -16,6 +17,8 @@ export function createProvider(name: ProviderName): ProviderConfigurer {
       return new OpencodeProviderConfigurer();
     case "codex":
       return new CodexProviderConfigurer();
+    case "pi":
+      return new PiProviderConfigurer();
   }
 }
 
@@ -24,10 +27,11 @@ export function getAllProviders(): ProviderConfigurer[] {
     new ClaudeProviderConfigurer(),
     new OpencodeProviderConfigurer(),
     new CodexProviderConfigurer(),
+    new PiProviderConfigurer(),
   ];
 }
 
 /** Return all registered provider names without constructing configurers. */
 export function getProviderNames(): ProviderName[] {
-  return ["claude", "opencode", "codex"];
+  return ["claude", "opencode", "codex", "pi"];
 }

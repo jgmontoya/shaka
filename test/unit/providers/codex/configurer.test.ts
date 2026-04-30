@@ -1,17 +1,23 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
-import { homedir } from "node:os";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { CodexProviderConfigurer } from "../../../../src/providers/codex/configurer";
 
 describe("CodexProviderConfigurer", () => {
-  const testCodexHome = join(homedir(), ".codex-test-shaka");
-  const testShakaHome = join(homedir(), ".shaka-test-codex");
-  const testSkillsDir = join(homedir(), ".agents-test-shaka", "skills");
+  // Per-test temp roots — never share a fixed path under $HOME because
+  // (a) `rm -rf` on a real-home path can wipe a developer's local data if
+  // it accidentally exists, and (b) parallel test runs would race.
+  let testCodexHome: string;
+  let testShakaHome: string;
+  let testSkillsDir: string;
+  let testRoot: string;
 
   beforeEach(async () => {
-    await rm(testCodexHome, { recursive: true, force: true });
-    await rm(testShakaHome, { recursive: true, force: true });
-    await rm(testSkillsDir, { recursive: true, force: true });
+    testRoot = await mkdtemp(join(tmpdir(), "shaka-codex-configurer-"));
+    testCodexHome = join(testRoot, "codex");
+    testShakaHome = join(testRoot, "shaka");
+    testSkillsDir = join(testRoot, "agents", "skills");
     await mkdir(testCodexHome, { recursive: true });
     await mkdir(testSkillsDir, { recursive: true });
     await mkdir(`${testShakaHome}/system/hooks`, { recursive: true });
@@ -21,92 +27,69 @@ describe("CodexProviderConfigurer", () => {
   });
 
   afterEach(async () => {
-    await rm(testCodexHome, { recursive: true, force: true });
-    await rm(testShakaHome, { recursive: true, force: true });
-    await rm(testSkillsDir, { recursive: true, force: true });
+    await rm(testRoot, { recursive: true, force: true });
   });
 
+  /**
+   * Build a configurer with isolation defaults baked in. Every test that
+   * runs install/uninstall against the configurer should use this so the
+   * default skillsDir (~/.agents/skills) doesn't reach the host filesystem.
+   * Identity-only tests (`name`, `label`) can use the bare constructor.
+   */
+  type ConfigurerOptions = ConstructorParameters<typeof CodexProviderConfigurer>[0];
+  function makeConfigurer(overrides: Partial<ConfigurerOptions> = {}): CodexProviderConfigurer {
+    return new CodexProviderConfigurer({
+      codexHome: testCodexHome,
+      skillsDir: testSkillsDir,
+      runCommand: async () => ({ exitCode: 0, stderr: "" }),
+      ...overrides,
+    });
+  }
+
   describe("name", () => {
-    test("returns codex", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
+    test("returns codex", async () => {      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
       expect(configurer.name).toBe("codex");
     });
   });
 
   describe("label", () => {
-    test("returns Codex", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
+    test("returns Codex", async () => {      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
       expect(configurer.label).toBe("Codex");
     });
   });
 
   describe("skillsDir", () => {
-    test("defaults to ~/.agents/skills", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer();
+    test("defaults to ~/.agents/skills", async () => {      const configurer = new CodexProviderConfigurer();
       expect(configurer.skillsDir).toBe(join(homedir(), ".agents", "skills"));
     });
   });
 
   describe("isInstalled", () => {
-    test("returns boolean based on Bun.which", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
+    test("returns boolean based on Bun.which", async () => {      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
       // Just verify it returns a boolean — actual result depends on environment
       expect(typeof configurer.isInstalled()).toBe("boolean");
     });
   });
 
   describe("install", () => {
-    test("enables codex_hooks feature flag via runCommand", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const capturedCalls: string[][] = [];
+    test("enables codex_hooks feature flag via runCommand", async () => {      const capturedCalls: string[][] = [];
       const mockRunCommand = async (args: string[]) => {
         capturedCalls.push(args);
         return { exitCode: 0, stderr: "" };
       };
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: mockRunCommand,
-      });
+      const configurer = makeConfigurer({ runCommand: mockRunCommand });
       await configurer.install({ shakaHome: testShakaHome });
 
       expect(capturedCalls).toContainEqual(["codex", "features", "enable", "codex_hooks"]);
     });
 
-    test("returns ok result", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+    test("returns ok result", async () => {      const configurer = makeConfigurer();
       const result = await configurer.install({ shakaHome: testShakaHome });
       expect(result.ok).toBe(true);
     });
 
-    test("generates wrapper script at codexHome/shaka-hook-wrapper.ts", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+    test("generates wrapper script at codexHome/shaka-hook-wrapper.ts", async () => {      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const wrapperPath = join(testCodexHome, "shaka-hook-wrapper.ts");
@@ -121,21 +104,13 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain("Bun.spawn");
     });
 
-    test("writes hooks.json with entries for discovered hooks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Create a test hook in the test shakaHome
+    test("writes hooks.json with entries for discovered hooks", async () => {      // Create a test hook in the test shakaHome
       await Bun.write(
         join(testShakaHome, "system", "hooks", "session-start.ts"),
         `export const TRIGGER = ["session.start"] as const;\nconsole.log("test");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksPath = join(testCodexHome, "hooks.json");
@@ -148,20 +123,12 @@ describe("CodexProviderConfigurer", () => {
       expect(hooksJson.hooks.SessionStart.length).toBeGreaterThan(0);
     });
 
-    test("hooks.json entries point to wrapper with correct event names", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("hooks.json entries point to wrapper with correct event names", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-start.ts"),
         `export const TRIGGER = ["session.start"] as const;\nconsole.log("test");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -169,26 +136,51 @@ describe("CodexProviderConfigurer", () => {
       const sessionStartEntry = hooksJson.hooks.SessionStart[0];
       const command = sessionStartEntry.hooks[0].command;
 
-      expect(command).toContain("bun run");
+      expect(command).toMatch(/^bun /);
       expect(command).toContain(wrapperPath);
       expect(command).toContain("SessionStart");
       expect(command).toContain("session-start.ts");
     });
 
-    test("generates debounce script when session.end hooks exist", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
+    test("hook commands quote wrapperPath + hookPath so spaces in $HOME don't word-split", async () => {      // Codex parses the `command` string through a shell. Spaces in
+      // codexHome (or any hook path) would otherwise break the wrapper
+      // invocation silently — same fix already in the Claude configurer.
+      // Use a unique temp root so this doesn't race the sibling test in
+      // `claude/configurer.test.ts` under parallel runs (both used to
+      // point at `tmpdir()/shaka home with spaces`).
+      const spacedRoot = await mkdtemp(join(tmpdir(), "shaka-codex-spaced-"));
+      const spacedCodexHome = join(spacedRoot, "codex home with spaces");
+      const spacedShaka = join(spacedRoot, "shaka home with spaces");
+      try {
+        await mkdir(`${spacedShaka}/system/hooks`, { recursive: true });
+        await Bun.write(
+          `${spacedShaka}/system/hooks/session-start.ts`,
+          `export const TRIGGER = ["session.start"] as const;\nconsole.log("ok");\n`,
+        );
+        const configurer = new CodexProviderConfigurer({
+          codexHome: spacedCodexHome,
+          skillsDir: join(spacedRoot, "agents", "skills"),
+          runCommand: async () => ({ exitCode: 0, stderr: "" }),
+        });
+        await configurer.install({ shakaHome: spacedShaka });
 
-      await Bun.write(
+        const hooksJson = await Bun.file(join(spacedCodexHome, "hooks.json")).json();
+        const cmd = hooksJson.hooks.SessionStart[0].hooks[0].command as string;
+
+        // Wrapper + hook paths both wrapped in quotes so the spaces survive.
+        expect(cmd).toMatch(/bun ["'][^"']*codex home with spaces[^"']*shaka-hook-wrapper\.ts["']/);
+        expect(cmd).toMatch(/["'][^"']*shaka home with spaces[^"']*session-start\.ts["']/);
+      } finally {
+        await rm(spacedRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("generates debounce script when session.end hooks exist", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       // Debounce script should exist
@@ -206,20 +198,12 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain('"continue": true');
     });
 
-    test("generates debounce worker script when session.end hooks exist", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("generates debounce worker script when session.end hooks exist", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       // Worker script should exist
@@ -241,20 +225,12 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain("unlink");
     });
 
-    test("hooks.json registers debounce script under Stop event", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("hooks.json registers debounce script under Stop event", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -265,41 +241,25 @@ describe("CodexProviderConfigurer", () => {
       expect(command).toContain("shaka-session-debounce.ts");
     });
 
-    test("hooks.json has no Stop entry when no session.end hooks exist", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Only create a session.start hook, no session.end
+    test("hooks.json has no Stop entry when no session.end hooks exist", async () => {      // Only create a session.start hook, no session.end
       await Bun.write(
         join(testShakaHome, "system", "hooks", "session-start-only.ts"),
         `export const TRIGGER = ["session.start"] as const;\nconsole.log("start");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
       expect(hooksJson.hooks.Stop).toBeUndefined();
     });
 
-    test("debounce script has session-end hook paths baked in", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("debounce script has session-end hook paths baked in", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const workerContent = await Bun.file(join(testCodexHome, "shaka-debounce-worker.ts")).text();
@@ -311,20 +271,12 @@ describe("CodexProviderConfigurer", () => {
       ).toBe(true);
     });
 
-    test("debounce script includes provider: codex in session-end payload", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("debounce script includes provider: codex in session-end payload", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const workerContent = await Bun.file(join(testCodexHome, "shaka-debounce-worker.ts")).text();
@@ -333,12 +285,7 @@ describe("CodexProviderConfigurer", () => {
       expect(workerContent).toContain("provider");
     });
 
-    test("UserPromptSubmit wrapper deletes pending marker file", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Need both a prompt.submit and session.end hook
+    test("UserPromptSubmit wrapper deletes pending marker file", async () => {      // Need both a prompt.submit and session.end hook
       await Bun.write(
         join(testShakaHome, "system", "hooks", "format-reminder.ts"),
         `export const TRIGGER = ["prompt.submit"] as const;\nconsole.log("reminder");\n`,
@@ -348,10 +295,7 @@ describe("CodexProviderConfigurer", () => {
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const wrapperContent = await Bun.file(join(testCodexHome, "shaka-hook-wrapper.ts")).text();
@@ -360,20 +304,12 @@ describe("CodexProviderConfigurer", () => {
       expect(wrapperContent).toContain("UserPromptSubmit");
     });
 
-    test("hooks.json uses matchers for tool hooks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("hooks.json uses matchers for tool hooks", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "security-validator.ts"),
         `export const TRIGGER = ["tool.before"] as const;\nexport const MATCHER = ["Bash"] as const;\nconsole.log("validate");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -382,21 +318,13 @@ describe("CodexProviderConfigurer", () => {
       expect(entry.matcher).toBe("Bash");
     });
 
-    test("installs agent symlinks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Create an agent file
+    test("installs agent symlinks", async () => {      // Create an agent file
       await Bun.write(
         join(testShakaHome, "system", "agents", "architect.md"),
         "# Architect Agent\n",
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       // Agent symlink should exist: codexHome/agents/shaka -> shakaHome/system/agents
@@ -409,12 +337,7 @@ describe("CodexProviderConfigurer", () => {
       expect(resolve(target)).toBe(resolve(join(testShakaHome, "system", "agents")));
     });
 
-    test("succeeds even when feature flag command fails", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
+    test("succeeds even when feature flag command fails", async () => {      const configurer = makeConfigurer({
         runCommand: async (args) => {
           if (args.includes("features")) {
             return { exitCode: 1, stderr: "command not found" };
@@ -429,20 +352,12 @@ describe("CodexProviderConfigurer", () => {
       expect(await Bun.file(join(testCodexHome, "hooks.json")).exists()).toBe(true);
     });
 
-    test("hooks.json SessionStart entry has startup|resume matcher", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("hooks.json SessionStart entry has startup|resume matcher", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-start.ts"),
         `export const TRIGGER = ["session.start"] as const;\nconsole.log("test");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -450,20 +365,12 @@ describe("CodexProviderConfigurer", () => {
       expect(entry.matcher).toBe("startup|resume");
     });
 
-    test("hooks.json UserPromptSubmit entry has no matcher", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("hooks.json UserPromptSubmit entry has no matcher", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "format-reminder.ts"),
         `export const TRIGGER = ["prompt.submit"] as const;\nconsole.log("reminder");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -473,14 +380,7 @@ describe("CodexProviderConfigurer", () => {
       expect(entry.matcher).toBeUndefined();
     });
 
-    test("wrapper script handles PreToolUse with verbatim passthrough", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+    test("wrapper script handles PreToolUse with verbatim passthrough", async () => {      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const content = await Bun.file(join(testCodexHome, "shaka-hook-wrapper.ts")).text();
@@ -496,12 +396,7 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain("additionalContext");
     });
 
-    test("hooks.json handles multiple hooks across different events", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Create hooks for three different events
+    test("hooks.json handles multiple hooks across different events", async () => {      // Create hooks for three different events
       // Use unique filenames to avoid module-cache collisions with other tests
       await Bun.write(
         join(testShakaHome, "system", "hooks", "multi-start.ts"),
@@ -516,10 +411,7 @@ describe("CodexProviderConfigurer", () => {
         `export const TRIGGER = ["tool.before"] as const;\nexport const MATCHER = ["Bash", "Edit"] as const;\nconsole.log("validate");\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
@@ -533,14 +425,7 @@ describe("CodexProviderConfigurer", () => {
       expect(matchers).toEqual(["Bash", "Edit"]);
     });
 
-    test("install is idempotent (regenerates on every call)", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+    test("install is idempotent (regenerates on every call)", async () => {      const configurer = makeConfigurer();
 
       // Install twice
       await configurer.install({ shakaHome: testShakaHome });
@@ -555,12 +440,7 @@ describe("CodexProviderConfigurer", () => {
       expect(hooksJson.hooks).toBeDefined();
     });
 
-    test("installs skill symlinks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      // Create a skill directory with a SKILL.md
+    test("installs skill symlinks", async () => {      // Create a skill directory with a SKILL.md
       const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
       await Bun.write(join(skillDir, "SKILL.md"), "# council skill\n");
@@ -584,20 +464,12 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("agent TOML generation", () => {
-    test("install generates TOML files for non-hidden agents", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("install generates TOML files for non-hidden agents", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "Architect.md"),
         `---\nname: Architect\ndescription: Elite system design specialist\npermissions:\n  allow:\n    - "Bash"\n    - "Read(*)"\n    - "Write(*)"\n    - "Edit(*)"\nmode: subagent\n---\n\n# Core Identity\nYou are an elite system architect.\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const tomlPath = join(testCodexHome, "agents", "Architect.toml");
@@ -613,60 +485,36 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain("You are an elite system architect.");
     });
 
-    test("install skips agents with hidden: true", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("install skips agents with hidden: true", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "inference.md"),
         `---\nname: inference\ndescription: Internal inference agent\nhidden: true\npermissions:\n  deny:\n    - "Bash"\nmode: subagent\n---\n\nYou are a text-only inference assistant.\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const tomlPath = join(testCodexHome, "agents", "inference.toml");
       expect(await Bun.file(tomlPath).exists()).toBe(false);
     });
 
-    test("install maps deny permissions to read-only sandbox", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("install maps deny permissions to read-only sandbox", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "ReadOnly.md"),
         `---\nname: ReadOnly\ndescription: Read-only agent\npermissions:\n  deny:\n    - "Write(*)"\n    - "Edit(*)"\nmode: subagent\n---\n\nYou can only read.\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const content = await Bun.file(join(testCodexHome, "agents", "ReadOnly.toml")).text();
       expect(content).toContain('sandbox_mode = "read-only"');
     });
 
-    test("install uses TOML literal strings for developer_instructions", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("install uses TOML literal strings for developer_instructions", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "TestAgent.md"),
         `---\nname: TestAgent\ndescription: Test agent with backslashes\npermissions:\n  allow:\n    - "Bash"\n---\n\nRegex pattern: \\d+\\.\\d+\nCode: \`const x = "hello"\`\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       const content = await Bun.file(join(testCodexHome, "agents", "TestAgent.toml")).text();
@@ -675,12 +523,7 @@ describe("CodexProviderConfigurer", () => {
       expect(content).toContain("\\d+\\.\\d+");
     });
 
-    test("install generates TOML for multiple agents, skipping hidden", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("install generates TOML for multiple agents, skipping hidden", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "Engineer.md"),
         `---\nname: Engineer\ndescription: Principal engineer\npermissions:\n  allow:\n    - "Write(*)"\n    - "Edit(*)"\n---\n\nBuild things.\n`,
       );
@@ -693,10 +536,7 @@ describe("CodexProviderConfigurer", () => {
         `---\nname: inference\ndescription: Internal\nhidden: true\n---\n\nInternal only.\n`,
       );
 
-      const configurer = new CodexProviderConfigurer({
-        codexHome: testCodexHome,
-        runCommand: async () => ({ exitCode: 0, stderr: "" }),
-      });
+      const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
       expect(await Bun.file(join(testCodexHome, "agents", "Engineer.toml")).exists()).toBe(true);
@@ -704,12 +544,7 @@ describe("CodexProviderConfigurer", () => {
       expect(await Bun.file(join(testCodexHome, "agents", "inference.toml")).exists()).toBe(false);
     });
 
-    test("uninstall removes generated TOML files matching source agents", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("uninstall removes generated TOML files matching source agents", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "Architect.md"),
         `---\nname: Architect\ndescription: System architect\npermissions:\n  allow:\n    - "Write(*)"\n---\n\nArchitect things.\n`,
       );
@@ -727,12 +562,7 @@ describe("CodexProviderConfigurer", () => {
       expect(await Bun.file(join(testCodexHome, "agents", "Architect.toml")).exists()).toBe(false);
     });
 
-    test("uninstall does not remove non-shaka TOML files", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await mkdir(join(testCodexHome, "agents"), { recursive: true });
+    test("uninstall does not remove non-shaka TOML files", async () => {      await mkdir(join(testCodexHome, "agents"), { recursive: true });
       await Bun.write(
         join(testCodexHome, "agents", "my-custom-agent.toml"),
         'name = "my-custom-agent"\n',
@@ -750,12 +580,7 @@ describe("CodexProviderConfigurer", () => {
       );
     });
 
-    test("checkInstallation verifies TOML files exist for non-hidden agents", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("checkInstallation verifies TOML files exist for non-hidden agents", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "Engineer.md"),
         `---\nname: Engineer\ndescription: Engineer\npermissions:\n  allow:\n    - "Write(*)"\n---\n\nBuild.\n`,
       );
@@ -776,12 +601,7 @@ describe("CodexProviderConfigurer", () => {
       expect(status.agents.ok).toBe(true);
     });
 
-    test("checkInstallation reports missing TOML files", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("checkInstallation reports missing TOML files", async () => {      await Bun.write(
         join(testShakaHome, "system", "agents", "Engineer.md"),
         `---\nname: Engineer\ndescription: Engineer\npermissions:\n  allow:\n    - "Write(*)"\n---\n\nBuild.\n`,
       );
@@ -803,11 +623,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("installCommands (skeleton)", () => {
-    test("does not throw", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
+    test("does not throw", async () => {      const configurer = new CodexProviderConfigurer({ codexHome: testCodexHome });
       // Should not throw even with empty inputs
       await configurer.installCommands({
         commands: [],
@@ -817,11 +633,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("uninstall", () => {
-    test("removes hooks.json and wrapper script", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
+    test("removes hooks.json and wrapper script", async () => {      const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
         skillsDir: testSkillsDir,
         runCommand: async () => ({ exitCode: 0, stderr: "" }),
@@ -839,12 +651,7 @@ describe("CodexProviderConfigurer", () => {
       expect(await Bun.file(join(testCodexHome, "shaka-hook-wrapper.ts")).exists()).toBe(false);
     });
 
-    test("removes debounce scripts", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-
-      await Bun.write(
+    test("removes debounce scripts", async () => {      await Bun.write(
         join(testShakaHome, "system", "hooks", "session-end.ts"),
         `export const TRIGGER = ["session.end"] as const;\nconsole.log("end");\n`,
       );
@@ -864,11 +671,7 @@ describe("CodexProviderConfigurer", () => {
       expect(await Bun.file(join(testCodexHome, "shaka-debounce-worker.ts")).exists()).toBe(false);
     });
 
-    test("removes agent symlinks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      await Bun.write(join(testShakaHome, "system", "agents", "architect.md"), "# Architect\n");
+    test("removes agent symlinks", async () => {      await Bun.write(join(testShakaHome, "system", "agents", "architect.md"), "# Architect\n");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -891,11 +694,7 @@ describe("CodexProviderConfigurer", () => {
       expect(exists).toBe(false);
     });
 
-    test("removes skill symlinks", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const skillDir = join(testShakaHome, "system", "skills", "council");
+    test("removes skill symlinks", async () => {      const skillDir = join(testShakaHome, "system", "skills", "council");
       await mkdir(skillDir, { recursive: true });
       await Bun.write(join(skillDir, "SKILL.md"), "# council\n");
 
@@ -920,11 +719,7 @@ describe("CodexProviderConfigurer", () => {
       expect(exists).toBe(false);
     });
 
-    test("returns ok result even when nothing to uninstall", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
+    test("returns ok result even when nothing to uninstall", async () => {      const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
         skillsDir: testSkillsDir,
         runCommand: async () => ({ exitCode: 0, stderr: "" }),
@@ -935,11 +730,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("checkInstallation", () => {
-    test("reports missing hooks.json", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
+    test("reports missing hooks.json", async () => {      const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
         skillsDir: testSkillsDir,
         runCommand: async () => ({ exitCode: 0, stderr: "" }),
@@ -949,11 +740,7 @@ describe("CodexProviderConfigurer", () => {
       expect(status.hooks.issue).toContain("hooks.json");
     });
 
-    test("reports invalid hooks.json", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      await Bun.write(join(testCodexHome, "hooks.json"), "not valid json");
+    test("reports invalid hooks.json", async () => {      await Bun.write(join(testCodexHome, "hooks.json"), "not valid json");
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -965,11 +752,7 @@ describe("CodexProviderConfigurer", () => {
       expect(status.hooks.issue).toContain("parse");
     });
 
-    test("reports hooks.json missing hooks key", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      await Bun.write(join(testCodexHome, "hooks.json"), JSON.stringify({ other: true }));
+    test("reports hooks.json missing hooks key", async () => {      await Bun.write(join(testCodexHome, "hooks.json"), JSON.stringify({ other: true }));
 
       const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
@@ -981,11 +764,7 @@ describe("CodexProviderConfigurer", () => {
       expect(status.hooks.issue).toContain("hooks");
     });
 
-    test("reports missing wrapper script", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      // Write valid hooks.json but no wrapper
+    test("reports missing wrapper script", async () => {      // Write valid hooks.json but no wrapper
       await Bun.write(
         join(testCodexHome, "hooks.json"),
         JSON.stringify({ hooks: { SessionStart: [] } }),
@@ -1001,11 +780,7 @@ describe("CodexProviderConfigurer", () => {
       expect(status.hooks.issue).toContain("wrapper");
     });
 
-    test("returns all ok after successful install", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const configurer = new CodexProviderConfigurer({
+    test("returns all ok after successful install", async () => {      const configurer = new CodexProviderConfigurer({
         codexHome: testCodexHome,
         skillsDir: testSkillsDir,
         runCommand: async () => ({ exitCode: 0, stderr: "" }),
@@ -1022,11 +797,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("registerMcpServer", () => {
-    test("shells out to codex mcp add shaka", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      let capturedArgs: string[] = [];
+    test("shells out to codex mcp add shaka", async () => {      let capturedArgs: string[] = [];
       const mockRunCommand = async (args: string[]) => {
         capturedArgs = args;
         return { exitCode: 0, stderr: "" };
@@ -1041,11 +812,7 @@ describe("CodexProviderConfigurer", () => {
       expect(capturedArgs).toEqual(["codex", "mcp", "add", "shaka", "--", "shaka", "mcp", "serve"]);
     });
 
-    test("returns error when command fails", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const mockRunCommand = async (_args: string[]) => ({
+    test("returns error when command fails", async () => {      const mockRunCommand = async (_args: string[]) => ({
         exitCode: 1,
         stderr: "mcp add failed",
       });
@@ -1063,11 +830,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("unregisterMcpServer", () => {
-    test("shells out to codex mcp remove shaka", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      let capturedArgs: string[] = [];
+    test("shells out to codex mcp remove shaka", async () => {      let capturedArgs: string[] = [];
       const mockRunCommand = async (args: string[]) => {
         capturedArgs = args;
         return { exitCode: 0, stderr: "" };
@@ -1082,11 +845,7 @@ describe("CodexProviderConfigurer", () => {
       expect(capturedArgs).toEqual(["codex", "mcp", "remove", "shaka"]);
     });
 
-    test("returns error when command fails", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const mockRunCommand = async (_args: string[]) => ({
+    test("returns error when command fails", async () => {      const mockRunCommand = async (_args: string[]) => ({
         exitCode: 1,
         stderr: "mcp remove failed",
       });
@@ -1102,11 +861,7 @@ describe("CodexProviderConfigurer", () => {
       }
     });
 
-    test("ignores not-found errors", async () => {
-      const { CodexProviderConfigurer } = await import(
-        "../../../../src/providers/codex/configurer"
-      );
-      const mockRunCommand = async (_args: string[]) => ({
+    test("ignores not-found errors", async () => {      const mockRunCommand = async (_args: string[]) => ({
         exitCode: 1,
         stderr: "server not found",
       });

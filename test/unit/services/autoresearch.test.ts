@@ -37,7 +37,7 @@ import {
 import { isCleanExcept } from "../../../src/services/git";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
-const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false };
+const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false, pi: false };
 const RUNNER_STATE_FILES = ["autoresearch.jsonl", "autoresearch.meta.json"] as const;
 
 async function headSha(cwd: string): Promise<string> {

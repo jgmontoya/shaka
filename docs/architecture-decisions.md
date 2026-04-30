@@ -33,11 +33,11 @@ Decisions made during Shaka's development, capturing rationale and trade-offs.
 
 **Decision:** Flat four-layer structure:
 
-```text
+```pseudocode
 src/
 ├── domain/      # Pure types and functions (no I/O)
 ├── services/    # Business logic with Bun I/O
-├── providers/   # Claude Code / opencode abstraction
+├── providers/   # Claude Code / opencode / Codex / Pi abstraction
 └── commands/    # CLI handlers
 ```
 

@@ -4,6 +4,7 @@ import {
   parseClaudeCodeTranscript,
   parseCodexTranscript,
   parseOpencodeTranscript,
+  parsePiTranscript,
   truncateTranscript,
 } from "../../../src/memory/transcript";
 
@@ -387,6 +388,145 @@ describe("Transcript", () => {
       const input = `{"type":"event_msg","payload":{"type":"agent_message","message":"","phase":"commentary"}}`;
       const result = parseCodexTranscript(input);
       expect(result).toEqual([]);
+    });
+  });
+
+  describe("parsePiTranscript", () => {
+    // Pi session JSONL: header + message lines wrapping AgentMessage.
+    // Roles + top-level types verified by Exp 45 + 48.
+    test("parses a user message", () => {
+      const input = `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"hi"}],"timestamp":1}}`;
+      expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "hi" }]);
+    });
+
+    test("parses an assistant message with text and folds toolCall blocks", () => {
+      const input = `{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"text","text":"Reading file."},{"type":"toolCall","id":"c1","name":"read","arguments":"{}"}]}}`;
+      expect(parsePiTranscript(input)).toEqual([
+        { role: "assistant", content: "Reading file.\n[Tool: read]" },
+      ]);
+    });
+
+    test("emits branchSummary as assistant with [Branch Summary] prefix", () => {
+      const input = `{"type":"message","id":"m3","message":{"role":"branchSummary","content":[{"type":"text","text":"Branched at turn 5"}]}}`;
+      expect(parsePiTranscript(input)).toEqual([
+        { role: "assistant", content: "[Branch Summary] Branched at turn 5" },
+      ]);
+    });
+
+    test("emits compactionSummary as assistant with [Compaction Summary] prefix", () => {
+      const input = `{"type":"message","id":"m4","message":{"role":"compactionSummary","content":[{"type":"text","text":"Earlier turns summarised"}]}}`;
+      expect(parsePiTranscript(input)).toEqual([
+        { role: "assistant", content: "[Compaction Summary] Earlier turns summarised" },
+      ]);
+    });
+
+    test("skips toolResult, bashExecution, custom roles", () => {
+      const lines = [
+        `{"type":"message","id":"m1","message":{"role":"toolResult","content":[{"type":"text","text":"file contents"}]}}`,
+        `{"type":"message","id":"m2","message":{"role":"bashExecution","content":[{"type":"text","text":"ls output"}]}}`,
+        `{"type":"message","id":"m3","message":{"role":"custom","content":[{"type":"text","text":"extension data"}]}}`,
+      ].join("\n");
+      expect(parsePiTranscript(lines)).toEqual([]);
+    });
+
+    test("skips session header and other non-message top-level types", () => {
+      const lines = [
+        `{"type":"session","version":3,"id":"abc"}`,
+        `{"type":"compaction","at":1}`,
+        `{"type":"model_change","model":"sonnet"}`,
+        `{"type":"label","value":"v1"}`,
+      ].join("\n");
+      expect(parsePiTranscript(lines)).toEqual([]);
+    });
+
+    test("skips malformed JSON without throwing", () => {
+      const input = [
+        `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"valid"}]}}`,
+        `not valid json`,
+        `{"oops":"unterminated`,
+      ].join("\n");
+      expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "valid" }]);
+    });
+
+    test("does not abort when a message's content is the wrong shape", () => {
+      // JSON.parse output isn't type-safe; a message could ship `content`
+      // as an object or number if Pi's transcript format ever drifts. The
+      // parser must skip the malformed message rather than throw — losing
+      // one entry beats losing the whole transcript.
+      const input = [
+        `{"type":"message","id":"m1","message":{"role":"user","content":{"unexpected":"object"}}}`,
+        `{"type":"message","id":"m2","message":{"role":"user","content":[{"type":"text","text":"recovered"}]}}`,
+      ].join("\n");
+      expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "recovered" }]);
+    });
+
+    test("ignores roles that resolve to inherited Object.prototype methods", () => {
+      // `role` comes from JSON.parse — an attacker (or a malformed Pi
+      // transcript) could ship `role: "toString"` and an object lookup
+      // would resolve to `Object.prototype.toString`, then call it as a
+      // formatter. The lookup must reject prototype-chain hits.
+      const inheritedMethods = ["toString", "constructor", "hasOwnProperty", "valueOf"];
+      for (const role of inheritedMethods) {
+        const input = `{"type":"message","id":"m1","message":{"role":"${role}","content":[{"type":"text","text":"x"}]}}`;
+        expect(parsePiTranscript(input)).toEqual([]);
+      }
+    });
+
+    test("skips non-object items inside a message's content array", () => {
+      // Per-item shape isn't guaranteed either. `content: [null]` or
+      // `content: [1, "text"]` would crash on `block.type` access. Skip
+      // the bad items, keep the good ones.
+      const input = [
+        `{"type":"message","id":"m1","message":{"role":"user","content":[null,{"type":"text","text":"hello"},42]}}`,
+      ].join("\n");
+      expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "hello" }]);
+    });
+
+    test("assistant message with only a toolCall block produces [Tool: name] without leading newline", () => {
+      // Folding logic mixes text and toolCall parts with `\n` separators.
+      // A toolCall-only message must NOT emit "\n[Tool: bash]" (the
+      // separator would only matter if a text part preceded it).
+      const input = `{"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash","arguments":"{}"}]}}`;
+      expect(parsePiTranscript(input)).toEqual([
+        { role: "assistant", content: "[Tool: bash]" },
+      ]);
+    });
+
+    test("preserves leading and trailing whitespace in text blocks", () => {
+      // The Claude/Codex/opencode parsers all pass content through verbatim;
+      // Pi was the odd one out, eagerly trimming joined parts. Whitespace
+      // around code-block fences and indented-block prefixes carries
+      // semantic meaning for downstream consumers (search, knowledge-base
+      // compilation) — keep it.
+      const input = `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"\\n\\nhello\\n\\n"}]}}`;
+      expect(parsePiTranscript(input)).toEqual([
+        { role: "user", content: "\n\nhello\n\n" },
+      ]);
+    });
+
+    test("skips messages whose content array is empty after filtering", () => {
+      // After all filtering/folding, an empty content array yields an
+      // empty string. Emit nothing rather than `{ role: "user", content:
+      // "" }` — matches parseClaudeCodeTranscript's behavior for
+      // assistant messages that filter down to nothing.
+      const input = `{"type":"message","id":"m1","message":{"role":"user","content":[]}}`;
+      expect(parsePiTranscript(input)).toEqual([]);
+    });
+
+    test("parses a complete short Pi session", () => {
+      const lines = [
+        `{"type":"session","version":3,"id":"sess-1"}`,
+        `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"list files"}]}}`,
+        `{"type":"message","id":"m2","message":{"role":"assistant","content":[{"type":"text","text":"Running ls."},{"type":"toolCall","id":"c1","name":"bash","arguments":"{}"}]}}`,
+        `{"type":"message","id":"m3","message":{"role":"toolResult","content":[{"type":"text","text":"a.txt b.txt"}]}}`,
+        `{"type":"message","id":"m4","message":{"role":"assistant","content":[{"type":"text","text":"Two files."}]}}`,
+        `{"type":"compaction"}`,
+      ].join("\n");
+      expect(parsePiTranscript(lines)).toEqual([
+        { role: "user", content: "list files" },
+        { role: "assistant", content: "Running ls.\n[Tool: bash]" },
+        { role: "assistant", content: "Two files." },
+      ]);
     });
   });
 

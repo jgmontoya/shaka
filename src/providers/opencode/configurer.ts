@@ -135,6 +135,11 @@ export class OpencodeProviderConfigurer implements ProviderConfigurer {
     const result = await Bun.build({
       entrypoints: [pluginPath],
       throw: false,
+      // `@opencode-ai/plugin` is resolved by opencode's plugin runtime
+      // (~/.config/opencode/node_modules/), not at install time. Marking it
+      // external lets us syntax-check the generated plugin even when the
+      // host machine doesn't have the package on disk yet.
+      external: ["@opencode-ai/plugin"],
     });
 
     if (!result.success) {
@@ -237,6 +242,14 @@ export class OpencodeProviderConfigurer implements ProviderConfigurer {
 ${hooks.map((h) => ` *   - ${h.filename} (${h.event}${h.matchers ? `, matchers: ${h.matchers.join(", ")}` : ""})`).join("\n")}
  */
 
+// opencode tool args use a zod ZodRawShape (flat record of zod schemas),
+// not JSON Schema. Routing through @opencode-ai/plugin's re-export keeps us
+// pinned to the same zod major the host runtime uses (Exp 53 confirmed
+// JSON Schema args crash opencode with \`undefined is not an object
+// (evaluating 'n._zod.def')\`).
+import { tool } from "@opencode-ai/plugin";
+const z = tool.schema;
+
 const SHAKA_HOME = ${JSON.stringify(config.shakaHome)};
 const IDLE_SUMMARY_DELAY = 15_000;
 
@@ -329,6 +342,70 @@ async function runHookRaw(hookPath: string, input: unknown = {}): Promise<{ exit
 }
 
 /**
+ * Bridge to \`shaka tool <name>\` — runs a Shaka system or customizations tool
+ * and returns its stdout as the tool result. Tool defs live under
+ * \${shakaHome}/system/tools/ (canonical) and \${shakaHome}/customizations/tools/
+ * (overrides); \`shaka tool\` does the resolution + execution. This keeps tool
+ * code in one place across providers.
+ */
+// Honors SHAKA_BIN for the same reasons Pi's extension does — when Shaka
+// invokes opencode as a subprocess it can pin the bridge to its own binary;
+// integration tests use it to point at a stub on a private path.
+const SHAKA_BIN = process.env.SHAKA_BIN ?? "shaka";
+
+// Live-path budget. Generous enough for real \`inference\` calls (which can
+// take tens of seconds), tight enough that a hung subprocess never wedges
+// the model turn waiting for a tool result that won't come. Mirrors the
+// Pi extension's TOOL_TIMEOUT_MS.
+const TOOL_TIMEOUT_MS = 60_000;
+
+// SIGTERM is the polite ask; SIGKILL is the guarantee. A shaka subprocess
+// that traps or ignores SIGTERM would otherwise keep the model turn waiting
+// on proc.exited forever -- same escalation pattern as runAgentStep.
+const TOOL_KILL_GRACE_MS = 500;
+
+async function runShakaTool(name: string, args: Record<string, unknown>): Promise<string> {
+  try {
+    const proc = Bun.spawn([SHAKA_BIN, "tool", name], {
+      // Forward the install-time SHAKA_HOME so tool resolution targets the
+      // install this plugin was generated for, not whatever ambient
+      // environment opencode happens to be running under.
+      env: { ...process.env, SHAKA_HOME },
+      stdin: new Blob([JSON.stringify(args)]),
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let timedOut = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGTERM");
+      killTimer = setTimeout(() => proc.kill("SIGKILL"), TOOL_KILL_GRACE_MS);
+      killTimer.unref?.();
+    }, TOOL_TIMEOUT_MS);
+    try {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      if (timedOut) {
+        return \`Error: shaka tool \${name} timed out after \${TOOL_TIMEOUT_MS}ms\`;
+      }
+      if (exitCode !== 0) {
+        return \`Error: shaka tool \${name} exited \${exitCode}: \${stderr.trim()}\`;
+      }
+      return stdout;
+    } finally {
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    }
+  } catch (error) {
+    return \`Error: shaka tool \${name} spawn failed: \${error instanceof Error ? error.message : String(error)}\`;
+  }
+}
+
+/**
  * Check if a hook should run for a given tool.
  * Hooks without matchers run for all tools.
  * Hooks with matchers only run for matching tools.
@@ -401,6 +478,31 @@ ${
 }
 
   return {
+    // Shaka tools — surface our system tools (memory-search, inference) as
+    // native opencode custom tools so the model can call them mid-session.
+    // Execution shells to \`shaka tool <name>\`; tool defs live in one place
+    // (defaults/system/tools/) for every provider that wants to expose them.
+    tool: {
+      "memory-search": tool({
+        description:
+          "Search past session summaries and learnings for context, decisions, and work history.",
+        args: {
+          query: z.string().describe("Search query (case-insensitive)"),
+          category: z.string().optional().describe("Filter by learning category"),
+          cwd: z.string().optional().describe("Filter by working directory"),
+          type: z.enum(["session", "learning"]).optional().describe("Filter by result type"),
+        },
+        execute: async (args) => runShakaTool("memory-search", args as Record<string, unknown>),
+      }),
+      inference: tool({
+        description: "Run AI inference using available CLI tools.",
+        args: {
+          prompt: z.string().describe("The user prompt to send"),
+          systemPrompt: z.string().optional().describe("Optional system prompt"),
+        },
+        execute: async (args) => runShakaTool("inference", args as Record<string, unknown>),
+      }),
+    },
 ${
   userPromptHooks.length > 0
     ? `

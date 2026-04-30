@@ -32,7 +32,7 @@ function prompt(message: string): Promise<string> {
  * Returns null when interactive prompt is needed.
  */
 function resolveProvidersFromFlags(
-  options: { claude?: boolean; opencode?: boolean; codex?: boolean; all?: boolean },
+  options: { claude?: boolean; opencode?: boolean; codex?: boolean; pi?: boolean; all?: boolean },
   detected: DetectedProviders,
 ): ProviderName[] | null {
   // Map CLI flags to wanted provider names
@@ -61,7 +61,7 @@ function resolveProvidersFromFlags(
 
   if (selected.length === 0) {
     console.error("\nERROR: No selected providers are available.");
-    console.error("Install Claude Code, opencode, or Codex first.");
+    console.error("Install Claude Code, opencode, Codex, or Pi first.");
     process.exit(1);
   }
 
@@ -69,15 +69,53 @@ function resolveProvidersFromFlags(
 }
 
 /**
- * Interactive provider selection when no flags are given.
+ * Parse the user's response to the provider-selection prompt.
+ *
+ * Single index → that provider (`"1"` → `[available[0]]`).
+ *
+ * Returns a discriminated result so callers can distinguish good input from
+ * "show the error and exit" without throwing through I/O code.
  */
+export function parseProviderSelection(
+  input: string,
+  available: readonly ProviderName[],
+): { ok: true; providers: ProviderName[] } | { ok: false; error: string } {
+  const tokens = input.split(",").map((t) => t.trim());
+  const seen = new Set<ProviderName>();
+  const providers: ProviderName[] = [];
+  const append = (name: ProviderName): void => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    providers.push(name);
+  };
+
+  for (const token of tokens) {
+    // Strict numeric-only — `Number.parseInt` would otherwise let "1x"
+    // slip through as 1 and silently install the wrong subset.
+    if (!/^\d+$/.test(token)) return { ok: false, error: "invalid" };
+    const index = Number(token) - 1;
+    // The menu reserves one past the last provider as the "All" shortcut;
+    // expand it inline so it composes with comma-separated input. Don't
+    // early-return — keep validating the remaining tokens so junk past
+    // the shortcut still poisons the input.
+    if (index === available.length) {
+      for (const name of available) append(name);
+      continue;
+    }
+    const chosen = available[index];
+    if (chosen === undefined) return { ok: false, error: "invalid" };
+    append(chosen);
+  }
+  return { ok: true, providers };
+}
+
 async function promptProviderSelection(detected: DetectedProviders): Promise<ProviderName[]> {
   const allNames = getProviderNames();
   const available = allNames.filter((name) => detected[name]);
 
   if (available.length === 0) {
     console.error(
-      "ERROR: No AI providers detected. Install Claude Code, opencode, or Codex first.",
+      "ERROR: No AI providers detected. Install Claude Code, opencode, Codex, or Pi first.",
     );
     process.exit(1);
   }
@@ -109,20 +147,14 @@ async function promptProviderSelection(detected: DetectedProviders): Promise<Pro
 
   const choices = available.map((_, i) => String(i + 1));
   choices.push(String(available.length + 1));
-  const answer = await prompt(`Select [${choices.join("/")}]: `);
+  const answer = await prompt(`Select one or more (comma-separated) [${choices.join("/")}]: `);
 
-  const choiceIndex = Number.parseInt(answer, 10) - 1;
-  const chosen = available[choiceIndex];
-  if (chosen !== undefined) {
-    return [chosen];
-  }
-  if (choiceIndex === available.length) {
-    return available;
-  }
+  const result = parseProviderSelection(answer, available);
+  if (result.ok) return result.providers;
 
   const flagHints = allNames.map((n) => `--${n}`).join(", ");
   console.log(
-    `Invalid selection. Use ${choices.join(", ")}. (Or re-run with ${flagHints}, or --all)`,
+    `Invalid selection. Use ${choices.join(", ")} (comma-separated for multiple). (Or re-run with ${flagHints}, or --all)`,
   );
   process.exit(1);
 }
@@ -232,6 +264,7 @@ export function createInitCommand(): Command {
     .option("--claude", "Install hooks for Claude Code")
     .option("--opencode", "Install hooks for opencode")
     .option("--codex", "Install hooks for Codex")
+    .option("--pi", "Install hooks for Pi")
     .option("--all", "Install hooks for all detected providers")
     .option("--force", "Overwrite existing configuration")
     .option("--defaults", "Skip name prompts and use defaults")

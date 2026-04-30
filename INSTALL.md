@@ -9,6 +9,8 @@ Get Shaka running in under 5 minutes.
 - At least one AI coding assistant:
   - [Claude Code](https://claude.ai/download) (`claude` CLI)
   - [opencode](https://opencode.ai/) (`opencode` CLI)
+  - [Codex](https://github.com/openai/codex) (`codex` CLI)
+  - [Pi](https://pi.dev) (`pi` CLI — `bun add -g @mariozechner/pi-coding-agent`)
 
 ## Quick Start
 
@@ -49,7 +51,7 @@ shaka doctor
 
 5. **Copies default config** — Creates `~/.config/shaka/config.json` if it doesn't exist.
 
-6. **Detects providers** (Claude Code, opencode) and installs hooks for each.
+6. **Detects providers** (Claude Code, opencode, Codex, Pi) and installs hooks, tools, commands, skills, and agents for each one present.
 
 7. **Tracks version** — Writes `.shaka-version` in the shaka home directory.
 
@@ -59,7 +61,8 @@ shaka doctor
 shaka doctor
 ```
 
-Expected output:
+Expected output (simplified — actual output is more detailed; per-provider
+includes `Enabled`, `Hooks`, `Agents`, `Skills`, `Installed`, and `Commands`):
 
 ```text
 Shaka Doctor
@@ -79,9 +82,19 @@ Provider status:
     CLI installed: ✓ yes
     Hooks configured: ✓ yes
 
+  codex:
+    CLI installed: ✓ yes
+    Hooks configured: ✓ yes
+
+  pi:
+    CLI installed: ✓ yes
+    Hooks configured: ✓ yes
+
 ────────────────────────────────────────
 ✅ All systems operational.
 ```
+
+Doctor reports each detected provider on its own block. Pi gets an extra `Credentials: ✗ no (...)` line **only when** none of `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, or `~/.pi/agent/auth.json` is reachable — Pi has no first-run OAuth flow so Shaka surfaces this as an actionable warning. The line is omitted from healthy output.
 
 ## Configuration
 
@@ -95,10 +108,20 @@ Edit `~/.config/shaka/config.json` to customize:
   },
   "providers": {
     "claude": {
-      "enabled": true
+      "enabled": true,
+      "summarization_model": "auto"
     },
     "opencode": {
-      "enabled": true
+      "enabled": true,
+      "summarization_model": "auto"
+    },
+    "codex": {
+      "enabled": true,
+      "summarization_model": "auto"
+    },
+    "pi": {
+      "enabled": true,
+      "summarization_model": "auto"
     }
   },
   "assistant": {
@@ -203,11 +226,10 @@ shaka init
 Ensure the CLI is in your PATH:
 
 ```bash
-# Claude Code
-which claude
-
-# opencode
-which opencode
+which claude     # Claude Code
+which opencode   # opencode
+which codex      # Codex
+which pi         # Pi
 ```
 
 ### Hooks not firing
@@ -215,11 +237,17 @@ which opencode
 Check the provider-specific configuration:
 
 ```bash
-# Claude Code - check settings.json
+# Claude Code — hooks live in settings.json
 cat ~/.claude/settings.json | grep -A 10 hooks
 
-# opencode - check plugins directory
-ls -la .opencode/plugins/
+# opencode — plugin file
+ls -la ~/.config/opencode/plugins/shaka.ts
+
+# Codex — wrapper registered in config.toml
+grep -A 5 '\[hooks' ~/.codex/config.toml
+
+# Pi — generated extension
+ls -la ~/.pi/agent/extensions/shaka.ts
 ```
 
 ### Hook import errors
@@ -239,12 +267,18 @@ Or simply re-run `shaka init`, which handles this automatically.
 ## Uninstalling
 
 ```bash
-# Remove hooks from providers
-# Claude Code: Remove shaka entries from ~/.claude/settings.json
-# opencode: Delete .opencode/plugins/shaka.ts
+# The right way: let Shaka clean up its own artifacts per provider
+shaka uninstall                # interactive prompt: keep or delete user/customizations/memory
+shaka uninstall --keep-data    # remove hooks/tools/skills/agents/commands; keep user config + memory
+shaka uninstall --delete-data  # also wipe user/, customizations/, memory/
 
-# Remove Shaka configuration
-# system/ is a symlink — removing it doesn't delete the repo files
+# Manual fallback (only if `shaka uninstall` isn't available):
+#   Claude Code  → remove `shaka` entries from ~/.claude/settings.json
+#   opencode     → rm ~/.config/opencode/plugins/shaka.ts
+#   Codex        → remove `[mcp_servers.shaka]` + Shaka hook block from ~/.codex/config.toml
+#   Pi           → rm ~/.pi/agent/extensions/shaka.ts, ~/.pi/agent/prompts/shaka-*.md, and any ~/.pi/agent/skills/shaka-* entries
+
+# Remove Shaka configuration (system/ is a symlink — removing it doesn't delete the repo)
 rm ~/.config/shaka/system
 
 # Remove everything (warning: deletes your customizations and memory)
@@ -254,6 +288,6 @@ rm -rf ~/.config/shaka
 ## Next Steps
 
 - Edit `~/.config/shaka/user/user.md` to tell Shaka about yourself
-- Run `claude` or `opencode` and see the context injection in action
+- Run `claude`, `opencode`, `codex`, or `pi` and see the context injection in action
 - Explore `~/.config/shaka/system/` to understand available hooks and tools
 - Run `shaka update` periodically to get the latest framework updates

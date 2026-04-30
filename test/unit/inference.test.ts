@@ -31,6 +31,18 @@ describe("inference", () => {
         claude: false,
         opencode: false,
         codex: true,
+        pi: false,
+      });
+      expect(result).toBe(true);
+    });
+
+    test("returns true when pi is the only installed provider", async () => {
+      const { hasInferenceProvider } = await import("../../src/inference");
+      const result = await hasInferenceProvider({
+        claude: false,
+        opencode: false,
+        codex: false,
+        pi: true,
       });
       expect(result).toBe(true);
     });
@@ -41,6 +53,7 @@ describe("inference", () => {
         claude: false,
         opencode: false,
         codex: false,
+        pi: false,
       });
       expect(result).toBe(false);
     });
@@ -85,17 +98,293 @@ describe("inference", () => {
   });
 
   describe("inference()", () => {
-    test("error message names all three providers when none are available", async () => {
+    test("error message names all four providers when none are available", async () => {
       const { inference } = await import("../../src/inference");
       const result = await inference(
         { userPrompt: "test" },
-        { claude: false, opencode: false, codex: false },
+        { claude: false, opencode: false, codex: false, pi: false },
       );
       expect(result.success).toBe(false);
       expect(result.error).toContain("claude");
       expect(result.error).toContain("opencode");
       expect(result.error).toContain("codex");
+      expect(result.error).toContain("pi");
     });
+
+    test.skipIf(process.platform === "win32")(
+      "pins Pi inference to anthropic + full isolation flag set + SHAKA_PI_SUBAGENT env",
+      async () => {
+        // Pi inference must:
+        //  - pin --provider anthropic + --model anthropic/<id> (Pi defaults to google per Exp 42)
+        //  - disable EVERY discovery surface (Exp 47, 51 — per-resource isolation)
+        //  - replace the systemPrompt fully (Exp 45 — Pi's default embeds self-doc)
+        //  - set SHAKA_PI_SUBAGENT=true so the generated extension early-returns
+        //  - set PI_TELEMETRY=0 + PI_OFFLINE=1 to keep the call hermetic
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-argv-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const captureFile = join(root, "capture.txt");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          await Bun.write(
+            pi,
+            [
+              "#!/bin/sh",
+              `printf 'argv=%s\\n' "$*" > ${shellQuote(captureFile)}`,
+              `printf 'env_subagent=%s\\n' "$SHAKA_PI_SUBAGENT" >> ${shellQuote(captureFile)}`,
+              `printf 'env_telemetry=%s\\n' "$PI_TELEMETRY" >> ${shellQuote(captureFile)}`,
+              `printf 'env_offline=%s\\n' "$PI_OFFLINE" >> ${shellQuote(captureFile)}`,
+              "echo OK",
+              "",
+            ].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          await inference(
+            {
+              userPrompt: "test",
+              systemPrompt: "you are a classifier",
+              model: "anthropic/claude-sonnet-4-5",
+            },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          const captured = await Bun.file(captureFile).text();
+          // Provider/model pinning
+          expect(captured).toContain("--provider anthropic");
+          expect(captured).toContain("--model anthropic/claude-sonnet-4-5");
+          // Isolation flag set
+          expect(captured).toContain("--no-extensions");
+          expect(captured).toContain("--no-tools");
+          expect(captured).toContain("--no-session");
+          expect(captured).toContain("--no-skills");
+          expect(captured).toContain("--no-prompt-templates");
+          expect(captured).toContain("--no-context-files");
+          expect(captured).toContain("--offline");
+          // Print mode + system prompt. Token-bounded match on `-p` —
+          // `--provider anthropic` already contains `-p` as a substring,
+          // so a bare `toContain("-p")` would silently pass even if the
+          // print-mode flag got dropped.
+          expect(captured).toMatch(/(?:^|[\s=])-p(?:\s|$)/m);
+          expect(captured).toContain("--system-prompt");
+          expect(captured).toContain("you are a classifier");
+          // Env: full Pi isolation contract. PI_OFFLINE=1 was added in
+          // round-3 cycle-2 (provider-derive work) and assertion was
+          // missing here — a regression slipped through three review
+          // rounds before the bot's persistence caught it.
+          expect(captured).toContain("env_subagent=true");
+          expect(captured).toContain("env_telemetry=0");
+          expect(captured).toContain("env_offline=1");
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    // Coverage gap: spawnCLI's TERM → grace → KILL escalation is
+    // structurally testable but not behaviorally — the API doesn't
+    // expose the spawned PID, so we can't verify the process actually
+    // died vs. just that resolve fired. Mirrors runAgentStep's
+    // established pattern at src/domain/agent-execution.ts:160.
+    test.skipIf(process.platform === "win32")(
+      "Pi inference fails fast on an unknown model namespace instead of mismapping to anthropic",
+      async () => {
+        // Round-5 cycle 9 mapped unknown prefixes to "anthropic" by
+        // default. That recreates the contradictory-flag bug for inputs
+        // like `openrouter/anthropic/claude-...` — Pi gets
+        // `--provider anthropic --model openrouter/anthropic/...` and
+        // crashes. Surface a clean error before spawning Pi.
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-unknown-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          // Stub `pi` writes a sentinel so we can assert it was NEVER called.
+          const pi = join(binDir, "pi");
+          const sentinel = join(root, "pi-was-called.flag");
+          await Bun.write(
+            pi,
+            ["#!/bin/sh", `: > ${shellQuote(sentinel)}`, "exit 0", ""].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            {
+              userPrompt: "test",
+              systemPrompt: "system",
+              model: "openrouter/anthropic/claude-sonnet-4-5",
+            },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          expect(result.success).toBe(false);
+          if (!result.success) {
+            expect((result.error ?? "").toLowerCase()).toMatch(
+              /unsupported|unknown.*namespace|openrouter/,
+            );
+          }
+          expect(await Bun.file(sentinel).exists()).toBe(false);
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "Pi inference maps openai/<model> to Pi's openai-codex provider (Exp 48)",
+      async () => {
+        // Pi's actual provider name for OpenAI-backed models is
+        // "openai-codex" (verified Exp 48), not bare "openai". A naive
+        // prefix split would send Pi an unknown provider value.
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-codex-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const captureFile = join(root, "capture.txt");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          await Bun.write(
+            pi,
+            [
+              "#!/bin/sh",
+              `printf 'argv=%s\\n' "$*" > ${shellQuote(captureFile)}`,
+              "echo OK",
+              "",
+            ].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          await inference(
+            {
+              userPrompt: "test",
+              systemPrompt: "system",
+              model: "openai/gpt-5",
+            },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          const captured = await Bun.file(captureFile).text();
+          expect(captured).toContain("--provider openai-codex");
+          expect(captured).toContain("--model openai/gpt-5");
+          // Token-boundary regex catches both mid-argv and end-of-argv shapes —
+          // a literal substring miss would silently pass on the trailing case.
+          expect(captured).not.toMatch(/--provider\s+openai(?:\s|$)/m);
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "treats Pi exit-0-with-401 as inference failure (Exp 43)",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-401-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          await Bun.write(
+            pi,
+            `#!/bin/sh\nprintf '401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}\\n'\nexit 0\n`,
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "test" },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          expect(result.success).toBe(false);
+          if (!result.success) {
+            expect(result.error).toContain("401");
+            expect(result.error).toContain("authentication_error");
+          }
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "dispatches inference to Pi when only pi is detected",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          // Stub Pi binary returns plain text — exercises the parseResponse path.
+          await Bun.write(pi, "#!/bin/sh\nprintf 'OK\\n'\nexit 0\n");
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "test" },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          expect(result.success).toBe(true);
+          if (result.success) {
+            expect(result.text).toContain("OK");
+            expect(result.provider).toBe("pi-cli");
+          }
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     test.skipIf(process.platform === "win32")(
       "enforces timeout for OpenCode CLI inference",
@@ -120,7 +409,7 @@ describe("inference", () => {
           const start = performance.now();
           const result = await inference(
             { userPrompt: "slow", timeout: 25 },
-            { claude: false, opencode: true, codex: false },
+            { claude: false, opencode: true, codex: false, pi: false },
           );
           const elapsedMs = performance.now() - start;
 
@@ -170,7 +459,7 @@ describe("inference", () => {
           const { inference } = await import("../../src/inference");
           const result = await inference(
             { userPrompt: "slow", timeout: 1000 },
-            { claude: false, opencode: true, codex: false },
+            { claude: false, opencode: true, codex: false, pi: false },
           );
 
           expect(result.success).toBe(false);
@@ -229,7 +518,7 @@ describe("inference", () => {
       const { resolveInferenceAttempts } = await import("../../src/inference");
       const attempts = await resolveInferenceAttempts(
         { userPrompt: "hi" },
-        { claude: true, opencode: true, codex: false },
+        { claude: true, opencode: true, codex: false, pi: false },
       );
 
       expect(attempts.length).toBe(2);
@@ -260,7 +549,7 @@ describe("inference", () => {
       const { resolveInferenceAttempts } = await import("../../src/inference");
       const attempts = await resolveInferenceAttempts(
         { userPrompt: "hi", model: "opus" },
-        { claude: true, opencode: true, codex: false },
+        { claude: true, opencode: true, codex: false, pi: false },
       );
 
       // Explicit model wins for every attempt — config is ignored entirely.
@@ -273,7 +562,7 @@ describe("inference", () => {
       const { resolveInferenceAttempts } = await import("../../src/inference");
       const attempts = await resolveInferenceAttempts(
         { userPrompt: "hi" },
-        { claude: false, opencode: true, codex: false },
+        { claude: false, opencode: true, codex: false, pi: false },
       );
 
       expect(attempts.length).toBe(1);
@@ -284,7 +573,7 @@ describe("inference", () => {
       const { resolveInferenceAttempts } = await import("../../src/inference");
       const attempts = await resolveInferenceAttempts(
         { userPrompt: "hi" },
-        { claude: false, opencode: false, codex: false },
+        { claude: false, opencode: false, codex: false, pi: false },
       );
 
       expect(attempts).toEqual([]);
@@ -313,7 +602,7 @@ describe("inference", () => {
       const { resolveInferenceAttempts } = await import("../../src/inference");
       const attempts = await resolveInferenceAttempts(
         { userPrompt: "hi", provider: "opencode" },
-        { claude: true, opencode: true, codex: false },
+        { claude: true, opencode: true, codex: false, pi: false },
       );
 
       expect(attempts.length).toBe(2);

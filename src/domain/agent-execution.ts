@@ -5,11 +5,16 @@
  * this module runs the AI CLI with tools enabled and hooks active —
  * the agent can read/write files, run commands, etc.
  *
- * Claude/Codex: prompt piped via stdin to avoid ARG_MAX limits.
+ * Claude / Codex / Pi: prompt piped via stdin (avoids ARG_MAX and yargs
+ * `-`-prefix hazards). Pi additionally pins provider/model and scans stdout
+ * for exit-0-on-error responses (Pi quirk verified in Exp 43).
  * opencode: prompt passed as positional argument (stdin not supported for `run`).
  */
 
 import { spawn } from "node:child_process";
+import { DEFAULT_PI_MODEL, DEFAULT_PI_PROVIDER } from "../providers/pi/defaults";
+import { detectProviderError } from "../providers/pi/error-detect";
+import { getProviderNames } from "../providers/registry";
 import {
   type DetectedProviders,
   type ProviderName,
@@ -47,11 +52,12 @@ export async function runAgentStep(
   if (detected.claude) return runClaude(options);
   if (detected.opencode) return runOpencode(options);
   if (detected.codex) return runCodex(options);
+  if (detected.pi) return runPi(options);
 
   return {
     exitCode: 1,
     stdout: "",
-    stderr: "No agent provider available. Install claude, opencode, or codex CLI.",
+    stderr: `No agent provider available. Install ${getProviderNames().join(", ")} CLI.`,
     provider: null,
     timedOut: false,
   };
@@ -85,6 +91,32 @@ function runCodex(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
   const sandboxFlag = bypass ? "--dangerously-bypass-approvals-and-sandbox" : "--full-auto";
   // `-` tells `codex exec` to read the prompt from stdin.
   return spawnWithStdin("codex", "codex", ["exec", sandboxFlag, "-"], opts.prompt, opts);
+}
+
+/**
+ * Run via Pi CLI in print mode. The runner pins provider/model because Pi
+ * defaults to Google (Exp 42) and bare model patterns route nondeterministically
+ * (Exp 43). Prompt comes via stdin to dodge the `-`-prefix yargs hazard
+ * (`feedback_argv_prompts_need_double_dash.md`); Pi merges piped stdin into
+ * its initial-prompt slot in print mode (Exp 42).
+ *
+ * Pi exits 0 even when the provider returns 4xx/5xx (Exp 43) — wrap the spawn
+ * to surface those failures as runner errors via `detectProviderError`.
+ */
+async function runPi(opts: AgentExecutionOptions): Promise<AgentExecutionResult> {
+  const args = ["-p", "--provider", DEFAULT_PI_PROVIDER, "--model", DEFAULT_PI_MODEL];
+  const result = await spawnWithStdin("pi", "pi", args, opts.prompt, opts);
+  if (result.exitCode === 0) {
+    const providerError = detectProviderError(result.stdout);
+    if (providerError) {
+      return {
+        ...result,
+        exitCode: providerError.code,
+        stderr: result.stderr ? `${result.stderr}\n${providerError.body}` : providerError.body,
+      };
+    }
+  }
+  return result;
 }
 
 function appendTimeoutSentinel(stderr: string, timeoutMs: number | undefined): string {

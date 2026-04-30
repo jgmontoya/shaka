@@ -22,9 +22,25 @@ function hasArgReferences(body: string): boolean {
   return /\$ARGUMENTS|\$\d+/.test(stripped);
 }
 
+/**
+ * Pi recognizes additional bash-style arg expansions: `$@` (all args),
+ * `${@:N}` (drop the first N-1), `${@:N:L}` (slice). Only `compileForPi`
+ * uses this — claude/opencode/codex don't understand `$@`, so for them the
+ * conservative `hasArgReferences` is correct.
+ */
+function hasPiArgReferences(body: string): boolean {
+  const stripped = body.replace(/!`[^`]*`/g, "");
+  return /\$ARGUMENTS|\$\d+|\$@|\$\{@:\d+(?::\d+)?\}/.test(stripped);
+}
+
 /** Append $ARGUMENTS to body if no argument references are present. */
 function autoAppendArguments(body: string): string {
   return hasArgReferences(body) ? body : `${body}\n\n$ARGUMENTS`;
+}
+
+/** Pi-aware variant — preserves bodies whose only arg refs are `$@` / `${@:N}` / `${@:N:L}`. */
+function autoAppendArgumentsPi(body: string): string {
+  return hasPiArgReferences(body) ? body : `${body}\n\n$ARGUMENTS`;
 }
 
 /**
@@ -52,7 +68,7 @@ function buildFrontmatter(fields: Record<string, unknown>): string {
 /** Merge base command fields with provider-specific overrides. */
 function applyOverrides(
   command: DiscoveredCommand,
-  provider: "claude" | "opencode" | "codex",
+  provider: "claude" | "opencode" | "codex" | "pi",
 ): CommandFields {
   const overrides = command.providers?.[provider];
   if (!overrides) return command;
@@ -153,6 +169,36 @@ export function compileForOpencode(command: DiscoveredCommand, targetDir: string
 
   return {
     path: join(targetDir, `${command.name}.md`),
+    content: frontmatter + body,
+  };
+}
+
+/**
+ * Compile a Shaka command to a Pi prompt template.
+ *
+ * Pi natively supports `$1, $2, $@, $ARGUMENTS, ${@:N}, ${@:N:L}` (Exp 46),
+ * so existing argument refs in the body pass through untouched.
+ * `autoAppendArgumentsPi` only appends a fresh `$ARGUMENTS` when no
+ * Pi-recognized arg ref is present — same shape as the claude/opencode/
+ * codex compilers above, but matches Pi's wider arg-syntax set. Pi also
+ * accepts `argument-hint` in frontmatter, unlike opencode.
+ *
+ * The `shaka-` prefix on the filename keeps Shaka commands from colliding
+ * with user-installed templates that Pi auto-discovers from `~/.pi/agent/prompts`
+ * and ambient `.pi/prompts` paths (Exp 47 + 51).
+ */
+export function compileForPi(command: DiscoveredCommand, targetDir: string): CompiledCommand {
+  const fields = applyOverrides(command, "pi");
+  const body = autoAppendArgumentsPi(command.body);
+
+  const frontmatter = buildFrontmatter({
+    description: fields.description,
+    "argument-hint": fields.argumentHint,
+    model: fields.model,
+  });
+
+  return {
+    path: join(targetDir, `shaka-${command.name}.md`),
     content: frontmatter + body,
   };
 }

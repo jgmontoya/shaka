@@ -38,7 +38,7 @@ Worktree: /path/to/project.ar-cut-prime-count-from-80ms
 Branch:   autoresearch/cut-prime-count-from-80ms
 ```
 
-Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, or codex) with a setup agent seeded by the `autoresearch-setup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
+Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, codex, or pi) with a setup agent seeded by the `autoresearch-setup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
 
 - `autoresearch.md` — the spec (metric name, direction, unit, which benchmark is being wrapped)
 - `autoresearch.sh` — the executable harness that emits one `METRIC name=... value=... unit=...` line on stdout
@@ -53,7 +53,7 @@ Shaka then **validates the setup independently** — agent success text is never
 - `--wizard` — skip the agent-driven path entirely and use the original six-question wizard + TODO-template flow. Useful in environments without an installed agent provider, or if you prefer to author the setup by hand.
 - `--oneshot` — run the setup agent non-interactively (no TUI handoff). Useful for unattended queues, CI, or when your objective is unambiguous and you don't want the TTY round-trip. Combines with `--dry-run`; rejected in combination with `--wizard`.
 - `--dry-run` — run the interactive setup + validation but don't commit and don't enter the loop. Prints the worktree path and the generated `autoresearch.sh` for review; pick up later with `shaka autoresearch resume <slug>`. Rejected in combination with `--wizard`.
-- `--provider <name>` — force a specific provider (`claude`, `opencode`, or `codex`) when multiple are installed. Default resolution: claude → opencode → codex.
+- `--provider <name>` — force a specific provider (`claude`, `opencode`, `codex`, or `pi`) when multiple are installed. Default resolution: claude → opencode → codex → pi.
 
 ### When the default can't run
 
