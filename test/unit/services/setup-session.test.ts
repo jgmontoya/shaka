@@ -146,7 +146,9 @@ test("runSetupOneshot forces the selected provider via DetectedProviders overrid
   // detectInstalledProviders() and can silently pick a different backend.
   // Using a non-claude provider makes an unforced routing bug observable —
   // the captured DetectedProviders should have exactly one true flag.
-  const captured: { detected?: { claude: boolean; opencode: boolean; codex: boolean; pi: boolean } }[] = [];
+  const captured: {
+    detected?: { claude: boolean; opencode: boolean; codex: boolean; pi: boolean };
+  }[] = [];
   const fakeRunAgent = (async (
     _opts: { prompt: string; cwd?: string; timeout?: number },
     detected?: { claude: boolean; opencode: boolean; codex: boolean; pi: boolean },

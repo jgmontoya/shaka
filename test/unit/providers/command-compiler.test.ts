@@ -316,15 +316,20 @@ describe("compileForPi", () => {
       body: "Apply $1 to $2 with all=$@ first=$ARGUMENTS slice=${@:2:3}",
     });
     const result = compileForPi(cmd, targetDir);
-    expect(result.content).toContain(
-      "Apply $1 to $2 with all=$@ first=$ARGUMENTS slice=${@:2:3}",
-    );
+    expect(result.content).toContain("Apply $1 to $2 with all=$@ first=$ARGUMENTS slice=${@:2:3}");
   });
 
   test("auto-appends $ARGUMENTS when no arg references", () => {
     const cmd = makeCommand({ body: "Just do something" });
     const result = compileForPi(cmd, targetDir);
     expect(result.content).toContain("Just do something\n\n$ARGUMENTS");
+  });
+
+  test("does not auto-append when $ARGUMENTS is already present", () => {
+    const cmd = makeCommand({ body: "Do: $ARGUMENTS" });
+    const result = compileForPi(cmd, targetDir);
+    const bodyPart = result.content.split("---\n").slice(-1)[0] ?? "";
+    expect(bodyPart.match(/\$ARGUMENTS/g)?.length).toBe(1);
   });
 
   test("does not auto-append when only Pi-native $@ is present", () => {
@@ -361,5 +366,6 @@ describe("compileForPi", () => {
     expect(result.content).toContain("description: Pi-specific description");
     expect(result.content).toContain("model: anthropic/claude-haiku-4.5");
     expect(result.content).not.toContain("Base description");
+    expect(result.content).not.toContain("anthropic/claude-sonnet-4-5");
   });
 });

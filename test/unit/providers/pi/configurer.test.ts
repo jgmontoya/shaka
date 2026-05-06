@@ -1,8 +1,18 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { PiProviderConfigurer } from "../../../../src/providers/pi/configurer";
+
+interface CapturedHandlers {
+  tool_call?: (event: unknown, ctx: unknown) => Promise<unknown>;
+}
+
+interface RegisteredTool {
+  name?: string;
+  execute?: (toolCallId: unknown, args: Record<string, unknown>) => Promise<unknown>;
+}
 
 describe("PiProviderConfigurer", () => {
   // Per-test temp roots — never share a fixed path under $HOME because
@@ -27,6 +37,37 @@ describe("PiProviderConfigurer", () => {
       runSmokeLoad: noopSmokeLoad,
       ...overrides,
     });
+  }
+
+  async function loadInstalledExtension(
+    extensionPath: string,
+  ): Promise<{ handlers: CapturedHandlers; tools: RegisteredTool[] }> {
+    const handlers: CapturedHandlers = {};
+    const tools: RegisteredTool[] = [];
+    const mod = await import(`${pathToFileURL(extensionPath).href}?t=${Date.now()}`);
+    mod.default({
+      on(name: string, handler: (event: unknown, ctx: unknown) => unknown) {
+        (handlers as Record<string, unknown>)[name] = handler;
+      },
+      registerTool(tool: RegisteredTool) {
+        tools.push(tool);
+      },
+    });
+    return { handlers, tools };
+  }
+
+  function shellEscape(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+  }
+
+  function restoreEnv(savedEnv: NodeJS.ProcessEnv): void {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in savedEnv)) delete process.env[key];
+    }
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
   }
 
   beforeEach(async () => {
@@ -84,6 +125,71 @@ describe("PiProviderConfigurer", () => {
       expect(extensionContent).toContain("SHAKA_GENERATED_EXTENSION");
     });
 
+    test("installed extension embeds install-time shakaHome", async () => {
+      const configurer = createConfigurer();
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+      expect(result.ok).toBe(true);
+
+      const extensionContent = await Bun.file(join(testPiHome, "extensions", "shaka.ts")).text();
+      expect(extensionContent).toContain(
+        `const INSTALLED_SHAKA_HOME = ${JSON.stringify(testShakaHome)};`,
+      );
+    });
+
+    test.skipIf(process.platform === "win32")(
+      "installed extension forwards install-time shakaHome to hook and tool subprocesses",
+      async () => {
+        const configurer = createConfigurer();
+        const result = await configurer.install({
+          shakaHome: testShakaHome,
+          permissionMode: "apply",
+        });
+        expect(result.ok).toBe(true);
+
+        const extensionPath = join(testPiHome, "extensions", "shaka.ts");
+        const shakaBin = join(testRoot, "shaka-env-stub");
+        const envLog = join(testRoot, "shaka-env.log");
+        await Bun.write(
+          shakaBin,
+          [
+            "#!/bin/sh",
+            `printf '%s %s SHAKA_HOME=%s\\n' "$1" "$2" "$SHAKA_HOME" >> ${shellEscape(envLog)}`,
+            "cat >/dev/null",
+            "exit 0",
+            "",
+          ].join("\n"),
+        );
+        await chmod(shakaBin, 0o755);
+
+        const savedEnv = { ...process.env };
+        try {
+          process.env.SHAKA_BIN = shakaBin;
+          delete process.env.SHAKA_HOME;
+          delete process.env.XDG_CONFIG_HOME;
+          process.env.HOME = join(testRoot, "ambient-home");
+
+          const { handlers, tools } = await loadInstalledExtension(extensionPath);
+          await handlers.tool_call?.(
+            { toolName: "bash", input: {} },
+            { sessionManager: { id: "s" } },
+          );
+
+          const memorySearch = tools.find((tool) => tool.name === "memory-search");
+          expect(memorySearch).toBeDefined();
+          await memorySearch?.execute?.("call-1", { query: "anything" });
+
+          const log = await Bun.file(envLog).text();
+          expect(log).toContain(`hook tool.before SHAKA_HOME=${testShakaHome}`);
+          expect(log).toContain(`tool memory-search SHAKA_HOME=${testShakaHome}`);
+        } finally {
+          restoreEnv(savedEnv);
+        }
+      },
+    );
+
     test("translates each system agent into a shaka-agent-<name>/SKILL.md", async () => {
       // Pi has no native agent registry; the MVP path (pi.md Phase 5) is to
       // present each Shaka agent as a skill so it shows up in Pi's slash UI
@@ -109,10 +215,7 @@ describe("PiProviderConfigurer", () => {
 
     test("symlinks each installed third-party skill with the shaka- prefix", async () => {
       await mkdir(`${testShakaHome}/skills/my-custom-skill`, { recursive: true });
-      await Bun.write(
-        `${testShakaHome}/skills/my-custom-skill/SKILL.md`,
-        "# my-custom-skill\n",
-      );
+      await Bun.write(`${testShakaHome}/skills/my-custom-skill/SKILL.md`, "# my-custom-skill\n");
 
       const configurer = createConfigurer();
       const result = await configurer.install({
@@ -121,9 +224,9 @@ describe("PiProviderConfigurer", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-my-custom-skill/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-my-custom-skill/SKILL.md`).exists()).toBe(
+        true,
+      );
     });
 
     test("install refuses to overwrite a non-Shaka extensions/shaka.ts (preserves user file)", async () => {
@@ -132,7 +235,8 @@ describe("PiProviderConfigurer", () => {
       // SHAKA_GENERATED_EXTENSION marker. A user who happened to name
       // their own Pi extension `shaka.ts` would have it clobbered on
       // install and never restored on uninstall.
-      const userContent = "// my own extension, not Shaka-generated\nexport default function () {}\n";
+      const userContent =
+        "// my own extension, not Shaka-generated\nexport default function () {}\n";
       await mkdir(`${testPiHome}/extensions`, { recursive: true });
       await Bun.write(`${testPiHome}/extensions/shaka.ts`, userContent);
 
@@ -194,9 +298,7 @@ describe("PiProviderConfigurer", () => {
 
       expect(first.ok).toBe(true);
       expect(second.ok).toBe(true);
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-be-creative/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-be-creative/SKILL.md`).exists()).toBe(true);
     });
 
     test("symlinks each system skill with the shaka- prefix", async () => {
@@ -295,7 +397,11 @@ describe("PiProviderConfigurer", () => {
       if (process.platform === "win32") return;
       const { runProcessWithTimeout } = await import("../../../../src/providers/pi/configurer");
       const proc = Bun.spawn(
-        [process.argv[0] ?? "bun", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+        [
+          process.argv[0] ?? "bun",
+          "-e",
+          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+        ],
         { stdout: "ignore", stderr: "pipe" },
       );
       const start = performance.now();
@@ -326,10 +432,10 @@ describe("PiProviderConfigurer", () => {
       // POSIX-only `sleep` binary so runProcessWithTimeout is exercised
       // cross-platform. process.argv[0] is the bun binary path on every OS
       // bun supports.
-      const proc = Bun.spawn(
-        [process.argv[0] ?? "bun", "-e", "setInterval(() => {}, 1000)"],
-        { stdout: "ignore", stderr: "pipe" },
-      );
+      const proc = Bun.spawn([process.argv[0] ?? "bun", "-e", "setInterval(() => {}, 1000)"], {
+        stdout: "ignore",
+        stderr: "pipe",
+      });
       const start = performance.now();
       const result = await runProcessWithTimeout(proc, 100);
       const elapsed = performance.now() - start;
@@ -449,7 +555,8 @@ describe("PiProviderConfigurer", () => {
     test("preserves a user's own extensions/shaka.ts (no Shaka marker)", async () => {
       // Pre-populate with a non-Shaka file at the same path.
       await mkdir(`${testPiHome}/extensions`, { recursive: true });
-      const userContent = "// my own extension, not Shaka-generated\nexport default function () {}\n";
+      const userContent =
+        "// my own extension, not Shaka-generated\nexport default function () {}\n";
       await Bun.write(`${testPiHome}/extensions/shaka.ts`, userContent);
 
       const configurer = createConfigurer();
@@ -510,9 +617,9 @@ describe("PiProviderConfigurer", () => {
       await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
 
       // Sanity: agent skill exists after install.
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        true,
+      );
 
       const result = await configurer.uninstall({
         shakaHome: testShakaHome,
@@ -520,9 +627,9 @@ describe("PiProviderConfigurer", () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists(),
-      ).toBe(false);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        false,
+      );
     });
 
     test("removes shaka- prefixed skill symlinks while leaving user skills alone", async () => {
@@ -534,10 +641,7 @@ describe("PiProviderConfigurer", () => {
 
       // Drop a user skill alongside the Shaka-installed one.
       await mkdir(`${testPiHome}/skills/my-personal-skill`, { recursive: true });
-      await Bun.write(
-        `${testPiHome}/skills/my-personal-skill/SKILL.md`,
-        "# my-personal-skill\n",
-      );
+      await Bun.write(`${testPiHome}/skills/my-personal-skill/SKILL.md`, "# my-personal-skill\n");
 
       const result = await configurer.uninstall({
         shakaHome: testShakaHome,
@@ -546,9 +650,7 @@ describe("PiProviderConfigurer", () => {
 
       expect(result.ok).toBe(true);
       expect(await Bun.file(`${testPiHome}/skills/shaka-tdd/SKILL.md`).exists()).toBe(false);
-      expect(
-        await Bun.file(`${testPiHome}/skills/my-personal-skill/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/my-personal-skill/SKILL.md`).exists()).toBe(true);
     });
   });
 
@@ -596,9 +698,9 @@ describe("PiProviderConfigurer", () => {
       const configurer = createConfigurer();
       await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
       // Sanity: Architect is installed.
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        true,
+      );
 
       // Drop Architect, add a different agent — simulates a release where
       // the agent set changes.
@@ -614,16 +716,34 @@ describe("PiProviderConfigurer", () => {
 
       await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
 
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists(),
-      ).toBe(false);
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-agent-Reviewer/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        false,
+      );
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Reviewer/SKILL.md`).exists()).toBe(
+        true,
+      );
       // User's agent untouched.
-      expect(
-        await Bun.file(`${testPiHome}/skills/my-personal-agent/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/my-personal-agent/SKILL.md`).exists()).toBe(true);
+    });
+
+    test("install prunes stale shaka-agent-<name>/ directories when the source agents directory is removed", async () => {
+      await Bun.write(
+        `${testShakaHome}/system/agents/Architect.md`,
+        "---\nname: Architect\n---\nBody.\n",
+      );
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        true,
+      );
+
+      await rm(`${testShakaHome}/system/agents`, { recursive: true, force: true });
+
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).exists()).toBe(
+        false,
+      );
     });
 
     test("install prunes only symlinks, never real shaka-<name>/ directories", async () => {
@@ -641,9 +761,9 @@ describe("PiProviderConfigurer", () => {
 
       // Real directory is preserved — not in the expected set, but also
       // not a symlink, so prune leaves it alone.
-      expect(
-        await Bun.file(`${testPiHome}/skills/shaka-orphan-realdir/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/shaka-orphan-realdir/SKILL.md`).exists()).toBe(
+        true,
+      );
     });
 
     test("install fails fast when a skill name collides across system/skills and skills", async () => {
@@ -689,9 +809,9 @@ describe("PiProviderConfigurer", () => {
       await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
       // Sanity: both shaka-* links exist.
       expect((await lstat(`${testPiHome}/skills/shaka-be-creative`)).isSymbolicLink()).toBe(true);
-      expect(
-        (await lstat(`${testPiHome}/skills/shaka-my-custom-skill`)).isSymbolicLink(),
-      ).toBe(true);
+      expect((await lstat(`${testPiHome}/skills/shaka-my-custom-skill`)).isSymbolicLink()).toBe(
+        true,
+      );
 
       // Drop one skill from each source tree and pre-place a user-owned
       // skill (no `shaka-` prefix) so we can confirm the prune is precisely
@@ -709,9 +829,7 @@ describe("PiProviderConfigurer", () => {
       await expect(lstat(`${testPiHome}/skills/shaka-be-creative`)).rejects.toThrow();
       await expect(lstat(`${testPiHome}/skills/shaka-my-custom-skill`)).rejects.toThrow();
       // User's skill untouched.
-      expect(
-        await Bun.file(`${testPiHome}/skills/my-personal-skill/SKILL.md`).exists(),
-      ).toBe(true);
+      expect(await Bun.file(`${testPiHome}/skills/my-personal-skill/SKILL.md`).exists()).toBe(true);
     });
 
     test("agents report not ok when an installed agent skill is missing", async () => {

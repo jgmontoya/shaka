@@ -45,6 +45,7 @@ const EXTENSION_MARKER = "SHAKA_GENERATED_EXTENSION";
 
 /** Smoke-load gate signal emitted by Pi on a broken extension (Exp 44). */
 const PI_LOAD_FAILURE_MARKER = "Failed to load extension";
+const SHAKA_HOME_PLACEHOLDER = "__SHAKA_INSTALLED_HOME__";
 
 export interface SmokeLoadResult {
   exitCode: number;
@@ -90,7 +91,7 @@ export class PiProviderConfigurer implements ProviderConfigurer {
   async install(config: InstallConfig): Promise<Result<void, Error>> {
     let extensionInstalled = false;
     try {
-      await this.installExtension();
+      await this.installExtension(config.shakaHome);
       extensionInstalled = true;
       const smokeLoadError = await this.smokeLoadExtension();
       if (smokeLoadError) throw smokeLoadError;
@@ -141,7 +142,7 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     return null;
   }
 
-  private async installExtension(): Promise<void> {
+  private async installExtension(shakaHome: string): Promise<void> {
     const extensionPath = join(this.piHome, "extensions", "shaka.ts");
     await mkdir(join(this.piHome, "extensions"), { recursive: true });
     // Refuse to clobber a user-owned extension at the same path.
@@ -158,7 +159,11 @@ export class PiProviderConfigurer implements ProviderConfigurer {
       }
     }
     const template = await Bun.file(EXTENSION_TEMPLATE_PATH).text();
-    await Bun.write(extensionPath, template);
+    const content = template.replace(
+      `const INSTALLED_SHAKA_HOME = ${JSON.stringify(SHAKA_HOME_PLACEHOLDER)};`,
+      `const INSTALLED_SHAKA_HOME = ${JSON.stringify(shakaHome)};`,
+    );
+    await Bun.write(extensionPath, content);
   }
 
   /**
@@ -204,10 +209,11 @@ export class PiProviderConfigurer implements ProviderConfigurer {
    * `shaka-agent-<name>` so it shows up in Pi's resource list (pi.md Phase 5).
    */
   private async installAgentSkills(agentsDir: string): Promise<void> {
-    if (!(await directoryExists(agentsDir))) return;
     await mkdir(this.skillsDir, { recursive: true });
 
-    const entries = await readdir(agentsDir, { withFileTypes: true });
+    const entries = (await directoryExists(agentsDir))
+      ? await readdir(agentsDir, { withFileTypes: true })
+      : [];
     const expected = new Set(
       entries
         .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))

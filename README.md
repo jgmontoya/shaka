@@ -226,7 +226,7 @@ Currently, two tools ship with Shaka:
 - **`inference.ts`** — Provider-agnostic AI inference (wraps Claude CLI, opencode CLI, Codex CLI, or Pi CLI)
 - **`memory-search.ts`** — Search session summaries by keyword
 
-Both tools are surfaced to every supported provider's model: Claude Code and Codex via Shaka's MCP server (`shaka mcp serve`), opencode via the generated plugin's `tool` field, and Pi via `pi.registerTool()` in the generated extension. Each call shells to `shaka tool <name>`, so tool definitions live in one place (`defaults/system/tools/`) regardless of which provider the model is running under.
+Both tools are surfaced to every supported provider's model: Claude Code and Codex via Shaka's MCP server (`shaka mcp serve`), opencode via the generated plugin's `tool` field, and Pi via `pi.registerTool()` in the generated extension. The generated opencode and Pi bridges shell out to `shaka tool <name>` when those tools run, while MCP providers execute the same tool definitions through the MCP server. Tool definitions live in one place (`defaults/system/tools/`) regardless of which provider the model is running under.
 
 Shaka adopts [opencode's tool format](https://opencode.ai/docs/custom-tools/) for consistency across providers. Tools are TypeScript files using the `tool()` helper:
 

@@ -324,6 +324,28 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     expect(events).toContain("hook prompt.submit");
   });
 
+  test("session.end fires once when idle end is followed by session shutdown", async () => {
+    const eventsLog = join(ROOT, "events.log");
+    await rm(eventsLog, { force: true });
+    await Bun.write(
+      SHAKA_BIN,
+      ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
+    );
+    await chmod(SHAKA_BIN, 0o755);
+
+    const { handlers } = await loadExtension();
+    const ctx = { sessionManager: { id: "sess-end-once", path: "/tmp/transcript.jsonl" } };
+
+    handlers.agent_end?.({ type: "agent_end" }, ctx);
+    await Bun.sleep(3_200);
+    handlers.session_shutdown?.({ type: "session_shutdown" }, ctx);
+    await Bun.sleep(100);
+
+    const events = await Bun.file(eventsLog).text();
+    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    expect(sessionEndCount).toBe(1);
+  });
+
   test("tool_call fails CLOSED when shaka binary can't be spawned", async () => {
     // The `tool.before` hook is the only safety layer for Pi's built-in
     // tools. If `spawnSync(shakaBin(), ...)` fails to launch (missing binary,

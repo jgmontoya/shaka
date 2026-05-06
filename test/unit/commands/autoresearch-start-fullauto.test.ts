@@ -14,10 +14,7 @@ import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStart } from "../../../src/commands/autoresearch";
-import {
-  type AutoresearchMeta,
-  readAutoresearchMeta,
-} from "../../../src/services/autoresearch";
+import { type AutoresearchMeta, readAutoresearchMeta } from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 async function sh(args: string[], cwd: string): Promise<void> {

@@ -147,69 +147,66 @@ afterEach(() => {
   }
 });
 
-describe.skipIf(process.platform === "win32")(
-  "opencode plugin — generated plugin contract",
-  () => {
-    test("exports ShakaPlugin and returns a Hooks object", async () => {
-      const ShakaPlugin = await loadPlugin();
-      expect(typeof ShakaPlugin).toBe("function");
-      const hooks = await ShakaPlugin({ directory: ROOT });
-      expect(typeof hooks).toBe("object");
-      expect(hooks).not.toBeNull();
-    });
+describe.skipIf(process.platform === "win32")("opencode plugin — generated plugin contract", () => {
+  test("exports ShakaPlugin and returns a Hooks object", async () => {
+    const ShakaPlugin = await loadPlugin();
+    expect(typeof ShakaPlugin).toBe("function");
+    const hooks = await ShakaPlugin({ directory: ROOT });
+    expect(typeof hooks).toBe("object");
+    expect(hooks).not.toBeNull();
+  });
 
-    test("exposes Shaka tools (memory-search, inference) on the Hooks `tool` field", async () => {
-      const ShakaPlugin = await loadPlugin();
-      const hooks = await ShakaPlugin({ directory: ROOT });
+  test("exposes Shaka tools (memory-search, inference) on the Hooks `tool` field", async () => {
+    const ShakaPlugin = await loadPlugin();
+    const hooks = await ShakaPlugin({ directory: ROOT });
 
-      const names = Object.keys(hooks.tool ?? {}).sort();
-      expect(names).toEqual(["inference", "memory-search"]);
+    const names = Object.keys(hooks.tool ?? {}).sort();
+    expect(names).toEqual(["inference", "memory-search"]);
 
-      const memorySearch = hooks.tool?.["memory-search"];
-      expect(memorySearch?.description).toContain("Search past session");
-      expect(typeof memorySearch?.execute).toBe("function");
-      // Shape of `args` (zod vs JSON Schema) is asserted at the unit level
-      // via substring on the generated source — the stub `tool.schema` Proxy
-      // here can't distinguish the two without pulling in real zod.
-    });
+    const memorySearch = hooks.tool?.["memory-search"];
+    expect(memorySearch?.description).toContain("Search past session");
+    expect(typeof memorySearch?.execute).toBe("function");
+    // Shape of `args` (zod vs JSON Schema) is asserted at the unit level
+    // via substring on the generated source — the stub `tool.schema` Proxy
+    // here can't distinguish the two without pulling in real zod.
+  });
 
-    test("memory-search execute() shells to `shaka tool memory-search` with JSON args on stdin", async () => {
-      await writeStubShaka();
-      const ShakaPlugin = await loadPlugin();
-      const hooks = await ShakaPlugin({ directory: ROOT });
-      const memorySearch = hooks.tool?.["memory-search"];
+  test("memory-search execute() shells to `shaka tool memory-search` with JSON args on stdin", async () => {
+    await writeStubShaka();
+    const ShakaPlugin = await loadPlugin();
+    const hooks = await ShakaPlugin({ directory: ROOT });
+    const memorySearch = hooks.tool?.["memory-search"];
 
-      const result = await memorySearch?.execute?.({ query: "anything" }, {});
+    const result = await memorySearch?.execute?.({ query: "anything" }, {});
 
-      // opencode's ToolResult is `string | { output, metadata }` —
-      // our generator returns the raw subprocess stdout as a string.
-      expect(typeof result).toBe("string");
-      expect(result).toContain('"tool":"memory-search"');
-      expect(result).toContain('"query":"anything"');
+    // opencode's ToolResult is `string | { output, metadata }` —
+    // our generator returns the raw subprocess stdout as a string.
+    expect(typeof result).toBe("string");
+    expect(result).toContain('"tool":"memory-search"');
+    expect(result).toContain('"query":"anything"');
 
-      // The bridge must have shelled out with the canonical `shaka tool`
-      // subcommand — same source-of-truth path as Pi and the MCP server.
-      const argv = await Bun.file(ARGV_LOG).text();
-      expect(argv.trim()).toBe("tool memory-search");
-    });
+    // The bridge must have shelled out with the canonical `shaka tool`
+    // subcommand — same source-of-truth path as Pi and the MCP server.
+    const argv = await Bun.file(ARGV_LOG).text();
+    expect(argv.trim()).toBe("tool memory-search");
+  });
 
-    test("forwards the install-time SHAKA_HOME to the spawned `shaka tool` subprocess", async () => {
-      // The plugin file is generated for one Shaka home, but the subprocess
-      // inherits whatever env opencode happens to be running with. Without
-      // an explicit forward, a non-default `shaka init` install would
-      // generate a plugin pinned to home A, but every tool call would
-      // re-resolve against the ambient env (often pointing at home B).
-      await writeStubShaka();
-      // Mutate ambient SHAKA_HOME so a missing forward would resolve to
-      // the wrong path. The afterEach restore handles cleanup.
-      process.env.SHAKA_HOME = join(ROOT, "ambient-not-installed-home");
+  test("forwards the install-time SHAKA_HOME to the spawned `shaka tool` subprocess", async () => {
+    // The plugin file is generated for one Shaka home, but the subprocess
+    // inherits whatever env opencode happens to be running with. Without
+    // an explicit forward, a non-default `shaka init` install would
+    // generate a plugin pinned to home A, but every tool call would
+    // re-resolve against the ambient env (often pointing at home B).
+    await writeStubShaka();
+    // Mutate ambient SHAKA_HOME so a missing forward would resolve to
+    // the wrong path. The afterEach restore handles cleanup.
+    process.env.SHAKA_HOME = join(ROOT, "ambient-not-installed-home");
 
-      const ShakaPlugin = await loadPlugin();
-      const hooks = await ShakaPlugin({ directory: ROOT });
-      await hooks.tool?.["memory-search"]?.execute?.({ query: "anything" }, {});
+    const ShakaPlugin = await loadPlugin();
+    const hooks = await ShakaPlugin({ directory: ROOT });
+    await hooks.tool?.["memory-search"]?.execute?.({ query: "anything" }, {});
 
-      const seenShakaHome = (await Bun.file(ENV_LOG).text()).trim();
-      expect(seenShakaHome).toBe(SHAKA_HOME);
-    });
-  },
-);
+    const seenShakaHome = (await Bun.file(ENV_LOG).text()).trim();
+    expect(seenShakaHome).toBe(SHAKA_HOME);
+  });
+});

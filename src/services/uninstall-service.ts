@@ -13,13 +13,15 @@ import { join } from "node:path";
 import { type Result, err, ok } from "../domain/result";
 import { readSymlinkTarget, removeLink } from "../platform/paths";
 import { createProvider, getProviderNames } from "../providers/registry";
-import type { ProviderName } from "../providers/types";
+import type { ProviderConfigurer, ProviderName } from "../providers/types";
 import { type DetectedProviders, detectInstalledProviders } from "./provider-detection";
 
 export interface UninstallServiceConfig {
   shakaHome: string;
   /** Override provider detection (for testing) */
   detectProviders?: () => DetectedProviders | Promise<DetectedProviders>;
+  /** Override provider construction at the external-provider boundary (for testing). */
+  createProvider?: (name: ProviderName) => ProviderConfigurer;
 }
 
 export interface UninstallOptions {
@@ -34,8 +36,14 @@ export interface UninstallOptions {
   only?: readonly ProviderName[];
 }
 
+interface ProviderUninstallStatus {
+  detected: boolean;
+  uninstalled: boolean;
+  error?: string;
+}
+
 export interface UninstallResult {
-  providers: Record<ProviderName, { detected: boolean; uninstalled: boolean }>;
+  providers: Record<ProviderName, ProviderUninstallStatus>;
   removed: string[];
   errors: string[];
 }
@@ -43,10 +51,12 @@ export interface UninstallResult {
 export class UninstallService {
   private readonly shakaHome: string;
   private readonly detectProviders: () => DetectedProviders | Promise<DetectedProviders>;
+  private readonly createProvider: (name: ProviderName) => ProviderConfigurer;
 
   constructor(config: UninstallServiceConfig) {
     this.shakaHome = config.shakaHome;
     this.detectProviders = config.detectProviders ?? detectInstalledProviders;
+    this.createProvider = config.createProvider ?? createProvider;
   }
 
   /**
@@ -64,10 +74,18 @@ export class UninstallService {
       if (!detected[name]) continue;
       if (scope && !scope.has(name)) continue;
 
-      const provider = createProvider(name);
-      const uninstallResult = await provider.uninstall({ shakaHome: this.shakaHome });
-      result[name].uninstalled = uninstallResult.ok;
-      await provider.unregisterMcpServer?.();
+      try {
+        const provider = this.createProvider(name);
+        const uninstallResult = await provider.uninstall({ shakaHome: this.shakaHome });
+        if (!uninstallResult.ok) {
+          result[name].error = uninstallResult.error.message;
+          continue;
+        }
+        await provider.unregisterMcpServer?.();
+        result[name].uninstalled = true;
+      } catch (error) {
+        result[name].error = error instanceof Error ? error.message : String(error);
+      }
     }
 
     return result;
@@ -196,7 +214,7 @@ export class UninstallService {
     const providers = await this.uninstallProviders(scopedOnly);
     const errors = scopedOnly
       .filter((name) => providers[name].detected && !providers[name].uninstalled)
-      .map((name) => `Failed to uninstall ${name} configuration`);
+      .map((name) => failureMessage(name, providers[name]));
     // Return err so the CLI exits non-zero. The full-uninstall path leaves
     // these in `errors` (alongside framework cleanup) — there's value in a
     // partial success there. For scoped, "remove THIS provider" either
@@ -216,7 +234,7 @@ export class UninstallService {
 
     for (const name of getProviderNames()) {
       if (providers[name].detected && !providers[name].uninstalled) {
-        errors.push(`Failed to uninstall ${name} configuration`);
+        errors.push(failureMessage(name, providers[name]));
       }
     }
 
@@ -250,4 +268,10 @@ export class UninstallService {
 
     return ok({ providers, removed, errors });
   }
+}
+
+function failureMessage(name: ProviderName, status: ProviderUninstallStatus): string {
+  return status.error
+    ? `Failed to uninstall ${name} configuration: ${status.error}`
+    : `Failed to uninstall ${name} configuration`;
 }

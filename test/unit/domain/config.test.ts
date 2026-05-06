@@ -395,6 +395,28 @@ describe("Config", () => {
       expect(model).toBe("openrouter/anthropic/claude-haiku-4.5");
     });
 
+    test("reads pi model from config", async () => {
+      const config: ShakaConfig = {
+        version: "0.1.0",
+        reasoning: { enabled: true },
+        permissions: { managed: true },
+        providers: {
+          claude: { enabled: false },
+          opencode: { enabled: false },
+          pi: {
+            enabled: false,
+            summarization_model: "google/gemini-2.5-flash",
+          },
+        },
+        assistant: { name: "Shaka" },
+        principal: { name: "User" },
+      };
+      await Bun.write(`${testShakaHome}/config.json`, JSON.stringify(config));
+
+      const model = await getSummarizationModel("pi", testShakaHome);
+      expect(model).toBe("google/gemini-2.5-flash");
+    });
+
     test("auto returns undefined", async () => {
       const config: ShakaConfig = {
         version: "0.1.0",

@@ -122,10 +122,7 @@ describe("agent-execution", () => {
         // Stub `pi` echoes its argv and stdin so the test can assert on what
         // the runner actually sent to the binary (provider/model pinning,
         // print mode, prompt via stdin).
-        await Bun.write(
-          pi,
-          "#!/bin/sh\nprintf 'args=%s\\n' \"$*\"\nprintf 'stdin='\ncat\n",
-        );
+        await Bun.write(pi, "#!/bin/sh\nprintf 'args=%s\\n' \"$*\"\nprintf 'stdin='\ncat\n");
         await chmod(pi, 0o755);
         process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 

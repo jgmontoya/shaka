@@ -135,9 +135,7 @@ async function loadCodexTranscript(
   }
 }
 
-async function loadPiTranscript(
-  transcriptPath: string | undefined,
-): Promise<NormalizedMessage[]> {
+async function loadPiTranscript(transcriptPath: string | undefined): Promise<NormalizedMessage[]> {
   if (!transcriptPath) {
     // Mirror loadClaudeTranscript's diagnostic — turns a miswired Pi hook
     // into a distinct stderr line instead of looking like an empty session.

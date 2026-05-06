@@ -87,6 +87,9 @@ interface EnvVars {
   USERPROFILE?: string;
 }
 
+const SHAKA_HOME_PLACEHOLDER = "__SHAKA_INSTALLED_HOME__";
+const INSTALLED_SHAKA_HOME = "__SHAKA_INSTALLED_HOME__";
+
 // Read per-call (not captured at module load) — same reasoning as
 // `isSubagent()` below: keeps integration tests honest when they swap
 // SHAKA_BIN between cases, and survives Pi's extension-cache reuse where
@@ -99,6 +102,7 @@ function shakaBin(): string {
 // extension can't import from src/ at jiti-load time, so the precedence is
 // inlined here.
 export function resolveExtensionShakaHome(env: EnvVars = process.env as EnvVars): string {
+  if (INSTALLED_SHAKA_HOME !== SHAKA_HOME_PLACEHOLDER) return INSTALLED_SHAKA_HOME;
   if (env.SHAKA_HOME) return env.SHAKA_HOME;
   if (env.XDG_CONFIG_HOME) return join(env.XDG_CONFIG_HOME, "shaka");
   const home = env.HOME || env.USERPROFILE;
@@ -108,6 +112,10 @@ export function resolveExtensionShakaHome(env: EnvVars = process.env as EnvVars)
 
 const SHAKA_HOME = resolveExtensionShakaHome();
 const ERROR_LOG = join(SHAKA_HOME, "state", "pi-extension-errors.log");
+
+function shakaEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, SHAKA_HOME };
+}
 
 // Primary recursion guard. Set true when Shaka invokes Pi as inference or as
 // a subagent. Read per-handler (not at module load) so the value reflects the
@@ -148,6 +156,7 @@ function runHook(eventName: string, payload: unknown): HookResult {
   const result = spawnSync(shakaBin(), ["hook", eventName], {
     input: JSON.stringify(payload),
     encoding: "utf8",
+    env: shakaEnv(),
     timeout: 30_000,
     // Hard kill on timeout — the default SIGTERM is catchable, so a hook
     // that ignores it would block this synchronous call indefinitely on
@@ -178,6 +187,7 @@ function runHook(eventName: string, payload: unknown): HookResult {
 function runHookDetached(eventName: string, payload: unknown): void {
   const child = spawn(shakaBin(), ["hook", eventName], {
     detached: true,
+    env: shakaEnv(),
     stdio: ["pipe", "ignore", "ignore"],
   });
   child.on("error", (err) => writeSidecarErrorLog(`runHookDetached:${eventName}`, err));
@@ -278,7 +288,10 @@ const TOOL_TIMEOUT_MS = 60_000;
 
 function runShakaTool(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   return new Promise((resolve) => {
-    const proc = spawn(shakaBin(), ["tool", name], { stdio: ["pipe", "pipe", "pipe"] });
+    const proc = spawn(shakaBin(), ["tool", name], {
+      env: shakaEnv(),
+      stdio: ["pipe", "pipe", "pipe"],
+    });
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -332,6 +345,7 @@ function runShakaTool(name: string, args: Record<string, unknown>): Promise<Tool
 
 export default function (pi: ExtensionAPI) {
   const sessionStartFired = new Set<string>();
+  const sessionEndFired = new Set<string>();
   const sessionEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   for (const tool of SHAKA_TOOLS) {
@@ -343,6 +357,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const sid = sessionId(ctx);
       const appends: string[] = [];
+      sessionEndFired.delete(sid);
 
       // session.start fires lazily on the first turn — eliminates the
       // queued-append state needed if we ran it in a separate session_start
@@ -449,6 +464,8 @@ export default function (pi: ExtensionAPI) {
 
   function fireSessionEnd(ctx: ExtensionContext, sid: string): void {
     sessionEndTimers.delete(sid);
+    if (sessionEndFired.has(sid)) return;
+    sessionEndFired.add(sid);
     try {
       runHookDetached("session.end", {
         session_id: sid,

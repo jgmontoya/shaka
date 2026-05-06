@@ -487,9 +487,7 @@ describe("Transcript", () => {
       // A toolCall-only message must NOT emit "\n[Tool: bash]" (the
       // separator would only matter if a text part preceded it).
       const input = `{"type":"message","id":"m1","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash","arguments":"{}"}]}}`;
-      expect(parsePiTranscript(input)).toEqual([
-        { role: "assistant", content: "[Tool: bash]" },
-      ]);
+      expect(parsePiTranscript(input)).toEqual([{ role: "assistant", content: "[Tool: bash]" }]);
     });
 
     test("preserves leading and trailing whitespace in text blocks", () => {
@@ -499,9 +497,7 @@ describe("Transcript", () => {
       // semantic meaning for downstream consumers (search, knowledge-base
       // compilation) — keep it.
       const input = `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"\\n\\nhello\\n\\n"}]}}`;
-      expect(parsePiTranscript(input)).toEqual([
-        { role: "user", content: "\n\nhello\n\n" },
-      ]);
+      expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "\n\nhello\n\n" }]);
     });
 
     test("skips messages whose content array is empty after filtering", () => {

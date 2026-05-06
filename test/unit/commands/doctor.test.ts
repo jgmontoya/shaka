@@ -79,7 +79,9 @@ describe("logProviderStatus — Pi credential surface", () => {
     // (not enabled)" for the install/agents/skills checks. The credential
     // warning should follow the same gate; otherwise a disabled provider
     // still complains about unrelated env state.
-    const pi = new PiProviderConfigurer({ runSmokeLoad: async () => ({ exitCode: 0, stderr: "" }) });
+    const pi = new PiProviderConfigurer({
+      runSmokeLoad: async () => ({ exitCode: 0, stderr: "" }),
+    });
     logProviderStatus(pi, true, OK_STATUS, false);
 
     const output = captured.join("\n");
@@ -103,7 +105,9 @@ describe("logProviderStatus — Pi credential surface", () => {
     // Symmetric guard for the disabled-provider test above. beforeEach
     // already clears both env vars and scopes PI_CODING_AGENT_DIR to an
     // empty dir, so the missing-creds condition is satisfied.
-    const pi = new PiProviderConfigurer({ runSmokeLoad: async () => ({ exitCode: 0, stderr: "" }) });
+    const pi = new PiProviderConfigurer({
+      runSmokeLoad: async () => ({ exitCode: 0, stderr: "" }),
+    });
     logProviderStatus(pi, true, OK_STATUS, true);
 
     const output = captured.join("\n");
