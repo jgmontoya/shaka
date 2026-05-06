@@ -129,6 +129,7 @@ export {
   ARCHIVE_FILE,
   parseLearnings,
   renderEntry,
+  renderEntryForContext,
   renderLearnings,
   loadLearnings,
   writeLearnings,

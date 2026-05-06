@@ -8,7 +8,7 @@ import {
 } from "../../../src/commands/context-measurement";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
-import { writeLearnings } from "../../../src/memory/learnings";
+import { renderEntryForContext, writeLearnings } from "../../../src/memory/learnings";
 import type { LearningEntry } from "../../../src/memory/learnings";
 
 const testDir = join(tmpdir(), `shaka-test-context-${process.pid}`);
@@ -234,6 +234,19 @@ describe("collectMeasurements", () => {
       expect(m.learnings.entryCount).toBe(0);
       expect(m.learnings.selectedCount).toBe(0);
       expect(m.learnings.chars).toBe(0);
+    });
+
+    test("reported size matches the context-rendered injection (no metadata)", async () => {
+      await setupMinimalHome(testDir);
+      const memoryDir = join(testDir, "memory");
+
+      const entry = makeEntry({ title: "One learning", body: "Some detail." });
+      await writeLearnings(memoryDir, [entry]);
+
+      const m = await collectMeasurements(testDir);
+
+      const expected = `## Learnings\n\n${renderEntryForContext(entry)}`.length;
+      expect(m.learnings.chars).toBe(expected);
     });
   });
 

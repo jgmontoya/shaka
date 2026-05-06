@@ -119,17 +119,28 @@ export function parseLearnings(content: string): LearningEntry[] {
 
 // --- Rendering ---
 
-/** Render a single entry to markdown format. */
+/**
+ * Render an entry for LLM context injection — title and body only, no metadata.
+ * The HTML comment carries bookkeeping (category, cwds, exposures) used by the
+ * parser and scorer; injecting it would just spend tokens on opaque session
+ * hashes and absolute paths the model can't act on.
+ */
+export function renderEntryForContext(entry: LearningEntry): string {
+  const title = `### ${entry.title}`;
+  return entry.body ? `${title}\n\n${entry.body}` : title;
+}
+
+/**
+ * Render an entry for on-disk storage in `learnings.md`.
+ * The metadata comment is load-bearing — `parseLearnings` round-trips through it.
+ */
 export function renderEntry(entry: LearningEntry): string {
   const cwdStr = entry.cwds.join(", ");
   const exposuresStr = entry.exposures.map((e) => `${e.date}@${e.sessionHash}`).join(",");
   const nonglobalStr = entry.nonglobal ? " | nonglobal" : "";
 
   const meta = `<!-- ${entry.category} | cwd: ${cwdStr} | exposures: ${exposuresStr}${nonglobalStr} -->`;
-  const title = `### ${entry.title}`;
-
-  if (!entry.body) return `${meta}\n\n${title}`;
-  return `${meta}\n\n${title}\n\n${entry.body}`;
+  return `${meta}\n\n${renderEntryForContext(entry)}`;
 }
 
 /** Render entries into a complete learnings.md file. */
@@ -235,7 +246,9 @@ export function selectLearnings(
   let chars = 0;
 
   for (const { entry } of scored) {
-    const size = renderEntry(entry).length;
+    // Probe against the context render — that's what actually ships to the LLM,
+    // and the budget should reflect the real injection size.
+    const size = renderEntryForContext(entry).length;
     if (chars + size > budget && selected.length > 0) break;
     selected.push(entry);
     chars += size;
