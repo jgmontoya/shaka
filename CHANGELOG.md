@@ -8,11 +8,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
-- **Pi as a fourth provider** — `shaka init --pi` brings [Pi](https://pi.dev) (`@mariozechner/pi-coding-agent`) into the same first-class slot as Claude Code, opencode, and Codex. Detection, install, agent-step dispatch (`runAgentStep`), inference (`callPiCLI`), session-end memory, autoresearch, and the doctor health check all recognise it. Pi sees Shaka as a single bridge file at `~/.pi/agent/extensions/shaka.ts` plus `shaka-`-prefixed skills, agents, and prompt templates — no edits to user-owned Pi resources, no settings.json mutation. The plan was pressure-tested through the validate-plan skill and grounded with ten empirical experiments (`experiments/{42..51}-pi-*`); every behaviour decision in `pi.md` cites the experiment that verifies it
-  - Inference uses the full per-resource isolation set Pi requires (`--no-extensions --no-tools --no-session --no-skills --no-prompt-templates --no-context-files --offline`) and replaces the system prompt entirely (Pi's default embeds Pi self-doc references). The generated extension short-circuits on `SHAKA_PI_SUBAGENT=true` as the primary recursion guard
-  - `runPi` and `callPiCLI` pin `--provider anthropic --model anthropic/<id>` (Pi defaults to Google) and scan stdout for the exit-0-with-error-body shape Pi emits on provider 4xx responses, surfacing those as runner failures instead of silent successes
-  - Install runs a smoke-load gate against the freshly written extension and aborts (removing the file) if Pi reports `Failed to load extension`. `shaka doctor` distinguishes "Pi installed but no credentials" from "Pi installed and authed", surfacing an actionable warning when neither `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, nor `~/.pi/agent/auth.json` is reachable
-- **Native tool bridges for Pi and opencode** — `inference` and `memory-search` are now first-class custom tools the model can call mid-session in every provider, not just Claude Code and Codex (which already had them via MCP). The new `shaka tool <name>` subcommand reads JSON args on stdin and prints the tool's result on stdout; the generated Pi extension calls it via `pi.registerTool()`, the generated opencode plugin exposes it via the plugin's `tool` field. Tool definitions stay in one place (`defaults/system/tools/`) regardless of which provider the model is running under. Two experiments closed each end of the bridge against live LLM round-trips: Exp 52 caught Pi's structured `{ content: [{ type, text }] }` result requirement (plain strings crash Pi's renderer); Exp 53 caught opencode's `z.ZodRawShape` args requirement (JSON Schema crashes opencode with `n._zod.def` undefined). Both fixes shipped; both bridges proven end-to-end. Both generated artifacts honor `SHAKA_BIN` so Shaka-spawned subprocesses can pin the bridge to a specific binary
+- **Pi as a fourth provider** — `shaka init --pi` brings [Pi](https://pi.dev) (`@earendil-works/pi-coding-agent`) into the same first-class slot as Claude Code, opencode, and Codex.
+  - Detection, install, `runAgentStep`, `callPiCLI`, session-end memory, autoresearch, and `shaka doctor` all recognise Pi.
+  - Pi sees Shaka as a generated extension at `~/.pi/agent/extensions/shaka.ts` plus `shaka-`-prefixed skills, agents, and prompt templates; Shaka does not edit user-owned Pi resources or mutate settings.
+  - The extension short-circuits on `SHAKA_PI_SUBAGENT=true` as the primary recursion guard.
+  - Inference uses Pi's full isolation set (`--no-extensions --no-tools --no-session --no-skills --no-prompt-templates --no-context-files --offline`) and replaces Pi's default system prompt.
+  - `runPi` and `callPiCLI` pin `--provider anthropic --model anthropic/<id>` and scan stdout for Pi's exit-0 provider-error responses so 4xx failures surface as runner failures.
+  - Install runs a smoke-load gate and removes the extension if Pi reports `Failed to load extension`; `shaka doctor` warns when neither `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, nor `~/.pi/agent/auth.json` is reachable.
+  - The plan was pressure-tested through the validate-plan skill and grounded with ten empirical experiments (`experiments/{42..51}-pi-*`); every behaviour decision in `pi.md` cites the verifying experiment.
+- **Native tool bridges for Pi and opencode** — `inference` and `memory-search` are now first-class custom tools the model can call mid-session in every provider, not just Claude Code and Codex via MCP.
+  - `shaka tool <name>` reads JSON args on stdin and prints the tool result on stdout.
+  - The generated Pi extension calls tools via `pi.registerTool()`; the generated opencode plugin exposes them via the plugin's `tool` field.
+  - Tool definitions stay in one place (`defaults/system/tools/`) regardless of provider.
+  - Exp 52 caught Pi's required `{ content: [{ type, text }] }` tool-result shape; Exp 53 caught opencode's required `z.ZodRawShape` args shape.
+  - Both generated artifacts honor `SHAKA_BIN` so Shaka-spawned subprocesses can pin the bridge to a specific binary.
 
 ## [0.11.0] — 2026-04-28
 

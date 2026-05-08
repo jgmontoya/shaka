@@ -5,6 +5,8 @@
  * Uses CLI tools that handle their own authentication:
  * 1. Claude CLI (claude -p) — if installed
  * 2. OpenCode CLI (opencode run) — if installed, handles local models too
+ * 3. Codex CLI (codex exec) — if installed
+ * 4. Pi CLI (pi -p) — if installed
  *
  * No API keys needed — CLIs manage auth. Install one and inference works.
  */
@@ -14,7 +16,7 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSummarizationModel } from "./domain/config";
-import { DEFAULT_PI_MODEL } from "./providers/pi/defaults";
+import { DEFAULT_PI_MODEL, piProviderForModel } from "./providers/pi/defaults";
 import { detectProviderError } from "./providers/pi/error-detect";
 import { getProviderNames } from "./providers/registry";
 import type { ProviderName } from "./providers/types";
@@ -335,24 +337,6 @@ async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult>
  * Pi exits 0 even when the provider returns 4xx/5xx (Exp 43); the helper
  * scans stdout for the error shape and surfaces it as an inference failure.
  */
-/**
- * Map a model identifier to Pi's `--provider` value. Pi's provider names
- * don't always match the model-namespace prefix — `openai/X` belongs to
- * `openai-codex` (verified Exp 48), not `openai`.
- *
- * Returns `undefined` for unknown prefixed namespaces (e.g.
- * `openrouter/...`) so the caller can fail fast rather than send Pi
- * contradictory `--provider`/`--model` flags. Bare names (no `/`)
- * default to `anthropic`, matching the historical Pi pin.
- */
-function piProviderForModel(model: string): string | undefined {
-  if (model.startsWith("anthropic/")) return "anthropic";
-  if (model.startsWith("openai-codex/")) return "openai-codex";
-  if (model.startsWith("openai/")) return "openai-codex";
-  if (model.startsWith("google/")) return "google";
-  return model.includes("/") ? undefined : "anthropic";
-}
-
 async function callPiCLI(options: InferenceOptions): Promise<InferenceResult> {
   // Pi defaults to google (Exp 42) and accepts other backends with explicit
   // `--provider`. The mapping isn't a naive prefix split (Exp 48: openai
@@ -382,7 +366,7 @@ async function callPiCLI(options: InferenceOptions): Promise<InferenceResult> {
     "--model",
     model,
   ];
-  if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
+  args.push("--system-prompt", options.systemPrompt ?? "");
 
   // SHAKA_PI_SUBAGENT short-circuits the generated extension's handlers as a
   // belt-and-braces guard against recursion if --no-extensions is ever
@@ -434,15 +418,20 @@ function armKillChain(
   isSettled: () => boolean,
 ): { timedOut: () => boolean; cancel: () => void } {
   let timedOut = false;
+  let exited = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
+  proc.on("exit", () => {
+    exited = true;
+  });
+  const hasExited = () => exited || proc.exitCode !== null || proc.signalCode !== null;
   if (timeout) {
     timer = setTimeout(() => {
-      if (isSettled()) return;
+      if (isSettled() || hasExited()) return;
       timedOut = true;
       proc.kill("SIGTERM");
       killTimer = setTimeout(() => {
-        if (!isSettled()) proc.kill("SIGKILL");
+        if (!isSettled() && !hasExited()) proc.kill("SIGKILL");
       }, 500);
       killTimer.unref?.();
     }, timeout);
@@ -482,6 +471,8 @@ function spawnCLI(
     } catch {
       // Pipe closed between spawn and write — close/error will resolve.
     }
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
     proc.stdout.on("data", (d) => {
       stdout += d;
     });
@@ -581,7 +572,8 @@ export function parseResponse(
  * 1. Claude CLI — cheapest with haiku default
  * 2. OpenCode CLI — local models or anthropic/haiku
  * 3. Codex CLI — gpt-5.4 default
- * 4. Pi CLI — anthropic-pinned, tried last
+ * 4. Pi CLI — provider comes from piProviderForModel(options.model ?? DEFAULT_PI_MODEL),
+ *    tried last
  *
  * All handle their own authentication — no API keys needed.
  *

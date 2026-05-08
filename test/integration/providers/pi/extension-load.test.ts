@@ -29,6 +29,7 @@ const BIN_DIR = join(ROOT, "bin");
 const SHAKA_BIN = join(BIN_DIR, "shaka");
 const STDIN_LOG = join(ROOT, "stdin.log");
 const ARGV_LOG = join(ROOT, "argv.log");
+let importCounter = 0;
 
 const savedEnv = { ...process.env };
 
@@ -66,7 +67,8 @@ async function importExtension(): Promise<PiExtensionModule> {
   // Cache-bust so the next test sees a fresh module instance (handlers are
   // captured per-load so the module-level `sessionStartFired` Set + timer Map
   // don't leak state across tests).
-  const url = new URL(`../../../../defaults/pi/extension.ts?t=${Date.now()}`, import.meta.url);
+  const cacheBust = `${Date.now()}-${++importCounter}`;
+  const url = new URL(`../../../../defaults/pi/extension.ts?t=${cacheBust}`, import.meta.url);
   return (await import(url.href)) as PiExtensionModule;
 }
 
@@ -190,6 +192,8 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     expect(toolCall).toBeUndefined();
     expect(beforeAgent).toBeUndefined();
     expect(toolResult).toBeUndefined();
+    expect(await Bun.file(ARGV_LOG).exists()).toBe(false);
+    expect(await Bun.file(STDIN_LOG).exists()).toBe(false);
   });
 
   test("registers Shaka tools (memory-search, inference) so the model can call them", async () => {
@@ -235,6 +239,64 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     expect(result.content[0]?.type).toBe("text");
     expect(result.content[0]?.text).toContain('"tool":"memory-search"');
     expect(result.content[0]?.text).toContain('"query":"anything"');
+  });
+
+  test("registered tool execute() decodes multibyte UTF-8 split across stdout chunks", async () => {
+    await Bun.write(
+      SHAKA_BIN,
+      [
+        "#!/usr/bin/env bun",
+        "await Bun.stdin.text();",
+        'if (process.argv[2] === "tool") {',
+        "  process.stdout.write(new Uint8Array([0xe2]));",
+        "  await Bun.sleep(20);",
+        "  process.stdout.write(new Uint8Array([0x82, 0xac]));",
+        "  process.exit(0);",
+        "}",
+        "process.exit(1);",
+        "",
+      ].join("\n"),
+    );
+    await chmod(SHAKA_BIN, 0o755);
+
+    const { tools } = await loadExtension();
+    const memorySearch = tools.find((t) => t.name === "memory-search");
+    expect(memorySearch).toBeDefined();
+
+    const result = (await memorySearch?.execute?.("call-1", { query: "anything" })) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    expect(result.content[0]?.text).toBe("€");
+  });
+
+  test("registered tool execute() reads SHAKA_HOME at call time", async () => {
+    const envLog = join(ROOT, "shaka-home.log");
+    await rm(envLog, { force: true });
+    await Bun.write(
+      SHAKA_BIN,
+      [
+        "#!/bin/sh",
+        `printf '%s\\n' "$SHAKA_HOME" >> ${shellEscape(envLog)}`,
+        "printf 'ok'",
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    await chmod(SHAKA_BIN, 0o755);
+
+    const firstHome = join(ROOT, "home-one");
+    const secondHome = join(ROOT, "home-two");
+    process.env.SHAKA_HOME = firstHome;
+    const { tools } = await loadExtension();
+    const memorySearch = tools.find((t) => t.name === "memory-search");
+    expect(memorySearch).toBeDefined();
+
+    await memorySearch?.execute?.("call-1", { query: "first" });
+    process.env.SHAKA_HOME = secondHome;
+    await memorySearch?.execute?.("call-2", { query: "second" });
+
+    expect((await Bun.file(envLog).text()).trim().split("\n")).toEqual([firstHome, secondHome]);
   });
 
   test("tool_call hook receives normalized tool name (Bash, not bash)", async () => {
@@ -337,6 +399,57 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     const ctx = { sessionManager: { id: "sess-end-once", path: "/tmp/transcript.jsonl" } };
 
     handlers.agent_end?.({ type: "agent_end" }, ctx);
+    await Bun.sleep(3_200);
+    handlers.session_shutdown?.({ type: "session_shutdown" }, ctx);
+    await Bun.sleep(100);
+
+    const events = await Bun.file(eventsLog).text();
+    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    expect(sessionEndCount).toBe(1);
+  });
+
+  test("two id-less session shutdowns each fire session.end", async () => {
+    const eventsLog = join(ROOT, "events.log");
+    await rm(eventsLog, { force: true });
+    await Bun.write(
+      SHAKA_BIN,
+      ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
+    );
+    await chmod(SHAKA_BIN, 0o755);
+
+    const { handlers } = await loadExtension();
+    const ctxNoId = { sessionManager: { path: "/tmp/transcript.jsonl" } };
+
+    handlers.session_shutdown?.({ type: "session_shutdown" }, ctxNoId);
+    handlers.session_shutdown?.({ type: "session_shutdown" }, ctxNoId);
+    await Bun.sleep(100);
+
+    const events = await Bun.file(eventsLog).text();
+    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    expect(sessionEndCount).toBe(2);
+  });
+
+  test("new turn cancels a pending idle session.end timer", async () => {
+    const eventsLog = join(ROOT, "events.log");
+    await rm(eventsLog, { force: true });
+    await Bun.write(
+      SHAKA_BIN,
+      ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
+    );
+    await chmod(SHAKA_BIN, 0o755);
+
+    const { handlers } = await loadExtension();
+    const ctx = { sessionManager: { id: "sess-continued", path: "/tmp/transcript.jsonl" } };
+
+    await handlers.before_agent_start?.(
+      { type: "before_agent_start", prompt: "first", systemPrompt: "" },
+      ctx,
+    );
+    handlers.agent_end?.({ type: "agent_end" }, ctx);
+    await handlers.before_agent_start?.(
+      { type: "before_agent_start", prompt: "second", systemPrompt: "" },
+      ctx,
+    );
     await Bun.sleep(3_200);
     handlers.session_shutdown?.({ type: "session_shutdown" }, ctx);
     await Bun.sleep(100);

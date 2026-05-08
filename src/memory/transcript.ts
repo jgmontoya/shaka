@@ -284,7 +284,7 @@ function normalizeOpencodeMessage(msg: OpencodeMessage): NormalizedMessage | nul
 // --- Pi JSONL Parser ---
 
 /**
- * Pi (`@mariozechner/pi-coding-agent`) writes session JSONL where each line
+ * Pi (`@earendil-works/pi-coding-agent`) writes session JSONL where each line
  * is one of: a session header, a `message` line wrapping an `AgentMessage`,
  * or a side-band record (`compaction`, `model_change`, ...). Empirical shape
  * sources: experiments 45 and 48.

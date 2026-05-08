@@ -252,6 +252,106 @@ describe("inference", () => {
     );
 
     test.skipIf(process.platform === "win32")(
+      "Pi inference fails fast on bare model aliases instead of guessing a provider",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-bare-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          const sentinel = join(root, "pi-was-called.flag");
+          await Bun.write(
+            pi,
+            ["#!/bin/sh", `: > ${shellQuote(sentinel)}`, "exit 0", ""].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            {
+              userPrompt: "test",
+              model: "claude-haiku-4.5",
+            },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          expect(result.success).toBe(false);
+          if (!result.success) {
+            expect(result.error ?? "").toContain("Unsupported Pi model namespace");
+            expect(result.error ?? "").toContain("claude-haiku-4.5");
+          }
+          expect(await Bun.file(sentinel).exists()).toBe(false);
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "Pi inference suppresses Pi's default system prompt when caller omits one",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-pi-empty-system-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const captureFile = join(root, "argv.txt");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const pi = join(binDir, "pi");
+          await Bun.write(
+            pi,
+            [
+              "#!/bin/sh",
+              "i=0",
+              'for arg in "$@"; do',
+              `  printf 'arg_%s=%s\\n' "$i" "$arg" >> ${shellQuote(captureFile)}`,
+              "  i=$((i + 1))",
+              "done",
+              "echo OK",
+              "",
+            ].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            {
+              userPrompt: "test",
+              model: "anthropic/claude-sonnet-4-5",
+            },
+            { claude: false, opencode: false, codex: false, pi: true },
+          );
+
+          expect(result.success).toBe(true);
+          const lines = (await Bun.file(captureFile).text()).trimEnd().split("\n");
+          const systemPromptIndex = lines.findIndex((line) => line.endsWith("=--system-prompt"));
+          expect(systemPromptIndex).toBeGreaterThanOrEqual(0);
+          expect(lines[systemPromptIndex + 1]).toMatch(/^arg_\d+=$/);
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
       "Pi inference maps openai/<model> to Pi's openai-codex provider (Exp 48)",
       async () => {
         // Pi's actual provider name for OpenAI-backed models is

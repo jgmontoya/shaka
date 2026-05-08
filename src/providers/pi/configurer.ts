@@ -1,9 +1,9 @@
 /**
  * Pi provider configuration.
  *
- * Pi (`@mariozechner/pi-coding-agent`) integrates via a generated extension
- * at `~/.pi/agent/extensions/shaka.ts` (copied verbatim from
- * `defaults/pi/extension.ts`) and per-skill symlinks under
+ * Pi (`@earendil-works/pi-coding-agent`) integrates via a generated extension
+ * at `~/.pi/agent/extensions/shaka.ts` (rendered from `defaults/pi/extension.ts`
+ * with install-time substitutions) and per-skill symlinks under
  * `~/.pi/agent/skills/`. The extension shells out to `shaka hook <event>` for
  * hook execution; Pi sees Shaka as a single bridge file plus a registry of
  * `shaka-`-prefixed resources.
@@ -11,16 +11,27 @@
  * Empirical sources for every behaviour decision: `experiments/{42..51}-pi-*`
  * (gitignored), summarised in pi.md and the project's reference memory.
  *
- * Shipped surface: extension copy + smoke-load gate, system + installed
+ * Shipped surface: extension generation + smoke-load gate, system + installed
  * skill symlinks, agent-as-skill translation (`shaka-agent-<name>`), Pi
  * prompt-template compilation, idempotent install/uninstall with user-file
  * preservation, native `pi.registerTool()` bridge for `inference` and
  * `memory-search`.
  */
 
-import { lstat, mkdir, readdir, rm, stat, unlink } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import {
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readlink,
+  rm,
+  stat,
+  symlink,
+  unlink,
+} from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import { type Result, err, ok } from "../../domain/result";
 import { resolveFromModule } from "../../platform/paths";
 import { installAssetSymlink, verifyAssetSymlink } from "../asset-installer";
@@ -34,7 +45,7 @@ import type {
 
 const PROMPTS_DIR_NAME = "prompts";
 
-/** Source of truth for the generated Pi extension — copied verbatim on install. */
+/** Source of truth for the generated Pi extension template. */
 const EXTENSION_TEMPLATE_PATH = resolveFromModule(
   import.meta.url,
   "../../../defaults/pi/extension.ts",
@@ -66,6 +77,15 @@ export type SmokeLoadRunner = (piHome: string) => Promise<SmokeLoadResult>;
  */
 const SHAKA_SKILL_PREFIX = "shaka-";
 
+interface PiRollbackSnapshot {
+  extensionContent: string | null;
+  backupDir: string;
+  skillsBackupDir: string;
+  skillEntries: Array<
+    { name: string; type: "copy" } | { name: string; type: "symlink"; target: string }
+  >;
+}
+
 export class PiProviderConfigurer implements ProviderConfigurer {
   readonly name = "pi" as const;
   readonly label = "Pi";
@@ -93,7 +113,9 @@ export class PiProviderConfigurer implements ProviderConfigurer {
 
   async install(config: InstallConfig): Promise<Result<void, Error>> {
     let extensionInstalled = false;
+    let rollbackSnapshot: PiRollbackSnapshot | undefined;
     try {
+      rollbackSnapshot = await this.captureRollbackSnapshot();
       await this.installExtension(config.shakaHome);
       extensionInstalled = true;
       const smokeLoadError = await this.smokeLoadExtension();
@@ -103,25 +125,103 @@ export class PiProviderConfigurer implements ProviderConfigurer {
         join(config.shakaHome, "skills"),
       ]);
       await this.installAgentSkills(join(config.shakaHome, "system", "agents"));
+      await this.discardRollbackSnapshot(rollbackSnapshot);
       return ok(undefined);
     } catch (e) {
-      // Atomicity: any post-extension failure rolls back the extension and
-      // any partially-installed shaka-* artifacts so the user isn't left
-      // with a half-installed Pi integration. Covers all three failure
+      // Atomicity: any post-extension failure restores the pre-install
+      // extension and shaka-* skill state, so a failed reinstall doesn't
+      // wipe the last known-good Pi integration. Covers all three failure
       // shapes uniformly: smoke-load returns an error, smoke-load throws,
       // or skill installation throws.
-      if (extensionInstalled) await this.rollbackInstall();
+      if (extensionInstalled && rollbackSnapshot) {
+        await this.rollbackInstall(rollbackSnapshot);
+      } else if (rollbackSnapshot) {
+        await this.discardRollbackSnapshot(rollbackSnapshot);
+      }
       return err(e instanceof Error ? e : new Error(String(e)));
     }
   }
 
-  private async rollbackInstall(): Promise<void> {
+  private async rollbackInstall(snapshot: PiRollbackSnapshot): Promise<void> {
     try {
-      await this.uninstallExtension();
-      await this.uninstallPrefixedSkills();
-      await this.uninstallAgentSkills();
+      await this.restoreExtensionSnapshot(snapshot.extensionContent);
+      await this.restoreSkillsSnapshot(snapshot);
     } catch {
       // Best-effort rollback — preserve the original install failure.
+    } finally {
+      await this.discardRollbackSnapshot(snapshot);
+    }
+  }
+
+  private async captureRollbackSnapshot(): Promise<PiRollbackSnapshot> {
+    const backupDir = await mkdtemp(join(tmpdir(), "shaka-pi-rollback-"));
+    const skillsBackupDir = join(backupDir, "skills");
+    const extensionPath = join(this.piHome, "extensions", "shaka.ts");
+    const extension = Bun.file(extensionPath);
+    const extensionContent = (await extension.exists()) ? await extension.text() : null;
+    const skillEntries: PiRollbackSnapshot["skillEntries"] = [];
+
+    if (await directoryExists(this.skillsDir)) {
+      await mkdir(skillsBackupDir, { recursive: true });
+      const entries = await readdir(this.skillsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.name.startsWith(SHAKA_SKILL_PREFIX)) continue;
+        const source = join(this.skillsDir, entry.name);
+        if (await isSymlink(source)) {
+          skillEntries.push({ name: entry.name, type: "symlink", target: await readlink(source) });
+          continue;
+        }
+        await cp(source, join(skillsBackupDir, entry.name), {
+          recursive: entry.isDirectory(),
+          force: true,
+          verbatimSymlinks: true,
+        });
+        skillEntries.push({ name: entry.name, type: "copy" });
+      }
+    }
+
+    return { extensionContent, backupDir, skillsBackupDir, skillEntries };
+  }
+
+  private async restoreExtensionSnapshot(content: string | null): Promise<void> {
+    const extensionPath = join(this.piHome, "extensions", "shaka.ts");
+    if (content === null) {
+      await rm(extensionPath, { force: true });
+      return;
+    }
+    await mkdir(join(this.piHome, "extensions"), { recursive: true });
+    await Bun.write(extensionPath, content);
+  }
+
+  private async restoreSkillsSnapshot(snapshot: PiRollbackSnapshot): Promise<void> {
+    if (!(await directoryExists(this.skillsDir)) && snapshot.skillEntries.length === 0) return;
+    await mkdir(this.skillsDir, { recursive: true });
+
+    const current = await readdir(this.skillsDir, { withFileTypes: true });
+    for (const entry of current) {
+      if (!entry.name.startsWith(SHAKA_SKILL_PREFIX)) continue;
+      await rm(join(this.skillsDir, entry.name), { recursive: true, force: true });
+    }
+
+    for (const entry of snapshot.skillEntries) {
+      const destination = join(this.skillsDir, entry.name);
+      if (entry.type === "symlink") {
+        await symlink(entry.target, destination, "junction");
+      } else {
+        await cp(join(snapshot.skillsBackupDir, entry.name), destination, {
+          recursive: true,
+          force: true,
+          verbatimSymlinks: true,
+        });
+      }
+    }
+  }
+
+  private async discardRollbackSnapshot(snapshot: PiRollbackSnapshot): Promise<void> {
+    try {
+      await rm(snapshot.backupDir, { recursive: true, force: true });
+    } catch {
+      // Snapshot cleanup is best-effort; it must not mask install outcome.
     }
   }
 
@@ -166,7 +266,7 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     if (!template.includes(placeholderAssignment)) {
       throw new Error("Failed to inject install-time SHAKA_HOME into Pi extension template");
     }
-    const content = template.replace(
+    const content = template.replaceAll(
       placeholderAssignment,
       `const INSTALLED_SHAKA_HOME = ${JSON.stringify(shakaHome)};`,
     );
@@ -255,16 +355,21 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     const promptsDir = join(this.piHome, PROMPTS_DIR_NAME);
     await mkdir(promptsDir, { recursive: true });
 
-    // Clean up commands from previous installs (manifest stores base names;
-    // the file lives at `shaka-<name>.md`).
-    for (const name of config.manifest.global) {
-      await rm(join(promptsDir, `shaka-${name}.md`), { force: true });
+    const compiledCommands = config.commands
+      // Pi v1 ships global commands only; scoped commands deferred.
+      .filter((command) => !command.cwd)
+      .map((command) => compileForPi(command, promptsDir));
+    const expected = new Set(compiledCommands.map((command) => basename(command.path)));
+
+    const entries = await readdir(promptsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      if (!entry.name.startsWith("shaka-") || !entry.name.endsWith(".md")) continue;
+      if (expected.has(entry.name)) continue;
+      await rm(join(promptsDir, entry.name), { force: true });
     }
 
-    for (const command of config.commands) {
-      // Pi v1 ships global commands only; scoped commands deferred.
-      if (command.cwd) continue;
-      const compiled = compileForPi(command, promptsDir);
+    for (const compiled of compiledCommands) {
       await Bun.write(compiled.path, compiled.content);
     }
   }
@@ -341,11 +446,20 @@ export class PiProviderConfigurer implements ProviderConfigurer {
   }
 
   async checkInstallation(config: InstallConfig): Promise<InstallationStatus> {
+    const systemSkillsDir = join(config.shakaHome, "system", "skills");
+    const installedSkillsDir = join(config.shakaHome, "skills");
+    const skills = await this.checkPrefixedSkills(systemSkillsDir);
+    const installedSkills = await this.checkPrefixedSkills(installedSkillsDir);
+    const staleSkills =
+      skills.ok && installedSkills.ok
+        ? await this.checkStalePrefixedSkills([systemSkillsDir, installedSkillsDir])
+        : { ok: true };
+
     return {
       hooks: await this.checkExtension(),
       agents: await this.checkAgentSkills(join(config.shakaHome, "system", "agents")),
-      skills: await this.checkPrefixedSkills(join(config.shakaHome, "system", "skills")),
-      installedSkills: await this.checkPrefixedSkills(join(config.shakaHome, "skills")),
+      skills: skills.ok ? staleSkills : skills,
+      installedSkills,
       // Pi commands are written by the separate `installCommands`
       // orchestration step. `install()` produces no command files, so the
       // contract here is "no broken state" — mirrors the codex configurer.
@@ -376,6 +490,24 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     return { ok: true };
   }
 
+  private async checkStalePrefixedSkills(
+    sourceDirs: readonly string[],
+  ): Promise<{ ok: boolean; issue?: string }> {
+    if (!(await directoryExists(this.skillsDir))) return { ok: true };
+    const sources = await collectPrefixedSources(sourceDirs);
+    const expected = new Set(sources.map(({ name }) => `${SHAKA_SKILL_PREFIX}${name}`));
+    const entries = await readdir(this.skillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!isManagedPrefixedSkill(entry.name)) continue;
+      if (expected.has(entry.name)) continue;
+      const path = join(this.skillsDir, entry.name);
+      if (await isSymlink(path)) {
+        return { ok: false, issue: `stale Shaka-managed skill: ${entry.name}` };
+      }
+    }
+    return { ok: true };
+  }
+
   /**
    * Verify each `<agentsDir>/<name>.md` has a `<skillsDir>/shaka-agent-<name>/SKILL.md`
    * file. Agents are installed as real directories (not symlinks) because Pi
@@ -383,12 +515,22 @@ export class PiProviderConfigurer implements ProviderConfigurer {
    * `installAgentSkills`.
    */
   private async checkAgentSkills(agentsDir: string): Promise<{ ok: boolean; issue?: string }> {
-    if (!(await directoryExists(agentsDir))) return { ok: true };
+    const expected = await this.checkExpectedAgentSkills(agentsDir);
+    if (!expected.ok) return expected;
+    return this.checkStaleAgentSkills(expected.names);
+  }
+
+  private async checkExpectedAgentSkills(
+    agentsDir: string,
+  ): Promise<{ ok: true; names: Set<string> } | { ok: false; issue: string }> {
+    const expected = new Set<string>();
+    if (!(await directoryExists(agentsDir))) return { ok: true, names: expected };
 
     const entries = await readdir(agentsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
       const agentName = entry.name.replace(/\.md$/, "");
+      expected.add(`shaka-agent-${agentName}`);
       const skillFile = join(this.skillsDir, `shaka-agent-${agentName}`, "SKILL.md");
       if (!(await Bun.file(skillFile).exists())) {
         return {
@@ -396,6 +538,25 @@ export class PiProviderConfigurer implements ProviderConfigurer {
           issue: `missing agent skill for ${agentName} at ${skillFile}`,
         };
       }
+    }
+
+    return { ok: true, names: expected };
+  }
+
+  private async checkStaleAgentSkills(
+    expected: ReadonlySet<string>,
+  ): Promise<{ ok: boolean; issue?: string }> {
+    if (!(await directoryExists(this.skillsDir))) return { ok: true };
+
+    const installed = await readdir(this.skillsDir, { withFileTypes: true });
+    for (const entry of installed) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.startsWith("shaka-agent-")) continue;
+      if (expected.has(entry.name)) continue;
+      return {
+        ok: false,
+        issue: `stale Shaka-managed agent skill: ${entry.name}`,
+      };
     }
     return { ok: true };
   }
@@ -523,6 +684,7 @@ export async function runProcessWithTimeout(
   try {
     return await Promise.race([completion, timeout]);
   } finally {
+    completion.catch(() => {});
     // SIGTERM trigger: cancel if completion won the race (process exited
     // on its own — timeout never fired).
     if (timer) clearTimeout(timer);
@@ -531,19 +693,33 @@ export async function runProcessWithTimeout(
 
 /**
  * Default smoke-load runner. Skips silently when `pi` isn't on PATH (test and
- * CI environments). Otherwise spawns `pi --offline -p ""` so Pi triggers
- * extension discovery + load against `<piHome>/extensions/shaka.ts` and
- * reports any error on stderr (Exp 44 — independent of `--verbose`).
+ * CI environments). Otherwise spawns `pi --offline -p ""` with tools,
+ * sessions, skills, prompt templates, and context files disabled so Pi
+ * triggers extension discovery + load against `<piHome>/extensions/shaka.ts`
+ * and reports any error on stderr (Exp 44 — independent of `--verbose`).
  * Wrapped in a wall-clock budget so a hung `pi` never blocks `shaka init`.
  */
 async function defaultSmokeLoadRunner(piHome: string): Promise<SmokeLoadResult> {
   if (!Bun.which("pi")) {
     return { exitCode: 0, stderr: "" };
   }
-  const proc = Bun.spawn(["pi", "--offline", "-p", "--no-tools", "--no-session", ""], {
-    env: { ...process.env, PI_CODING_AGENT_DIR: piHome, PI_TELEMETRY: "0" },
-    stdout: "ignore",
-    stderr: "pipe",
-  });
+  const proc = Bun.spawn(
+    [
+      "pi",
+      "--offline",
+      "-p",
+      "--no-tools",
+      "--no-session",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-context-files",
+      "",
+    ],
+    {
+      env: { ...process.env, PI_CODING_AGENT_DIR: piHome, PI_TELEMETRY: "0" },
+      stdout: "ignore",
+      stderr: "pipe",
+    },
+  );
   return runProcessWithTimeout(proc, SMOKE_LOAD_TIMEOUT_MS);
 }

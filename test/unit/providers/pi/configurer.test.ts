@@ -170,6 +170,21 @@ describe("PiProviderConfigurer", () => {
       expect(await Bun.file(join(testPiHome, "extensions", "shaka.ts")).exists()).toBe(false);
     });
 
+    test("returns an error result when rollback snapshot capture fails", async () => {
+      await mkdir(join(testPiHome, "extensions", "shaka.ts"), { recursive: true });
+      const configurer = createConfigurer();
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toBeInstanceOf(Error);
+      }
+    });
+
     test.skipIf(process.platform === "win32")(
       "installed extension forwards install-time shakaHome to hook and tool subprocesses",
       async () => {
@@ -313,6 +328,55 @@ describe("PiProviderConfigurer", () => {
       expect(await Bun.file(`${testPiHome}/skills/shaka-be-creative`).exists()).toBe(false);
     });
 
+    test("failed reinstall preserves the last known-good extension and skills", async () => {
+      await mkdir(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
+      await Bun.write(`${testShakaHome}/system/skills/be-creative/SKILL.md`, "# be-creative v1\n");
+      await Bun.write(
+        `${testShakaHome}/system/agents/Architect.md`,
+        "---\nname: Architect\n---\nBody v1.\n",
+      );
+
+      const configurer = createConfigurer();
+      const first = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+      expect(first.ok).toBe(true);
+      const installedExtension = await Bun.file(`${testPiHome}/extensions/shaka.ts`).text();
+      const installedAgent = await Bun.file(
+        `${testPiHome}/skills/shaka-agent-Architect/SKILL.md`,
+      ).text();
+
+      await rm(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
+      await mkdir(`${testShakaHome}/system/skills/tdd`, { recursive: true });
+      await Bun.write(`${testShakaHome}/system/skills/tdd/SKILL.md`, "# tdd v2\n");
+      await Bun.write(
+        `${testShakaHome}/system/agents/Architect.md`,
+        "---\nname: Architect\n---\nBody v2.\n",
+      );
+      await Bun.write(
+        `${testShakaHome}/system/agents/Reviewer.md`,
+        "---\nname: Reviewer\n---\nBody v2.\n",
+      );
+      // Make the new agent write fail after the reinstall has pruned and
+      // rewritten some managed artifacts.
+      await Bun.write(`${testPiHome}/skills/shaka-agent-Reviewer`, "blocker");
+
+      const second = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(second.ok).toBe(false);
+      expect(await Bun.file(`${testPiHome}/extensions/shaka.ts`).text()).toBe(installedExtension);
+      expect((await lstat(`${testPiHome}/skills/shaka-be-creative`)).isSymbolicLink()).toBe(true);
+      await expect(lstat(`${testPiHome}/skills/shaka-tdd`)).rejects.toThrow();
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Architect/SKILL.md`).text()).toBe(
+        installedAgent,
+      );
+      expect(await Bun.file(`${testPiHome}/skills/shaka-agent-Reviewer`).text()).toBe("blocker");
+    });
+
     test("is idempotent — re-running install leaves the same state", async () => {
       await mkdir(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
       await Bun.write(`${testShakaHome}/system/skills/be-creative/SKILL.md`, "# be-creative\n");
@@ -420,38 +484,40 @@ describe("PiProviderConfigurer", () => {
       expect(await Bun.file(`${testPiHome}/extensions/shaka.ts`).exists()).toBe(false);
     });
 
-    test("smoke-load escalates SIGTERM → SIGKILL so a SIGTERM-ignoring pi can't linger", async () => {
-      // Sibling-shape with opencode runShakaTool (round-5), spawnCLI
-      // (round-9), runAgentStep (original). Without escalation, a `pi`
-      // process that traps SIGTERM keeps running orphaned after the
-      // installer thinks it's done.
-      if (process.platform === "win32") return;
-      const { runProcessWithTimeout } = await import("../../../../src/providers/pi/configurer");
-      const proc = Bun.spawn(
-        [
-          process.argv[0] ?? "bun",
-          "-e",
-          "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
-        ],
-        { stdout: "ignore", stderr: "pipe" },
-      );
-      const start = performance.now();
-      const result = await runProcessWithTimeout(proc, 100);
-      const elapsed = performance.now() - start;
+    test.skipIf(process.platform === "win32")(
+      "smoke-load escalates SIGTERM → SIGKILL so a SIGTERM-ignoring pi can't linger",
+      async () => {
+        // Sibling-shape with opencode runShakaTool (round-5), spawnCLI
+        // (round-9), runAgentStep (original). Without escalation, a `pi`
+        // process that traps SIGTERM keeps running orphaned after the
+        // installer thinks it's done.
+        const { runProcessWithTimeout } = await import("../../../../src/providers/pi/configurer");
+        const proc = Bun.spawn(
+          [
+            process.argv[0] ?? "bun",
+            "-e",
+            "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)",
+          ],
+          { stdout: "ignore", stderr: "pipe" },
+        );
+        const start = performance.now();
+        const result = await runProcessWithTimeout(proc, 100);
+        const elapsed = performance.now() - start;
 
-      expect(result.exitCode).not.toBe(0);
-      expect(result.stderr).toMatch(/timed out/i);
-      // Resolved within timeout + grace + slop. Without SIGKILL escalation,
-      // the SIGTERM-trapping subprocess would hold the test forever (or
-      // until process exit), and `await proc.exited` inside the helper
-      // would never resolve.
-      expect(elapsed).toBeLessThan(2000);
-      // Confirm the process actually died (SIGKILL escapes the trap).
-      // proc.exited is a Promise<exitCode>; awaiting it should resolve
-      // promptly now that we asked for the kill chain.
-      const exitCode = await proc.exited;
-      expect(typeof exitCode).toBe("number");
-    });
+        expect(result.exitCode).not.toBe(0);
+        expect(result.stderr).toMatch(/timed out/i);
+        // Resolved within timeout + grace + slop. Without SIGKILL escalation,
+        // the SIGTERM-trapping subprocess would hold the test forever (or
+        // until process exit), and `await proc.exited` inside the helper
+        // would never resolve.
+        expect(elapsed).toBeLessThan(2000);
+        // Confirm the process actually died (SIGKILL escapes the trap).
+        // proc.exited is a Promise<exitCode>; awaiting it should resolve
+        // promptly now that we asked for the kill chain.
+        const exitCode = await proc.exited;
+        expect(typeof exitCode).toBe("number");
+      },
+    );
 
     test("smoke-load returns a timeout failure when pi hangs past the budget", async () => {
       // Hung `pi` processes (filesystem stalls, deadlock, etc.) used to
@@ -542,14 +608,23 @@ describe("PiProviderConfigurer", () => {
       expect(content).toContain("Stage and commit.");
     });
 
-    test("removes old commands listed in the manifest before writing new ones", async () => {
+    test("removes stale shaka prompt templates before writing current commands", async () => {
       const configurer = createConfigurer();
 
-      // Pre-populate a Shaka-installed prompt that should be removed.
+      // Pre-populate Shaka-installed prompts that should be removed even
+      // when the current manifest no longer mentions them.
       await mkdir(`${testPiHome}/prompts`, { recursive: true });
       await Bun.write(
         `${testPiHome}/prompts/shaka-old-command.md`,
         "---\ndescription: stale\n---\nold body\n",
+      );
+      await Bun.write(
+        `${testPiHome}/prompts/shaka-unmanifested.md`,
+        "---\ndescription: stale\n---\nold body\n",
+      );
+      await Bun.write(
+        `${testPiHome}/prompts/personal.md`,
+        "---\ndescription: mine\n---\npersonal body\n",
       );
 
       await configurer.installCommands({
@@ -565,7 +640,9 @@ describe("PiProviderConfigurer", () => {
       });
 
       expect(await Bun.file(`${testPiHome}/prompts/shaka-old-command.md`).exists()).toBe(false);
+      expect(await Bun.file(`${testPiHome}/prompts/shaka-unmanifested.md`).exists()).toBe(false);
       expect(await Bun.file(`${testPiHome}/prompts/shaka-fresh.md`).exists()).toBe(true);
+      expect(await Bun.file(`${testPiHome}/prompts/personal.md`).exists()).toBe(true);
     });
   });
 
@@ -888,6 +965,26 @@ describe("PiProviderConfigurer", () => {
       expect(status.agents.issue).toContain("Architect");
     });
 
+    test("agents report not ok when a stale agent skill remains after its source is removed", async () => {
+      await Bun.write(
+        `${testShakaHome}/system/agents/Architect.md`,
+        "---\nname: Architect\ndescription: x\n---\nBody.\n",
+      );
+
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+      await rm(`${testShakaHome}/system/agents/Architect.md`);
+
+      const status = await configurer.checkInstallation({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(status.agents.ok).toBe(false);
+      expect(status.agents.issue).toContain("stale Shaka-managed agent skill");
+      expect(status.agents.issue).toContain("shaka-agent-Architect");
+    });
+
     test("skills report ok after install writes shaka-<name> symlinks for system skills", async () => {
       await mkdir(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
       await Bun.write(`${testShakaHome}/system/skills/be-creative/SKILL.md`, "# be-creative\n");
@@ -944,6 +1041,40 @@ describe("PiProviderConfigurer", () => {
         permissionMode: "apply",
       });
 
+      expect(status.installedSkills.ok).toBe(true);
+    });
+
+    test("skills report not ok when a stale shaka-<name> skill remains after its source is removed", async () => {
+      await mkdir(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
+      await Bun.write(`${testShakaHome}/system/skills/be-creative/SKILL.md`, "# be-creative\n");
+
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+      await rm(`${testShakaHome}/system/skills/be-creative`, { recursive: true });
+
+      const status = await configurer.checkInstallation({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(status.skills.ok).toBe(false);
+      expect(status.skills.issue).toContain("stale Shaka-managed skill");
+      expect(status.skills.issue).toContain("shaka-be-creative");
+    });
+
+    test("system skills do not report installed-skill sources as stale", async () => {
+      await mkdir(`${testShakaHome}/skills/my-custom-skill`, { recursive: true });
+      await Bun.write(`${testShakaHome}/skills/my-custom-skill/SKILL.md`, "# my-custom-skill\n");
+
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+
+      const status = await configurer.checkInstallation({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(status.skills.ok).toBe(true);
       expect(status.installedSkills.ok).toBe(true);
     });
 

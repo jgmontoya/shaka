@@ -6,6 +6,10 @@ import { runAgentStep } from "../../../src/domain/agent-execution";
 
 const NO_PROVIDERS = { claude: false, opencode: false, codex: false, pi: false } as const;
 
+function shellEscape(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 describe("agent-execution", () => {
   test("module exports runAgentStep", () => {
     expect(typeof runAgentStep).toBe("function");
@@ -108,6 +112,53 @@ describe("agent-execution", () => {
   });
 
   test.skipIf(process.platform === "win32")(
+    "preserves UTF-8 provider output split across chunks",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-utf8-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
+      const binDir = join(root, "bin");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const codex = join(binDir, "codex");
+        await Bun.write(
+          codex,
+          [
+            "#!/bin/sh",
+            "printf '\\303'",
+            "sleep 0.05",
+            "printf '\\251\\n'",
+            "printf '\\342' >&2",
+            "sleep 0.05",
+            "printf '\\202\\254\\n' >&2",
+            "",
+          ].join("\n"),
+        );
+        await chmod(codex, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+        const result = await runAgentStep(
+          { prompt: "test" },
+          { claude: false, opencode: false, codex: true, pi: false },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toBe("é\n");
+        expect(result.stderr).toBe("€\n");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
     "dispatches to Pi when only pi is detected",
     async () => {
       const root = join(
@@ -145,6 +196,106 @@ describe("agent-execution", () => {
         expect(argv).toContain("-p");
         // Prompt arrives via stdin (avoids the `-`-prefix yargs hazard).
         expect(result.stdout).toContain("stdin=do the thing");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "derives Pi provider from the model namespace",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-pi-model-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
+      const binDir = join(root, "bin");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const pi = join(binDir, "pi");
+        await Bun.write(pi, "#!/bin/sh\nprintf 'args=%s\\n' \"$*\"\ncat >/dev/null\n");
+        await chmod(pi, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+        const result = await runAgentStep(
+          { prompt: "do the thing", piModel: "openai/gpt-5.1" },
+          { claude: false, opencode: false, codex: false, pi: true },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.provider).toBe("pi");
+        expect(result.stdout).toContain("--provider openai-codex");
+        expect(result.stdout).toContain("--model openai/gpt-5.1");
+      } finally {
+        if (oldPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = oldPath;
+        }
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  test("rejects Pi provider overrides without a matching model override", async () => {
+    const result = await runAgentStep(
+      { prompt: "do the thing", piProvider: "openai-codex" },
+      { claude: false, opencode: false, codex: false, pi: true },
+    );
+
+    expect(result.provider).toBe("pi");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("piModel");
+  });
+
+  test("rejects Pi provider overrides that disagree with the model namespace", async () => {
+    const result = await runAgentStep(
+      { prompt: "do the thing", piProvider: "anthropic", piModel: "openai/gpt-5.1" },
+      { claude: false, opencode: false, codex: false, pi: true },
+    );
+
+    expect(result.provider).toBe("pi");
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain("does not match");
+    expect(result.stderr).toContain("openai-codex");
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "rejects unsupported Pi model namespaces before spawning pi",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-agent-pi-unsupported-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      );
+      const binDir = join(root, "bin");
+      const invocationLog = join(root, "pi-invoked.log");
+      const oldPath = process.env.PATH;
+      try {
+        await mkdir(binDir, { recursive: true });
+        const pi = join(binDir, "pi");
+        await Bun.write(
+          pi,
+          `#!/bin/sh\nprintf 'invoked\\n' > ${shellEscape(invocationLog)}\nexit 0\n`,
+        );
+        await chmod(pi, 0o755);
+        process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+        const result = await runAgentStep(
+          { prompt: "do the thing", piModel: "openrouter/anthropic/claude-sonnet-4-5" },
+          { claude: false, opencode: false, codex: false, pi: true },
+        );
+
+        expect(result.provider).toBe("pi");
+        expect(result.exitCode).toBe(1);
+        expect(result.stderr).toContain("Unsupported Pi model namespace");
+        expect(result.stderr).toContain("openrouter/anthropic/claude-sonnet-4-5");
+        expect(await Bun.file(invocationLog).exists()).toBe(false);
       } finally {
         if (oldPath === undefined) {
           delete process.env.PATH;

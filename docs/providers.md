@@ -16,7 +16,7 @@ Shaka integrates with four AI coding assistants, treating each as a first-class 
 The four providers expose hooks differently:
 
 - **Claude Code** — subprocess hooks; `~/.claude/settings.json` lists `bun <hook-path>` per event.
-- **opencode** — in-process plugin; the generated `~/.config/opencode/plugins/shaka.ts` runs hook logic inline.
+- **opencode** — in-process plugin callbacks; canonical Shaka hook logic still runs through Shaka hook runners.
 - **Codex** — wrapper script registered in `~/.codex/config.toml`; spawns Shaka as a subprocess on each event.
 - **Pi** — generated TypeScript extension at `~/.pi/agent/extensions/shaka.ts` loaded via jiti; hook handlers shell to `shaka hook <event>` per fire.
 
@@ -33,8 +33,8 @@ Shaka hides this: hook logic lives once in `defaults/system/hooks/`, and each pr
        ▼                  ▼       ▼                  ▼
 ┌─────────────┐    ┌────────────┐ ┌───────────┐ ┌──────────┐
 │ Claude Code │    │  opencode  │ │   Codex   │ │    Pi    │
-│ subprocess  │    │ in-process │ │  wrapper  │ │extension │
-│ via         │    │ plugin     │ │ script    │ │via jiti  │
+│ subprocess  │    │ plugin     │ │  wrapper  │ │extension │
+│ via         │    │ callbacks  │ │ script    │ │via jiti  │
 │settings.json│    │            │ │           │ │          │
 └─────────────┘    └────────────┘ └───────────┘ └──────────┘
 ```
@@ -43,20 +43,20 @@ Shaka hides this: hook logic lives once in `defaults/system/hooks/`, and each pr
 
 Shaka uses canonical event names internally. Each provider maps them to its native shape:
 
-| Shaka Event     | Claude Code        | opencode                             | Codex                | Pi                      |
-| --------------- | ------------------ | ------------------------------------ | -------------------- | ----------------------- |
-| `session.start` | `SessionStart`     | Plugin load                          | Wrapper at first run | `before_agent_start`    |
-| `prompt.submit` | `UserPromptSubmit` | `experimental.chat.system.transform` | Wrapper invocation   | `before_agent_start`    |
-| `tool.before`   | `PreToolUse`       | `tool.execute.before`                | Wrapper invocation   | `tool_call`             |
-| `tool.after`    | `PostToolUse`      | `tool.execute.after`                 | Wrapper invocation   | `tool_result`           |
-| `session.end`   | `SessionEnd`       | `session.idle` (debounced)           | Wrapper teardown     | `agent_end` (debounced) |
+| Shaka Event     | Claude Code        | opencode                             | Codex                | Pi                                         |
+| --------------- | ------------------ | ------------------------------------ | -------------------- | ------------------------------------------ |
+| `session.start` | `SessionStart`     | Plugin load                          | Wrapper at first run | `before_agent_start`                       |
+| `prompt.submit` | `UserPromptSubmit` | `experimental.chat.system.transform` | Wrapper invocation   | `before_agent_start`                       |
+| `tool.before`   | `PreToolUse`       | `tool.execute.before`                | Wrapper invocation   | `tool_call`                                |
+| `tool.after`    | `PostToolUse`      | `tool.execute.after`                 | Wrapper invocation   | `tool_result`                              |
+| `session.end`   | `SessionEnd`       | `session.idle` (debounced)           | Wrapper teardown     | `agent_end` (debounced) + `session_shutdown` |
 
 ### How Hooks Are Installed
 
 - **Claude Code:** `shaka init` writes `~/.claude/settings.json` entries pointing at `bun <hook-path>` for each event.
-- **opencode:** `shaka init` generates `~/.config/opencode/plugins/shaka.ts` that calls hook logic in-process and shells to `shaka hook <event>` only for legacy subprocess paths.
+- **opencode:** `shaka init` generates `~/.config/opencode/plugins/shaka.ts` with native plugin callbacks that dispatch canonical hook logic via Shaka hook runners.
 - **Codex:** `shaka init` registers a wrapper script in `~/.codex/config.toml`; the wrapper sets `SHAKA_CODEX_SUBAGENT=true` for spawned subagents.
-- **Pi:** `shaka init` writes `defaults/pi/extension.ts` verbatim to `~/.pi/agent/extensions/shaka.ts`. Each handler shells to `shaka hook <event>` and short-circuits when `SHAKA_PI_SUBAGENT=true`.
+- **Pi:** `shaka init` generates `~/.pi/agent/extensions/shaka.ts` from `defaults/pi/extension.ts`, injecting the install-time `SHAKA_HOME`. Each handler shells to `shaka hook <event>` and short-circuits when `SHAKA_PI_SUBAGENT=true`.
 
 ## Tool Integration
 
@@ -84,7 +84,7 @@ This keeps tool definitions in one place regardless of which provider is running
 The MCP server (`shaka mcp serve`) implements:
 
 - `initialize` — handshake
-- `tools/list` — enumerate tools from `system/tools/`
+- `tools/list` — enumerate the resolved tool set (`system/tools/` plus `customizations/tools/` overrides)
 - `tools/call` — execute and return results
 
 Claude Code registration (run once per machine):

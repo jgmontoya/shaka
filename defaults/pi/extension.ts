@@ -18,7 +18,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 // Minimal local declarations of Pi's ExtensionAPI surface — keeps Shaka free
-// of a `@mariozechner/pi-coding-agent` devDependency just to type-check this
+// of a `@earendil-works/pi-coding-agent` devDependency just to type-check this
 // template. The real types are resolved by jiti at the install destination
 // (`~/.pi/agent/extensions/shaka.ts`) when Pi loads the extension at runtime.
 // Event payload shapes empirically verified in experiments 45 + 48.
@@ -110,11 +110,16 @@ export function resolveExtensionShakaHome(env: EnvVars = process.env as EnvVars)
   return join(homedir(), ".config", "shaka");
 }
 
-const SHAKA_HOME = resolveExtensionShakaHome();
-const ERROR_LOG = join(SHAKA_HOME, "state", "pi-extension-errors.log");
+function currentShakaHome(): string {
+  return resolveExtensionShakaHome();
+}
+
+function errorLogPath(): string {
+  return join(currentShakaHome(), "state", "pi-extension-errors.log");
+}
 
 function shakaEnv(): NodeJS.ProcessEnv {
-  return { ...process.env, SHAKA_HOME };
+  return { ...process.env, SHAKA_HOME: currentShakaHome() };
 }
 
 // Primary recursion guard. Set true when Shaka invokes Pi as inference or as
@@ -206,11 +211,12 @@ function runHookDetached(eventName: string, payload: unknown): void {
 // A sidecar log is the only debugging surface for handler failures.
 function writeSidecarErrorLog(handlerName: string, err: unknown): void {
   try {
-    mkdirSync(dirname(ERROR_LOG), { recursive: true });
+    const logPath = errorLogPath();
+    mkdirSync(dirname(logPath), { recursive: true });
     const message =
       err instanceof Error ? `${err.name}: ${err.message}\n${err.stack ?? ""}` : String(err);
     appendFileSync(
-      ERROR_LOG,
+      logPath,
       `${JSON.stringify({
         t: Date.now(),
         handler: handlerName,
@@ -311,11 +317,13 @@ function runShakaTool(name: string, args: Record<string, unknown>): Promise<Tool
       finish(`Error: shaka tool ${name} timed out after ${TOOL_TIMEOUT_MS}ms`);
     }, TOOL_TIMEOUT_MS);
     timer.unref?.();
+    proc.stdout?.setEncoding("utf8");
+    proc.stderr?.setEncoding("utf8");
     proc.stdout?.on("data", (d) => {
-      stdout += d.toString();
+      stdout += d;
     });
     proc.stderr?.on("data", (d) => {
-      stderr += d.toString();
+      stderr += d;
     });
     proc.stdin?.on("error", () => {
       // Child may exit before consuming stdin; close/error events still
@@ -357,6 +365,7 @@ export default function (pi: ExtensionAPI) {
     try {
       const sid = sessionId(ctx);
       const appends: string[] = [];
+      clearTimer(sid);
       sessionEndFired.delete(sid);
 
       // session.start fires lazily on the first turn — eliminates the
@@ -415,7 +424,7 @@ export default function (pi: ExtensionAPI) {
       // verdict explicit so the cause stays debuggable.
       return {
         block: true,
-        reason: `shaka extension internal error (see ${ERROR_LOG})`,
+        reason: `shaka extension internal error (see ${errorLogPath()})`,
       };
     }
   });
@@ -455,11 +464,13 @@ export default function (pi: ExtensionAPI) {
     const sid = sessionId(ctx);
     clearTimer(sid);
     fireSessionEnd(ctx, sid);
-    // Release per-session state so the set doesn't grow unbounded across
+    // Release per-session state so the sets don't grow unbounded across
     // long-lived Pi hosts. Especially important for the `"unknown"`
     // fallback id — without this, the first id-less session would
-    // permanently suppress session.start for every later id-less one.
+    // permanently suppress session.start or session.end for later id-less
+    // sessions.
     sessionStartFired.delete(sid);
+    sessionEndFired.delete(sid);
   });
 
   function fireSessionEnd(ctx: ExtensionContext, sid: string): void {
@@ -480,6 +491,7 @@ export default function (pi: ExtensionAPI) {
   function clearTimer(sid: string): void {
     const existing = sessionEndTimers.get(sid);
     if (existing) clearTimeout(existing);
+    sessionEndTimers.delete(sid);
   }
 }
 

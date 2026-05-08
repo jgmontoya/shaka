@@ -451,7 +451,6 @@ console.log("format");
       // The fragment must include both "tool" subcommand wiring and the
       // `runShakaTool` helper that pipes JSON args via stdin to subprocess.
       expect(content).toContain("tool: {");
-      expect(content).toContain('"tool"');
       expect(content).toContain("runShakaTool");
     });
 

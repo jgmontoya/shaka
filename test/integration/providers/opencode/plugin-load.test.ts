@@ -89,11 +89,11 @@ async function writeStubShaka(): Promise<void> {
       `printf '%s\\n' "$*" > ${shellEscape(ARGV_LOG)}`,
       `printf '%s\\n' "$SHAKA_HOME" > ${shellEscape(ENV_LOG)}`,
       `cat > ${shellEscape(STDIN_LOG)}`,
-      `if [ "$1" = "tool" ]; then`,
+      'if [ "$1" = "tool" ]; then',
       `  printf '{"tool":"%s","args":%s}' "$2" "$(cat ${shellEscape(STDIN_LOG)})"`,
-      `  exit 0`,
-      `fi`,
-      `exit 1`,
+      "  exit 0",
+      "fi",
+      "exit 1",
       "",
     ].join("\n"),
   );
@@ -132,6 +132,9 @@ afterAll(async () => {
 beforeEach(async () => {
   await rm(SHAKA_HOME, { recursive: true, force: true });
   await rm(OPENCODE_DIR, { recursive: true, force: true });
+  await rm(STDIN_LOG, { force: true });
+  await rm(ARGV_LOG, { force: true });
+  await rm(ENV_LOG, { force: true });
   await mkdir(`${SHAKA_HOME}/system/hooks`, { recursive: true });
   await mkdir(`${SHAKA_HOME}/system/agents`, { recursive: true });
   await mkdir(`${SHAKA_HOME}/system/skills`, { recursive: true });
@@ -172,6 +175,10 @@ describe.skipIf(process.platform === "win32")("opencode plugin — generated plu
     const memorySearch = hooks.tool?.["memory-search"];
     expect(memorySearch?.description).toContain("Search past session");
     expect(typeof memorySearch?.execute).toBe("function");
+
+    const inference = hooks.tool?.inference;
+    expect(inference?.description).toContain("Run AI inference");
+    expect(typeof inference?.execute).toBe("function");
     // Shape of `args` (zod vs JSON Schema) is asserted at the unit level
     // via substring on the generated source — the stub `tool.schema` Proxy
     // here can't distinguish the two without pulling in real zod.
@@ -195,6 +202,23 @@ describe.skipIf(process.platform === "win32")("opencode plugin — generated plu
     // subcommand — same source-of-truth path as Pi and the MCP server.
     const argv = await Bun.file(ARGV_LOG).text();
     expect(argv.trim()).toBe("tool memory-search");
+  });
+
+  test("inference execute() shells to `shaka tool inference` with JSON args on stdin", async () => {
+    await writeStubShaka();
+    const ShakaPlugin = await loadPlugin();
+    const hooks = await ShakaPlugin({ directory: ROOT });
+    const inference = hooks.tool?.inference;
+
+    const result = await inference?.execute?.({ prompt: "summarize", model: "auto" }, {});
+
+    expect(typeof result).toBe("string");
+    expect(result).toContain('"tool":"inference"');
+    expect(result).toContain('"prompt":"summarize"');
+    expect(result).toContain('"model":"auto"');
+
+    const argv = await Bun.file(ARGV_LOG).text();
+    expect(argv.trim()).toBe("tool inference");
   });
 
   test("forwards the install-time SHAKA_HOME to the spawned `shaka tool` subprocess", async () => {

@@ -149,17 +149,10 @@ else
   exit 1
 fi
 
-# Verify the hook file referenced in the command exists. The configurer now
-# wraps each path in double quotes so spaces in $HOME survive Codex's shell
-# parsing, so strip wrapping quotes off the last token before stat-ing.
-HOOK_FILE=$(echo "$HOOK_CMD" | awk '{print $NF}')
-# Configurer wraps paths in POSIX single quotes (defends against $VAR/$()
-# expansion under the shell). Strip both quote styles so the test works
-# whether double or single quotes are used.
-HOOK_FILE="${HOOK_FILE#\"}"
-HOOK_FILE="${HOOK_FILE%\"}"
-HOOK_FILE="${HOOK_FILE#\'}"
-HOOK_FILE="${HOOK_FILE%\'}"
+# Verify the hook file referenced in the command exists. Use Shaka's
+# non-evaluating parser so POSIX-quoted paths with spaces or apostrophes
+# round-trip without evaluating user-editable hooks.json content.
+HOOK_FILE=$(bun "$(dirname "$0")/lib/shell-argv.ts" --last "$HOOK_CMD")
 if [ -f "$HOOK_FILE" ]; then
   pass "Referenced hook file exists: $HOOK_FILE"
 else

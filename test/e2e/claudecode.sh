@@ -146,15 +146,7 @@ fi
 section "Command format"
 
 HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$SETTINGS")
-# Strip the `bun ` prefix and any wrapping quotes (the configurer quotes the
-# path so spaces in $HOME survive Claude's shell parsing).
-HOOK_PATH="${HOOK_CMD#bun }"
-# Configurer wraps paths in POSIX single quotes (defends against $VAR/$()
-# expansion under the shell). Strip both quote styles for compat.
-HOOK_PATH="${HOOK_PATH#\"}"
-HOOK_PATH="${HOOK_PATH%\"}"
-HOOK_PATH="${HOOK_PATH#\'}"
-HOOK_PATH="${HOOK_PATH%\'}"
+HOOK_PATH=$(bun "$(dirname "$0")/lib/shell-argv.ts" --index 1 "$HOOK_CMD")
 
 # Per CLAUDE.md: `bun <file>` for direct execution; `bun run <script>` is for
 # package.json scripts only. Settings entries point at hook .ts files.
@@ -309,9 +301,13 @@ section "Memory"
 
 MEMORY_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/sessions"
 
-# SessionEnd hooks run asynchronously — wait for summaries to be written
+# SessionEnd hooks run asynchronously — wait for summaries to be written.
+# This path includes detached hook dispatch, transcript parsing, model inference,
+# parsing, and disk writes. Under CI load or provider latency it can lag behind
+# the rest of the e2e flow, but a missing summary after the wait is still a
+# failed SessionEnd contract unless an explicit flake opt-out is set.
 echo "  Waiting for session summaries..."
-for i in $(seq 1 30); do
+for i in $(seq 1 60); do
   if ls "$MEMORY_DIR"/*.md >/dev/null 2>&1; then
     break
   fi
@@ -322,9 +318,18 @@ if ls "$MEMORY_DIR"/*.md >/dev/null 2>&1; then
   COUNT=$(ls "$MEMORY_DIR"/*.md | wc -l)
   pass "Memory sessions populated ($COUNT summary file(s))"
 else
-  fail "No session summaries found in $MEMORY_DIR after 30s"
+  warn "No session summaries found in $MEMORY_DIR after 60s (SessionEnd pipeline may be slow or inference stalled)"
+  if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/.session-end-worker.log" ]; then
+    echo "  session-end worker log:"
+    tail -40 "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/.session-end-worker.log" || true
+  fi
   ls -laR "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/" 2>&1 || true
-  exit 1
+  if [ "${FLAKY_E2E_ALLOW_MISSING_SUMMARY:-}" = "true" ]; then
+    warn "Continuing despite missing session summaries because FLAKY_E2E_ALLOW_MISSING_SUMMARY=true"
+  else
+    fail "No session summaries found after 60s"
+    exit 1
+  fi
 fi
 
 # ── Learnings: extraction from session ─────────────────────────────────

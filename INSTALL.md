@@ -10,7 +10,7 @@ Get Shaka running in under 5 minutes.
   - [Claude Code](https://claude.ai/download) (`claude` CLI)
   - [opencode](https://opencode.ai/) (`opencode` CLI)
   - [Codex](https://github.com/openai/codex) (`codex` CLI)
-  - [Pi](https://pi.dev) (`pi` CLI — `bun add -g @mariozechner/pi-coding-agent`)
+  - [Pi](https://pi.dev) (`pi` CLI — `bun add -g @earendil-works/pi-coding-agent`)
 
 ## Quick Start
 

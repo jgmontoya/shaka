@@ -16,6 +16,20 @@ import { makeRunShaka } from "../../helpers/run-shaka";
 const TEST_HOME = join(tmpdir(), `shaka-uninstall-cli-${process.pid}`);
 const runShaka = makeRunShaka(TEST_HOME);
 
+function captureConsole(fn: () => void): string {
+  const captured: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    captured.push(args.map((a) => String(a)).join(" "));
+  };
+  try {
+    fn();
+  } finally {
+    console.log = originalLog;
+  }
+  return captured.join("\n");
+}
+
 beforeEach(async () => {
   await rm(TEST_HOME, { recursive: true, force: true });
   await mkdir(TEST_HOME, { recursive: true });
@@ -31,6 +45,7 @@ describe("shaka uninstall — CLI flag contract", () => {
     // Shaka itself is intact. Printing "✅ Shaka uninstalled." plus a hint
     // to `rm -rf $shakaHome` would be both factually wrong and actively
     // dangerous (instructs the user to delete their whole install).
+    // Minimal install footprint: uninstall only runs when Shaka data exists.
     await mkdir(`${TEST_HOME}/system`, { recursive: true });
     const result = runShaka(["uninstall", "--pi"]);
     expect(result.status).toBe(0);
@@ -46,27 +61,21 @@ describe("shaka uninstall — CLI flag contract", () => {
     // — semantically "we didn't touch this", which used to render as the
     // alarming `✗ failed`. Out-of-scope detected providers belong in their
     // own visual bucket.
-    const captured: string[] = [];
-    const originalLog = console.log;
-    console.log = (...args: unknown[]) => {
-      captured.push(args.map((a) => String(a)).join(" "));
+    const providers: UninstallResult["providers"] = {
+      claude: { detected: true, uninstalled: false },
+      opencode: { detected: false, uninstalled: false },
+      codex: { detected: true, uninstalled: false },
+      pi: { detected: true, uninstalled: true },
     };
-    try {
-      const providers: UninstallResult["providers"] = {
-        claude: { detected: true, uninstalled: false },
-        opencode: { detected: false, uninstalled: false },
-        codex: { detected: true, uninstalled: false },
-        pi: { detected: true, uninstalled: true },
-      };
+    const output = captureConsole(() => {
       logProviderStatus(providers, new Set(["pi"]));
-    } finally {
-      console.log = originalLog;
-    }
-    const output = captured.join("\n");
+    });
     expect(output).toMatch(/Pi:.*✓ removed/);
     // Out-of-scope detected providers don't get tagged as failures.
     expect(output).not.toMatch(/Claude.*✗ failed/);
     expect(output).not.toMatch(/Codex.*✗ failed/);
+    expect(output).toMatch(/Claude.*skipped/i);
+    expect(output).toMatch(/Codex.*skipped/i);
     // Not-installed still reads cleanly regardless of scope.
     expect(output).toMatch(/opencode.*not installed/i);
   });
@@ -76,23 +85,16 @@ describe("shaka uninstall — CLI flag contract", () => {
     // provider that was attempted and failed must still surface as
     // ✗ failed — the new "skipped" bucket only applies when scope explicitly
     // excludes the provider.
-    const captured: string[] = [];
-    const originalLog = console.log;
-    console.log = (...args: unknown[]) => {
-      captured.push(args.map((a) => String(a)).join(" "));
+    const providers: UninstallResult["providers"] = {
+      claude: { detected: true, uninstalled: false },
+      opencode: { detected: false, uninstalled: false },
+      codex: { detected: false, uninstalled: false },
+      pi: { detected: false, uninstalled: false },
     };
-    try {
-      const providers: UninstallResult["providers"] = {
-        claude: { detected: true, uninstalled: false },
-        opencode: { detected: false, uninstalled: false },
-        codex: { detected: false, uninstalled: false },
-        pi: { detected: false, uninstalled: false },
-      };
+    const output = captureConsole(() => {
       logProviderStatus(providers, null);
-    } finally {
-      console.log = originalLog;
-    }
-    expect(captured.join("\n")).toMatch(/Claude.*✗ failed/);
+    });
+    expect(output).toMatch(/Claude.*✗ failed/);
   });
 
   test("rejects --<provider> combined with --delete-data instead of silently ignoring", () => {
