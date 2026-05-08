@@ -345,10 +345,10 @@ section "Feature flag"
 CONFIG_TOML="$HOME/.codex/config.toml"
 
 if [ -f "$CONFIG_TOML" ]; then
-  if grep -q "codex_hooks.*=.*true" "$CONFIG_TOML"; then
-    pass "codex_hooks feature flag enabled in config.toml"
+  if grep -q "^[[:space:]]*hooks[[:space:]]*=[[:space:]]*true" "$CONFIG_TOML"; then
+    pass "hooks feature flag enabled in config.toml"
   else
-    warn "codex_hooks flag not found in config.toml (may have been enabled but file format differs)"
+    warn "hooks flag not found in config.toml (may have been enabled but file format differs)"
     cat "$CONFIG_TOML"
   fi
 else

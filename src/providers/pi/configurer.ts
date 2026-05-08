@@ -72,16 +72,19 @@ export class PiProviderConfigurer implements ProviderConfigurer {
   readonly skillsDir: string;
   private readonly piHome: string;
   private readonly runSmokeLoad: SmokeLoadRunner;
+  private readonly extensionTemplatePath: string;
 
   constructor(options?: {
     piHome?: string;
     skillsDir?: string;
     runSmokeLoad?: SmokeLoadRunner;
+    extensionTemplatePath?: string;
   }) {
     this.piHome =
       options?.piHome ?? process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
     this.skillsDir = options?.skillsDir ?? join(this.piHome, "skills");
     this.runSmokeLoad = options?.runSmokeLoad ?? defaultSmokeLoadRunner;
+    this.extensionTemplatePath = options?.extensionTemplatePath ?? EXTENSION_TEMPLATE_PATH;
   }
 
   isInstalled(): boolean {
@@ -158,11 +161,18 @@ export class PiProviderConfigurer implements ProviderConfigurer {
         );
       }
     }
-    const template = await Bun.file(EXTENSION_TEMPLATE_PATH).text();
+    const template = await Bun.file(this.extensionTemplatePath).text();
+    const placeholderAssignment = `const INSTALLED_SHAKA_HOME = ${JSON.stringify(SHAKA_HOME_PLACEHOLDER)};`;
+    if (!template.includes(placeholderAssignment)) {
+      throw new Error("Failed to inject install-time SHAKA_HOME into Pi extension template");
+    }
     const content = template.replace(
-      `const INSTALLED_SHAKA_HOME = ${JSON.stringify(SHAKA_HOME_PLACEHOLDER)};`,
+      placeholderAssignment,
       `const INSTALLED_SHAKA_HOME = ${JSON.stringify(shakaHome)};`,
     );
+    if (content.includes(placeholderAssignment)) {
+      throw new Error("Failed to inject install-time SHAKA_HOME into Pi extension template");
+    }
     await Bun.write(extensionPath, content);
   }
 

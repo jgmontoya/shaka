@@ -79,7 +79,7 @@ describe("CodexProviderConfigurer", () => {
   });
 
   describe("install", () => {
-    test("enables codex_hooks feature flag via runCommand", async () => {
+    test("enables hooks feature flag via runCommand", async () => {
       const capturedCalls: string[][] = [];
       const mockRunCommand = async (args: string[]) => {
         capturedCalls.push(args);
@@ -89,7 +89,7 @@ describe("CodexProviderConfigurer", () => {
       const configurer = makeConfigurer({ runCommand: mockRunCommand });
       await configurer.install({ shakaHome: testShakaHome });
 
-      expect(capturedCalls).toContainEqual(["codex", "features", "enable", "codex_hooks"]);
+      expect(capturedCalls).toContainEqual(["codex", "features", "enable", "hooks"]);
     });
 
     test("returns ok result", async () => {

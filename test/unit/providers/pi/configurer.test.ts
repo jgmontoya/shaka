@@ -137,6 +137,37 @@ describe("PiProviderConfigurer", () => {
       expect(extensionContent).toContain(
         `const INSTALLED_SHAKA_HOME = ${JSON.stringify(testShakaHome)};`,
       );
+      expect(extensionContent).not.toContain(
+        'const INSTALLED_SHAKA_HOME = "__SHAKA_INSTALLED_HOME__";',
+      );
+    });
+
+    test("fails fast when the extension template installed-home placeholder is missing", async () => {
+      const templatePath = join(testRoot, "bad-extension-template.ts");
+      await Bun.write(
+        templatePath,
+        [
+          "// SHAKA_GENERATED_EXTENSION v1",
+          'const INSTALLED_SHAKA_HOME = "__REFORMATTED_PLACEHOLDER__";',
+          "",
+        ].join("\n"),
+      );
+      const configurer = new PiProviderConfigurer({
+        piHome: testPiHome,
+        runSmokeLoad: noopSmokeLoad,
+        extensionTemplatePath: templatePath,
+      });
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("Failed to inject install-time SHAKA_HOME");
+      }
+      expect(await Bun.file(join(testPiHome, "extensions", "shaka.ts")).exists()).toBe(false);
     });
 
     test.skipIf(process.platform === "win32")(

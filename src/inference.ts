@@ -276,7 +276,7 @@ function appendLine(text: string, line: string): string {
  * Call Codex CLI for inference.
  *
  * Uses `codex exec` with:
- * - `--disable codex_hooks` to prevent hook recursion
+ * - `--disable hooks` to prevent hook recursion
  * - `--ephemeral` to skip transcript persistence
  * - `-c 'sandbox="read-only"'` for safe text-only inference
  * - `-o <file>` for clean output (no ANSI codes or spinner)
@@ -290,7 +290,7 @@ async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult>
     const args = [
       "exec",
       "--disable",
-      "codex_hooks",
+      "hooks",
       "--ephemeral",
       "--skip-git-repo-check",
       "-c",

@@ -22,9 +22,10 @@
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, rm } from "node:fs/promises";
+import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { OpencodeProviderConfigurer } from "../../../../src/providers/opencode/configurer";
 
 const ROOT = join(
@@ -42,6 +43,7 @@ const ARGV_LOG = join(ROOT, "argv.log");
 const ENV_LOG = join(ROOT, "env.log");
 
 const savedEnv = { ...process.env };
+let pluginImportCounter = 0;
 
 interface PluginTool {
   description?: string;
@@ -106,10 +108,14 @@ async function loadPlugin(): Promise<(ctx: { directory: string }) => Promise<Plu
   const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: OPENCODE_DIR });
   const result = await configurer.install({ shakaHome: SHAKA_HOME });
   if (!result.ok) throw result.error;
-  // Cache-bust so each test gets a fresh module — keeps any module-level
-  // state in the generated plugin from leaking across tests.
-  const url = new URL(`file://${join(PLUGINS_DIR, "shaka.ts")}?t=${Date.now()}`);
-  const mod = (await import(url.href)) as {
+  // Bun caches file imports by path, not reliably by query string. Import a
+  // fresh copy each time so module-level plugin state cannot leak across tests.
+  const importPath = join(
+    PLUGINS_DIR,
+    `shaka-${process.pid}-${Date.now()}-${pluginImportCounter++}.ts`,
+  );
+  await copyFile(join(PLUGINS_DIR, "shaka.ts"), importPath);
+  const mod = (await import(pathToFileURL(importPath).href)) as {
     ShakaPlugin: (ctx: { directory: string }) => Promise<PluginHooks>;
   };
   return mod.ShakaPlugin;

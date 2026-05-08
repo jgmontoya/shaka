@@ -310,24 +310,22 @@ export class CodexProviderConfigurer implements ProviderConfigurer {
   }
 
   /**
-   * Enable the codex_hooks feature flag.
+   * Enable the hooks feature flag.
    * Falls back to printing manual instructions if the command fails.
    */
   private async enableHooksFeature(): Promise<void> {
     try {
-      const { exitCode } = await this.runCommand(["codex", "features", "enable", "codex_hooks"]);
+      const { exitCode } = await this.runCommand(["codex", "features", "enable", "hooks"]);
       if (exitCode === 0) {
-        console.error("Enabled codex_hooks feature flag in ~/.codex/config.toml");
+        console.error("Enabled hooks feature flag in ~/.codex/config.toml");
       } else {
         console.error(
-          "Could not enable codex_hooks automatically.\n" +
-            "Please run: codex features enable codex_hooks",
+          "Could not enable hooks automatically.\n" + "Please run: codex features enable hooks",
         );
       }
     } catch {
       console.error(
-        "Could not enable codex_hooks automatically.\n" +
-          "Please run: codex features enable codex_hooks",
+        "Could not enable hooks automatically.\n" + "Please run: codex features enable hooks",
       );
     }
   }
