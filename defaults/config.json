@@ -18,6 +18,10 @@
     "codex": {
       "enabled": false,
       "summarization_model": "auto"
+    },
+    "pi": {
+      "enabled": false,
+      "summarization_model": "auto"
     }
   },
   "assistant": {

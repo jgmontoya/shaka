@@ -14,6 +14,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../../domain/config";
 import { type Result, err, ok } from "../../domain/result";
+import { shellQuotePosix } from "../../platform/paths";
 import {
   installAssetSymlink,
   installPerSkillSymlinks,
@@ -100,7 +101,13 @@ function registerHooksForMatcher(
 
   const hookCommands = hookPaths.map((path) => ({
     type: "command",
-    command: `bun run ${path}`,
+    // Claude parses `command` as a shell string. Single-quote the path
+    // so neither spaces in $HOME (e.g. /Users/jane doe/) nor shell-active
+    // syntax inside the path ($VAR, $(cmd), backticks) gets interpreted
+    // — `'\''` is the canonical POSIX way to embed a literal single
+    // quote inside single quotes. Hook paths shouldn't contain these in
+    // practice, but defending against them is one helper away.
+    command: `bun ${shellQuotePosix(path)}`,
   }));
 
   const existingEntry = eventHooks.find((h) => (matcher ? h.matcher === matcher : !h.matcher));

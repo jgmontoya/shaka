@@ -3,7 +3,12 @@ import { lstat, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readSymlinkTarget, removeLink, resolveFromModule } from "../../../src/platform/paths";
+import {
+  readSymlinkTarget,
+  removeLink,
+  resolveFromModule,
+  shellQuotePosix,
+} from "../../../src/platform/paths";
 
 describe("platform/paths", () => {
   describe("resolveFromModule", () => {
@@ -75,6 +80,32 @@ describe("platform/paths", () => {
 
     test("throws when path does not exist", async () => {
       await expect(removeLink(join(testDir, "nonexistent"))).rejects.toThrow();
+    });
+  });
+
+  describe("shellQuotePosix", () => {
+    test("wraps a plain path in single quotes", () => {
+      expect(shellQuotePosix("/tmp/foo")).toBe("'/tmp/foo'");
+    });
+
+    test("preserves spaces inside the quoted form (no word-splitting risk)", () => {
+      expect(shellQuotePosix("/Users/jane doe/.config")).toBe("'/Users/jane doe/.config'");
+    });
+
+    test("escapes embedded single quotes via the canonical '\\'' sequence", () => {
+      // POSIX-canonical: close quotes, escape one ', re-open quotes.
+      // `it's` becomes `it'\''s`, wrapped: `'it'\''s'`.
+      expect(shellQuotePosix("it's")).toBe("'it'\\''s'");
+    });
+
+    test("renders shell-active syntax inert ($VAR, $(cmd), backticks)", () => {
+      // Single-quoted strings never expand. The literal characters survive.
+      const evil = "/tmp/$(rm -rf ~)/`whoami`/$HOME";
+      const quoted = shellQuotePosix(evil);
+      // The output is `'…'` with the dangerous content verbatim inside.
+      expect(quoted).toBe(`'${evil}'`);
+      expect(quoted.startsWith("'")).toBe(true);
+      expect(quoted.endsWith("'")).toBe(true);
     });
   });
 });

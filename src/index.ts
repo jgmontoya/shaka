@@ -68,6 +68,7 @@ export {
   parseClaudeCodeTranscript,
   parseCodexTranscript,
   parseOpencodeTranscript,
+  parsePiTranscript,
   truncateTranscript,
 } from "./memory/transcript";
 
@@ -128,6 +129,7 @@ export {
   ARCHIVE_FILE,
   parseLearnings,
   renderEntry,
+  renderEntryForContext,
   renderLearnings,
   loadLearnings,
   writeLearnings,
@@ -211,6 +213,7 @@ import { createReloadCommand } from "./commands/reload";
 import { createRunCommand } from "./commands/run";
 import { createScanCommand } from "./commands/scan";
 import { createSkillCommand } from "./commands/skill";
+import { createToolCommand } from "./commands/tool";
 import { createUninstallCommand } from "./commands/uninstall";
 import { createUpdateCommand } from "./commands/update";
 import { getCurrentVersion } from "./domain/version";
@@ -232,6 +235,7 @@ if (import.meta.main) {
   program.addCommand(createDoctorCommand());
   program.addCommand(createConfigCommand());
   program.addCommand(createMcpCommand());
+  program.addCommand(createToolCommand());
   program.addCommand(createMemoryCommand());
   program.addCommand(createCommandsCommand());
   program.addCommand(createRunCommand());

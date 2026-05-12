@@ -11,12 +11,24 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { normalizeCwd } from "../domain/paths";
+import type { ProviderName } from "./types";
 
 /** Valid command name: lowercase alphanumeric with hyphens, no leading/trailing hyphens, max 64 chars. */
 export const NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 export const MAX_NAME_LENGTH = 64;
 const RESERVED_NAMES = new Set(["shaka"]);
-const KNOWN_PROVIDERS = new Set(["claude", "opencode", "codex"]);
+// `Record<ProviderName, true>` makes the table exhaustive: adding a new
+// member to `ProviderName` without a key here is a TypeScript error, not a
+// silent runtime "Unknown provider" rejection. The array and set are
+// derived so they can never drift out of sync.
+const KNOWN_PROVIDER_TABLE: Record<ProviderName, true> = {
+  claude: true,
+  opencode: true,
+  codex: true,
+  pi: true,
+};
+const KNOWN_PROVIDERS = Object.keys(KNOWN_PROVIDER_TABLE) as readonly ProviderName[];
+const KNOWN_PROVIDER_SET = new Set<string>(KNOWN_PROVIDERS);
 
 /** Overridable command fields (used in providers block). */
 export interface CommandFields {
@@ -30,11 +42,7 @@ export interface CommandFields {
 export interface DiscoveredCommand extends CommandFields {
   name: string;
   cwd?: string[];
-  providers?: {
-    claude?: Partial<CommandFields>;
-    opencode?: Partial<CommandFields>;
-    codex?: Partial<CommandFields>;
-  };
+  providers?: Partial<Record<ProviderName, Partial<CommandFields>>>;
   body: string;
   sourcePath: string;
 }
@@ -182,8 +190,8 @@ function parseProviders(value: unknown): DiscoveredCommand["providers"] | undefi
   const obj = value as Record<string, unknown>;
 
   for (const key of Object.keys(obj)) {
-    if (!KNOWN_PROVIDERS.has(key)) {
-      return `Unknown provider "${key}" in providers block — expected: ${[...KNOWN_PROVIDERS].join(", ")}`;
+    if (!KNOWN_PROVIDER_SET.has(key)) {
+      return `Unknown provider "${key}" in providers block — expected: ${KNOWN_PROVIDERS.join(", ")}`;
     }
   }
 
@@ -191,9 +199,7 @@ function parseProviders(value: unknown): DiscoveredCommand["providers"] | undefi
   for (const provider of KNOWN_PROVIDERS) {
     const overrides = obj[provider];
     if (!overrides || typeof overrides !== "object") continue;
-    result[provider as "claude" | "opencode" | "codex"] = parseFieldOverrides(
-      overrides as Record<string, unknown>,
-    );
+    result[provider] = parseFieldOverrides(overrides as Record<string, unknown>);
   }
 
   return Object.keys(result).length > 0 ? result : undefined;

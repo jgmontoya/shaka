@@ -17,7 +17,8 @@ test("every inference CLI call contains its host runtime", async () => {
   expect(src).toMatch(/callClaudeCLI[\s\S]*?--tools/);
 
   // Codex: disables hooks via CLI flag
-  expect(src).toMatch(/callCodexCLI[\s\S]*?--disable[\s\S]*?codex_hooks/);
+  expect(src).toMatch(/callCodexCLI[\s\S]*?--disable[\s\S]*?"hooks"/);
+  expect(src).not.toContain("codex_hooks");
 
   // Opencode: injects SHAKA_OPENCODE_SUBAGENT=true into child env (no CLI flag exists)
   expect(src).toMatch(/callOpenCodeCLI[\s\S]*?SHAKA_OPENCODE_SUBAGENT[\s\S]*?true/);

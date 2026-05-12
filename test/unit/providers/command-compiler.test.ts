@@ -5,6 +5,7 @@ import {
   compileForClaude,
   compileForCodex,
   compileForOpencode,
+  compileForPi,
 } from "../../../src/providers/command-compiler";
 
 function makeCommand(overrides: Partial<DiscoveredCommand> = {}): DiscoveredCommand {
@@ -285,5 +286,86 @@ describe("provider overrides", () => {
     });
     const result = compileForClaude(cmd, "/home/test/.claude/skills");
     expect(result.content).toContain("context: fork");
+  });
+});
+
+describe("compileForPi", () => {
+  const targetDir = join("/home", "test", ".pi", "agent", "prompts");
+
+  test("writes to <targetDir>/shaka-<name>.md", () => {
+    // Pi auto-loads ~/.agents/skills and ~/.pi/agent/prompts independently
+    // of PI_CODING_AGENT_DIR (Exp 47); the shaka- prefix keeps Shaka
+    // commands from colliding with user-installed templates of the same name.
+    const result = compileForPi(makeCommand(), targetDir);
+    expect(result.path).toBe(join(targetDir, "shaka-commit.md"));
+  });
+
+  test("maps description to frontmatter", () => {
+    const result = compileForPi(makeCommand(), targetDir);
+    expect(result.content).toContain("description: Create a commit");
+  });
+
+  test("maps argument-hint to frontmatter (Pi supports it natively per Exp 46)", () => {
+    const cmd = makeCommand({ argumentHint: "<message>" });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).toContain("argument-hint: <message>");
+  });
+
+  test("preserves $1, $@, $ARGUMENTS, ${@:N:L} verbatim (Pi handles them natively)", () => {
+    const cmd = makeCommand({
+      body: "Apply $1 to $2 with all=$@ first=$ARGUMENTS slice=${@:2:3}",
+    });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).toContain("Apply $1 to $2 with all=$@ first=$ARGUMENTS slice=${@:2:3}");
+  });
+
+  test("auto-appends $ARGUMENTS when no arg references", () => {
+    const cmd = makeCommand({ body: "Just do something" });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).toContain("Just do something\n\n$ARGUMENTS");
+  });
+
+  test("does not auto-append when $ARGUMENTS is already present", () => {
+    const cmd = makeCommand({ body: "Do: $ARGUMENTS" });
+    const result = compileForPi(cmd, targetDir);
+    const bodyPart = result.content.split("---\n").slice(-1)[0] ?? "";
+    expect(bodyPart.match(/\$ARGUMENTS/g)?.length).toBe(1);
+  });
+
+  test("does not auto-append when only Pi-native $@ is present", () => {
+    // `$@` is a Pi-native arg expansion (Exp 46). The shared
+    // `hasArgReferences` check only knows `$ARGUMENTS` and `$N`, so without
+    // a Pi-aware variant the body silently gets `$ARGUMENTS` appended,
+    // changing the command's prompt semantics.
+    const cmd = makeCommand({ body: "Use all args: $@" });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).not.toContain("$ARGUMENTS");
+  });
+
+  test("does not auto-append when only Pi-native ${@:N:L} slice is present", () => {
+    const cmd = makeCommand({ body: "Slice: ${@:2:3}" });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).not.toContain("$ARGUMENTS");
+  });
+
+  test("applies providers.pi override (description + model) over base fields", () => {
+    // compileForPi runs through `applyOverrides(command, "pi")` so a Pi
+    // override on the command must beat the base value — same contract the
+    // claude/opencode/codex compilers honor for their respective providers.
+    const cmd = makeCommand({
+      description: "Base description",
+      model: "anthropic/claude-sonnet-4-5",
+      providers: {
+        pi: {
+          description: "Pi-specific description",
+          model: "anthropic/claude-haiku-4.5",
+        },
+      },
+    });
+    const result = compileForPi(cmd, targetDir);
+    expect(result.content).toContain("description: Pi-specific description");
+    expect(result.content).toContain("model: anthropic/claude-haiku-4.5");
+    expect(result.content).not.toContain("Base description");
+    expect(result.content).not.toContain("anthropic/claude-sonnet-4-5");
   });
 });

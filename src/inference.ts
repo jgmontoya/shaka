@@ -5,6 +5,8 @@
  * Uses CLI tools that handle their own authentication:
  * 1. Claude CLI (claude -p) — if installed
  * 2. OpenCode CLI (opencode run) — if installed, handles local models too
+ * 3. Codex CLI (codex exec) — if installed
+ * 4. Pi CLI (pi -p) — if installed
  *
  * No API keys needed — CLIs manage auth. Install one and inference works.
  */
@@ -14,6 +16,9 @@ import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getSummarizationModel } from "./domain/config";
+import { DEFAULT_PI_MODEL, piProviderForModel } from "./providers/pi/defaults";
+import { detectProviderError } from "./providers/pi/error-detect";
+import { getProviderNames } from "./providers/registry";
 import type { ProviderName } from "./providers/types";
 import { type DetectedProviders, detectInstalledProviders } from "./services/provider-detection";
 
@@ -59,7 +64,7 @@ export interface InferenceAttempt {
  * CLIs are installed.
  *
  * Semantics:
- *   - Iterate providers in priority order: claude, opencode, codex.
+ *   - Iterate providers in priority order: claude, opencode, codex, pi.
  *   - For each installed provider, emit one attempt.
  *   - If the caller passes an explicit `options.model`, it wins for every
  *     attempt — config is ignored entirely.
@@ -71,7 +76,7 @@ export async function resolveInferenceAttempts(
   options: InferenceOptions,
   detected: DetectedProviders,
 ): Promise<InferenceAttempt[]> {
-  const defaultOrder: ProviderName[] = ["claude", "opencode", "codex"];
+  const defaultOrder: ProviderName[] = ["claude", "opencode", "codex", "pi"];
   // If the caller hints a provider AND it's installed, it jumps to the head
   // of the list; the default order fills the remaining fallback slots.
   const hint = options.provider;
@@ -273,7 +278,7 @@ function appendLine(text: string, line: string): string {
  * Call Codex CLI for inference.
  *
  * Uses `codex exec` with:
- * - `--disable codex_hooks` to prevent hook recursion
+ * - `--disable hooks` to prevent hook recursion
  * - `--ephemeral` to skip transcript persistence
  * - `-c 'sandbox="read-only"'` for safe text-only inference
  * - `-o <file>` for clean output (no ANSI codes or spinner)
@@ -287,7 +292,7 @@ async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult>
     const args = [
       "exec",
       "--disable",
-      "codex_hooks",
+      "hooks",
       "--ephemeral",
       "--skip-git-repo-check",
       "-c",
@@ -321,35 +326,153 @@ async function callCodexCLI(options: InferenceOptions): Promise<InferenceResult>
   }
 }
 
+/**
+ * Call Pi CLI for inference. Pi defaults to Google (Exp 42) and auto-loads
+ * skills/prompts/context-files from ambient `~/.agents/` paths regardless of
+ * `PI_CODING_AGENT_DIR` (Exp 47, 51), so pure text inference must opt out of
+ * every discovery surface explicitly. Pi's default systemPrompt also embeds
+ * Pi-self-doc references (Exp 45) — `--system-prompt` fully replaces it
+ * rather than appending.
+ *
+ * Pi exits 0 even when the provider returns 4xx/5xx (Exp 43); the helper
+ * scans stdout for the error shape and surfaces it as an inference failure.
+ */
+async function callPiCLI(options: InferenceOptions): Promise<InferenceResult> {
+  // Pi defaults to google (Exp 42) and accepts other backends with explicit
+  // `--provider`. The mapping isn't a naive prefix split (Exp 48: openai
+  // models are served by Pi's `openai-codex` provider), so route through
+  // `piProviderForModel`.
+  const model = options.model ?? DEFAULT_PI_MODEL;
+  const provider = piProviderForModel(model);
+  if (!provider) {
+    return {
+      success: false,
+      error: `Unsupported Pi model namespace: ${model}`,
+      provider: "pi-cli",
+    };
+  }
+  // Per-resource isolation set verified empirically (Exp 47 + 51).
+  const args = [
+    "-p",
+    "--no-extensions",
+    "--no-tools",
+    "--no-session",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--offline",
+    "--provider",
+    provider,
+    "--model",
+    model,
+  ];
+  args.push("--system-prompt", options.systemPrompt ?? "");
+
+  // SHAKA_PI_SUBAGENT short-circuits the generated extension's handlers as a
+  // belt-and-braces guard against recursion if --no-extensions is ever
+  // bypassed. PI_TELEMETRY=0 keeps Pi quiet during inference; PI_OFFLINE=1
+  // suppresses Pi's startup network probes (model-list refresh, etc.).
+  const env = {
+    ...process.env,
+    SHAKA_PI_SUBAGENT: "true",
+    PI_TELEMETRY: "0",
+    PI_OFFLINE: "1",
+  };
+
+  const result = await spawnCLI("pi", args, options.userPrompt, options.timeout, env);
+
+  if (result.code !== 0) {
+    return { success: false, error: `Pi CLI error: ${result.stderr}`, provider: "pi-cli" };
+  }
+
+  // Pi can exit 0 with the body of a provider error printed to stdout (Exp 43).
+  const providerError = detectProviderError(result.stdout);
+  if (providerError) {
+    return {
+      success: false,
+      error: `Pi provider error (${providerError.code}): ${providerError.body}`,
+      provider: "pi-cli",
+    };
+  }
+
+  return parseResponse(result.stdout.trim(), options.expectJson, "pi-cli");
+}
+
 // ---------------------------------------------------------------------------
 // Process Management
 // ---------------------------------------------------------------------------
+
+/**
+ * SIGTERM → grace → SIGKILL → close. Mirrors runAgentStep's pattern
+ * (src/domain/agent-execution.ts) — a CLI that traps SIGTERM keeps
+ * running orphaned otherwise. `unref()` lets the process exit if
+ * nothing else is pending; `cancel()` clears both timers when the
+ * process completes normally so the event loop isn't held open.
+ *
+ * Returned `timedOut()` lets the caller distinguish a real exit from
+ * a timeout-induced exit when shaping the resolved value.
+ */
+function armKillChain(
+  proc: ReturnType<typeof spawn>,
+  timeout: number | undefined,
+  isSettled: () => boolean,
+): { timedOut: () => boolean; cancel: () => void } {
+  let timedOut = false;
+  let exited = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  proc.on("exit", () => {
+    exited = true;
+  });
+  const hasExited = () => exited || proc.exitCode !== null || proc.signalCode !== null;
+  if (timeout) {
+    timer = setTimeout(() => {
+      if (isSettled() || hasExited()) return;
+      timedOut = true;
+      proc.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (!isSettled() && !hasExited()) proc.kill("SIGKILL");
+      }, 500);
+      killTimer.unref?.();
+    }, timeout);
+    timer.unref?.();
+  }
+  return {
+    timedOut: () => timedOut,
+    cancel: () => {
+      if (timer) clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+    },
+  };
+}
 
 function spawnCLI(
   command: string,
   args: string[],
   stdin: string,
   timeout?: number,
+  env?: NodeJS.ProcessEnv,
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"], env });
+    const killChain = armKillChain(proc, timeout, () => settled);
 
-    const proc = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
-
-    if (timeout) {
-      setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          proc.kill("SIGTERM");
-          resolve({ code: 1, stdout, stderr: `Timeout after ${timeout}ms` });
-        }
-      }, timeout);
+    proc.stdin.on("error", () => {
+      // Child may exit before consuming stdin; the close/error handlers
+      // below still decide the resolved value. Same pattern as
+      // src/domain/agent-execution.ts (runAgentStep).
+    });
+    try {
+      proc.stdin.write(stdin);
+      proc.stdin.end();
+    } catch {
+      // Pipe closed between spawn and write — close/error will resolve.
     }
-
-    proc.stdin.write(stdin);
-    proc.stdin.end();
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
     proc.stdout.on("data", (d) => {
       stdout += d;
     });
@@ -357,16 +480,26 @@ function spawnCLI(
       stderr += d;
     });
     proc.on("close", (code) => {
-      if (!settled) {
-        settled = true;
+      if (settled) return;
+      settled = true;
+      killChain.cancel();
+      if (killChain.timedOut()) {
+        // Preserve any stderr the CLI emitted before the timeout fired —
+        // it's the most useful signal for diagnosing slow / wedged calls.
+        resolve({
+          code: 1,
+          stdout,
+          stderr: stderr ? `${stderr}\nTimeout after ${timeout}ms` : `Timeout after ${timeout}ms`,
+        });
+      } else {
         resolve({ code: code ?? 1, stdout, stderr });
       }
     });
     proc.on("error", (err) => {
-      if (!settled) {
-        settled = true;
-        resolve({ code: 1, stdout: "", stderr: err.message });
-      }
+      if (settled) return;
+      settled = true;
+      killChain.cancel();
+      resolve({ code: 1, stdout: "", stderr: err.message });
     });
   });
 }
@@ -406,7 +539,11 @@ export function parseOpencodeJsonStream(stdout: string): {
   return { sessionId, text: textParts.join("") };
 }
 
-function parseResponse(text: string, expectJson?: boolean, provider?: string): InferenceResult {
+export function parseResponse(
+  text: string,
+  expectJson?: boolean,
+  provider?: string,
+): InferenceResult {
   if (!expectJson) {
     return { success: true, text, provider };
   }
@@ -434,7 +571,9 @@ function parseResponse(text: string, expectJson?: boolean, provider?: string): I
  * Priority order (cheapest to most expensive):
  * 1. Claude CLI — cheapest with haiku default
  * 2. OpenCode CLI — local models or anthropic/haiku
- * 3. Codex CLI — most expensive (gpt-5.4 default), tried last
+ * 3. Codex CLI — gpt-5.4 default
+ * 4. Pi CLI — provider comes from piProviderForModel(options.model ?? DEFAULT_PI_MODEL),
+ *    tried last
  *
  * All handle their own authentication — no API keys needed.
  *
@@ -464,6 +603,9 @@ export async function inference(
       case "codex":
         result = await callCodexCLI(resolvedOptions);
         break;
+      case "pi":
+        result = await callPiCLI(resolvedOptions);
+        break;
     }
     if (result.success) return result;
     lastFailure = result;
@@ -472,7 +614,7 @@ export async function inference(
   return (
     lastFailure ?? {
       success: false,
-      error: "No inference provider available. Install claude, opencode, or codex CLI.",
+      error: `No inference provider available. Install ${getProviderNames().join(", ")} CLI.`,
     }
   );
 }
@@ -483,5 +625,5 @@ export async function inference(
 export async function hasInferenceProvider(
   detected: DetectedProviders = detectInstalledProviders(),
 ): Promise<boolean> {
-  return detected.claude || detected.opencode || detected.codex;
+  return detected.claude || detected.opencode || detected.codex || detected.pi;
 }

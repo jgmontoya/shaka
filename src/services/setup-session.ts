@@ -9,6 +9,7 @@
  */
 
 import { runAgentStep } from "../domain/agent-execution";
+import { DEFAULT_PI_MODEL, DEFAULT_PI_PROVIDER } from "../providers/pi/defaults";
 import type { ProviderName } from "../providers/types";
 import type { DetectedProviders } from "../services/provider-detection";
 
@@ -18,6 +19,7 @@ function onlyProvider(provider: ProviderName): DetectedProviders {
     claude: provider === "claude",
     opencode: provider === "opencode",
     codex: provider === "codex",
+    pi: provider === "pi",
   };
 }
 
@@ -44,6 +46,29 @@ export function buildOpencodeArgs(objective: string): string[] {
  */
 export function buildCodexArgs(objective: string, skillBody: string): string[] {
   return ["codex", `${skillBody}\n\n## Objective\n\n${objective}`];
+}
+
+/**
+ * Pi: pin Anthropic explicitly (Pi defaults to google per Exp 42), append
+ * the setup skill on top of Pi's default coding-assistant prompt with
+ * `--append-system-prompt`, and pass the objective as the positional
+ * initial-prompt slot. Repeatable per Exp 42.
+ */
+export function buildPiArgs(objective: string, skillBody: string): string[] {
+  return [
+    "pi",
+    "--provider",
+    DEFAULT_PI_PROVIDER,
+    "--model",
+    DEFAULT_PI_MODEL,
+    "--append-system-prompt",
+    skillBody,
+    // Terminate option parsing so an objective starting with `-` (YAML
+    // frontmatter, Markdown lists, etc.) isn't misread as a Pi flag —
+    // see memory/feedback_argv_prompts_need_double_dash.md.
+    "--",
+    objective,
+  ];
 }
 
 export interface SetupSessionResult {
@@ -90,7 +115,9 @@ export async function runSetupInteractive(
       ? buildClaudeArgs(objective, skillBody)
       : provider === "opencode"
         ? buildOpencodeArgs(objective)
-        : buildCodexArgs(objective, skillBody);
+        : provider === "pi"
+          ? buildPiArgs(objective, skillBody)
+          : buildCodexArgs(objective, skillBody);
   const proc = spawn(argv, {
     cwd: worktreePath,
     stdio: ["inherit", "inherit", "inherit"],

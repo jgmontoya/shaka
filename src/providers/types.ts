@@ -7,7 +7,7 @@ import type { Result } from "../domain/result";
 import type { DiscoveredCommand } from "./command-discovery";
 import type { CommandManifest } from "./command-manifest";
 
-export type ProviderName = "claude" | "opencode" | "codex";
+export type ProviderName = "claude" | "opencode" | "codex" | "pi";
 
 export interface ProviderConfigurer {
   readonly name: ProviderName;

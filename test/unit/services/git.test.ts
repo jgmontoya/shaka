@@ -21,6 +21,7 @@ import {
 
 describe("git service", () => {
   const testDir = join(tmpdir(), `shaka-test-git-${process.pid}`);
+  const hookTimeoutMs = 30_000;
 
   async function initRepo(): Promise<void> {
     await Bun.spawn(["git", "init", testDir], { stdout: "pipe", stderr: "pipe" }).exited;
@@ -48,11 +49,11 @@ describe("git service", () => {
   beforeEach(async () => {
     await rm(testDir, { recursive: true, force: true });
     await initRepo();
-  });
+  }, hookTimeoutMs);
 
   afterEach(async () => {
     await rm(testDir, { recursive: true, force: true });
-  });
+  }, hookTimeoutMs);
 
   test("isClean returns true for clean repo", async () => {
     expect(await isClean(testDir)).toBe(true);

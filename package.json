@@ -24,13 +24,13 @@
     "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {
-    "commander": "^13.0.0",
+    "commander": "^13.1.0",
     "eta": "^3.5.0",
-    "yaml": "^2.7.0"
+    "yaml": "^2.8.4"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
+    "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest",
-    "typescript": "^5.7.0"
+    "typescript": "^5.9.3"
   }
 }

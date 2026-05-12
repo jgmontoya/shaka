@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { Command } from "commander";
 import { resolveShakaHome } from "../domain/config";
 import { createProvider, getProviderNames } from "../providers/registry";
+import type { ProviderName } from "../providers/types";
 import type { UninstallResult } from "../services/uninstall-service";
 import { UninstallService } from "../services/uninstall-service";
 
@@ -41,18 +42,40 @@ async function promptDeleteUserData(
   return answer;
 }
 
-function logProviderStatus(providers: UninstallResult["providers"]): void {
+/**
+ * `scope` is the set of providers the user explicitly asked us to touch.
+ * `null` means full uninstall — every detected provider was a target, so
+ * a detected-but-not-uninstalled status is a real failure. With a scope,
+ * detected providers outside it were intentionally skipped, not failed.
+ */
+export function logProviderStatus(
+  providers: UninstallResult["providers"],
+  scope: ReadonlySet<ProviderName> | null,
+): void {
   console.log("Provider hooks:");
   for (const name of getProviderNames()) {
     const provider = createProvider(name);
     const p = providers[name];
-    const status = p.detected ? (p.uninstalled ? "✓ removed" : "✗ failed") : "not installed";
-    console.log(`  ${provider.label}: ${status}`);
+    if (!p.detected) {
+      console.log(`  ${provider.label}: not installed`);
+      continue;
+    }
+    if (p.uninstalled) {
+      console.log(`  ${provider.label}: ✓ removed`);
+      continue;
+    }
+    const inScope = scope === null || scope.has(name);
+    console.log(`  ${provider.label}: ${inScope ? "✗ failed" : "skipped (not in scope)"}`);
   }
 }
 
-function logResult(result: UninstallResult, deleteUserData: boolean, shakaHome: string): void {
-  logProviderStatus(result.providers);
+function logResult(
+  result: UninstallResult,
+  deleteUserData: boolean,
+  shakaHome: string,
+  scope: ReadonlySet<ProviderName> | null,
+): void {
+  logProviderStatus(result.providers, scope);
 
   if (result.removed.length > 0) {
     console.log("\nRemoved:");
@@ -68,6 +91,14 @@ function logResult(result: UninstallResult, deleteUserData: boolean, shakaHome: 
     }
   }
 
+  if (scope !== null) {
+    // Scoped uninstall: only the named provider's integration was removed.
+    // The framework, system/ symlink, and user data are intact, so the
+    // "rm -rf shakaHome" hint would be actively dangerous.
+    console.log("\n✅ Provider integration removed.");
+    return;
+  }
+
   console.log("\n✅ Shaka uninstalled.");
 
   if (!deleteUserData) {
@@ -81,6 +112,10 @@ function logResult(result: UninstallResult, deleteUserData: boolean, shakaHome: 
 export function createUninstallCommand(): Command {
   return new Command("uninstall")
     .description("Remove Shaka hooks and configuration")
+    .option("--claude", "Uninstall only the Claude Code integration")
+    .option("--opencode", "Uninstall only the opencode integration")
+    .option("--codex", "Uninstall only the Codex integration")
+    .option("--pi", "Uninstall only the Pi integration")
     .option("--keep-data", "Skip prompt and keep user/, customizations/, memory/")
     .option("--delete-data", "Skip prompt and delete user/, customizations/, memory/")
     .action(async (options) => {
@@ -92,17 +127,33 @@ export function createUninstallCommand(): Command {
       });
 
       const service = new UninstallService({ shakaHome });
+      const only = getProviderNames().filter((name) => options[name]);
 
-      console.log("Uninstalling Shaka...\n");
+      console.log(
+        only.length > 0
+          ? `Uninstalling Shaka from: ${only.join(", ")}\n`
+          : "Uninstalling Shaka...\n",
+      );
 
-      const deleteUserData = await promptDeleteUserData(options, shakaHome);
-      const result = await service.uninstall({ deleteUserData });
+      // Per-provider scope skips the interactive user-data prompt — the
+      // user is not making a whole-install decision. `--delete-data` is
+      // forwarded as-is so the service-layer guard rejects the
+      // contradictory combination instead of silently ignoring it.
+      const deleteUserData =
+        only.length > 0
+          ? options.deleteData === true
+          : await promptDeleteUserData(options, shakaHome);
+      const result = await service.uninstall({
+        deleteUserData,
+        ...(only.length > 0 ? { only } : {}),
+      });
 
       if (!result.ok) {
         console.error(`ERROR: ${result.error.message}`);
         process.exit(1);
       }
 
-      logResult(result.value, deleteUserData, shakaHome);
+      const scope = only.length > 0 ? new Set(only) : null;
+      logResult(result.value, deleteUserData, shakaHome, scope);
     });
 }

@@ -55,8 +55,8 @@ async function makeRepoEnv(label: string): Promise<Env> {
   };
 }
 
-const NONE: DetectedProviders = { claude: false, opencode: false, codex: false };
-const CLAUDE_ONLY: DetectedProviders = { claude: true, opencode: false, codex: false };
+const NONE: DetectedProviders = { claude: false, opencode: false, codex: false, pi: false };
+const CLAUDE_ONLY: DetectedProviders = { claude: true, opencode: false, codex: false, pi: false };
 
 function spyExitAndErr(): {
   readonly restore: () => void;

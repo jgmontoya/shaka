@@ -31,6 +31,10 @@ export interface ShakaConfig {
       readonly enabled: boolean;
       readonly summarization_model?: string;
     };
+    readonly pi?: {
+      readonly enabled: boolean;
+      readonly summarization_model?: string;
+    };
   };
   readonly assistant: {
     readonly name: string;
@@ -156,6 +160,9 @@ export function isSubagent(env: NodeJS.ProcessEnv = process.env): boolean {
   // Codex: Shaka-set sentinel (see src/providers/codex/configurer.ts wrapper).
   if (env.SHAKA_CODEX_SUBAGENT === "true") return true;
 
+  // Pi: Shaka-set sentinel (see defaults/pi/extension.ts early-return guard).
+  if (env.SHAKA_PI_SUBAGENT === "true") return true;
+
   return false;
 }
 
@@ -200,7 +207,12 @@ export async function getSummarizationModel(
   provider: string,
   shakaHome?: string,
 ): Promise<string | undefined> {
-  const defaults: Record<string, string> = { claude: "haiku", opencode: "auto", codex: "auto" };
+  const defaults: Record<string, string> = {
+    claude: "haiku",
+    opencode: "auto",
+    codex: "auto",
+    pi: "auto",
+  };
   const config = await loadConfig(shakaHome);
   const providerConfig = config?.providers?.[provider as keyof typeof config.providers];
   const model = providerConfig?.summarization_model ?? defaults[provider] ?? "auto";
@@ -282,6 +294,13 @@ export async function ensureConfigComplete(shakaHome: string): Promise<boolean> 
   const providers = (config.providers ?? {}) as Record<string, unknown>;
   if (providers.codex === undefined) {
     providers.codex = { enabled: false, summarization_model: "auto" };
+    config.providers = providers;
+    changed = true;
+  }
+
+  // Backfill pi provider if missing (added in Pi v1)
+  if (providers.pi === undefined) {
+    providers.pi = { enabled: false, summarization_model: "auto" };
     config.providers = providers;
     changed = true;
   }

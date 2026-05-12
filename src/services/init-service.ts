@@ -354,7 +354,7 @@ export class InitService {
 
     if (toInstall.length === 0) {
       return err(
-        new Error("No AI providers detected. Install Claude Code, opencode, or Codex first."),
+        new Error("No AI providers detected. Install Claude Code, opencode, Codex, or Pi first."),
       );
     }
 

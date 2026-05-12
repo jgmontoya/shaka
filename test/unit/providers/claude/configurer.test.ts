@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeLink } from "../../../../src/platform/paths";
@@ -98,6 +98,71 @@ You are a text-only inference assistant.
       expect(settings.hooks).toBeDefined();
     });
 
+    test("hook command does not let `$(...)` or `$VAR` in the path expand under the shell", async () => {
+      // Claude parses `command` as a shell string. The previous fix
+      // wrapped paths in DOUBLE quotes, but inside double quotes `$(...)`,
+      // `$VAR`, and backticks still expand — a hook path like
+      // `~/.config/shaka/$(rm -rf ~)/h.ts` would execute. POSIX-safe is
+      // single-quoted with `'\''` escape — single quotes never expand.
+      const evilRoot = await mkdtemp(join(tmpdir(), "shaka-claude-evilpath-"));
+      // Path component with shell-active syntax. The directory name itself
+      // contains `$(echo PWNED)` — if the configurer's command leaks this
+      // through double-quoted interpolation, a downstream `eval`-style
+      // shell would execute it.
+      const evilDir = join(evilRoot, "$(echo PWNED)");
+      try {
+        await mkdir(`${evilDir}/system/hooks`, { recursive: true });
+        await Bun.write(
+          `${evilDir}/system/hooks/session-start.ts`,
+          `export const TRIGGER = ["session.start"] as const;\nconsole.log("ok");\n`,
+        );
+        const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+        await configurer.install({ shakaHome: evilDir });
+
+        const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+        const cmd = settings.hooks.SessionStart[0].hooks[0].command as string;
+        // The literal $( must survive into the stored command unexpanded.
+        expect(cmd).toContain("$(echo PWNED)");
+        // And the path must be wrapped in SINGLE quotes (or have $ escaped)
+        // so a shell parser can't expand it. Easiest tight assertion: the
+        // path appears between single quotes.
+        expect(cmd).toMatch(/'[^']*\$\(echo PWNED\)[^']*'/);
+      } finally {
+        await rm(evilRoot, { recursive: true, force: true });
+      }
+    });
+
+    test("hook command quotes the path so spaces in $HOME don't break execution", async () => {
+      // macOS and Windows allow spaces in usernames (e.g. /Users/jane doe/).
+      // The hook command Claude runs is parsed as a shell string, so an
+      // unquoted path would be word-split and the hook would silently
+      // never execute. Use a unique temp root so this doesn't race the
+      // sibling test in `codex/configurer.test.ts` under parallel runs
+      // (both used to point at `tmpdir()/shaka home with spaces`).
+      const spacedRoot = await mkdtemp(join(tmpdir(), "shaka-claude-spaced-"));
+      const spacedShaka = join(spacedRoot, "shaka home with spaces");
+      try {
+        await mkdir(`${spacedShaka}/system/hooks`, { recursive: true });
+        await Bun.write(
+          `${spacedShaka}/system/hooks/session-start.ts`,
+          `export const TRIGGER = ["session.start"] as const;
+console.log("ok");
+`,
+        );
+        const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+        await configurer.install({ shakaHome: spacedShaka });
+
+        const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
+        const cmd = settings.hooks.SessionStart[0].hooks[0].command as string;
+        expect(cmd).toContain(spacedShaka);
+        // The hook path appears quoted (single or double) so the space
+        // doesn't word-split the shell argv.
+        expect(cmd).toMatch(/bun ["'][^"']*shaka home with spaces[^"']*["']/);
+      } finally {
+        await rm(spacedRoot, { recursive: true, force: true });
+      }
+    });
+
     test("does not duplicate hook if already exists", async () => {
       const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
 
@@ -171,10 +236,10 @@ console.log("hook-b");
       expect(shakaEntry).toBeDefined();
       expect(shakaEntry.hooks).toHaveLength(2);
       expect(shakaEntry.hooks.map((h: { command: string }) => h.command)).toContain(
-        `bun run ${join(testShakaHome, "system", "hooks", "hook-a.ts")}`,
+        `bun '${join(testShakaHome, "system", "hooks", "hook-a.ts")}'`,
       );
       expect(shakaEntry.hooks.map((h: { command: string }) => h.command)).toContain(
-        `bun run ${join(testShakaHome, "system", "hooks", "hook-b.ts")}`,
+        `bun '${join(testShakaHome, "system", "hooks", "hook-b.ts")}'`,
       );
     });
 
@@ -201,13 +266,13 @@ console.log("security");
       expect(bashEntry).toBeDefined();
       expect(bashEntry.hooks).toHaveLength(1);
       expect(bashEntry.hooks[0].command).toBe(
-        `bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`,
+        `bun '${join(testShakaHome, "system", "hooks", "security.ts")}'`,
       );
 
       expect(editEntry).toBeDefined();
       expect(editEntry.hooks).toHaveLength(1);
       expect(editEntry.hooks[0].command).toBe(
-        `bun run ${join(testShakaHome, "system", "hooks", "security.ts")}`,
+        `bun '${join(testShakaHome, "system", "hooks", "security.ts")}'`,
       );
     });
 

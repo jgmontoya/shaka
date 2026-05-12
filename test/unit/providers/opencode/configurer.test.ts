@@ -428,6 +428,80 @@ console.log("format");
     });
   });
 
+  describe("Shaka tools registered with opencode", () => {
+    // opencode plugins can expose custom tools via the `tool` field of their
+    // returned object. The Shaka plugin surfaces our system tools the same
+    // way Pi's extension does — both shell to `shaka tool <name>`, keeping
+    // tool defs in one place (defaults/system/tools/) regardless of provider.
+
+    test("plugin declares memory-search and inference tools", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).toContain("memory-search");
+      expect(content).toContain("inference");
+    });
+
+    test("tool execute shells to `shaka tool <name>`", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      // The fragment must include both "tool" subcommand wiring and the
+      // `runShakaTool` helper that pipes JSON args via stdin to subprocess.
+      expect(content).toContain("tool: {");
+      expect(content).toContain("runShakaTool");
+    });
+
+    test("runShakaTool escalates SIGTERM → SIGKILL on timeout (mirrors agent-execution)", async () => {
+      // A `shaka tool` that traps or ignores SIGTERM would still wedge the
+      // turn — the same risk `runAgentStep` mitigates with a 500ms SIGKILL
+      // follow-up. Substring-asserted because the plugin runs in opencode's
+      // runtime; live spawn would require docker.
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).toMatch(/SIGTERM/);
+      expect(content).toMatch(/SIGKILL/);
+    });
+
+    test("runShakaTool bounds the subprocess with a timeout (so a hung shaka can't wedge the model turn)", async () => {
+      // Live-path symmetry with Pi's bridge — both shells to `shaka tool
+      // <name>` on every model invocation, both must fail fast if the
+      // subprocess hangs. Substring-asserted on the generator output
+      // because the plugin runs in opencode's runtime, not in this
+      // process (same module-load constraint as Pi's extension template).
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      // Pin the concrete timeout wiring — the previous loose
+      // `setTimeout|AbortSignal|timed out` regex passed even if the
+      // SIGTERM/SIGKILL escalation got removed, just because the error
+      // string still contained "timed out".
+      expect(content).toContain("TOOL_TIMEOUT_MS");
+      expect(content).toContain("setTimeout(");
+      expect(content).toContain('proc.kill("SIGTERM")');
+      expect(content).toContain('proc.kill("SIGKILL")');
+    });
+
+    test("tool args use zod ZodRawShape, not JSON Schema (Exp 53 — opencode rejects JSON Schema)", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      // Zod-shaped args use `z.string()` / `z.enum(...)` chained with
+      // `.describe()` / `.optional()`. The JSON Schema shape we used to ship
+      // (`{ type: "object", properties: {...} }`) crashes opencode's plugin
+      // runtime with `n._zod.def` undefined — see Exp 53 README.
+      expect(content).toContain("z.string()");
+      expect(content).not.toMatch(/args:\s*\{\s*type:\s*["']object["']/);
+      expect(content).toContain('import { tool } from "@opencode-ai/plugin"');
+    });
+  });
+
   describe("commands", () => {
     /** Helper: install + orchestrate commands (the real flow) */
     async function installWithCommands(configurer: OpencodeProviderConfigurer) {

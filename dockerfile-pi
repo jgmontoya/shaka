@@ -1,0 +1,54 @@
+# Shaka + Pi — isolated test environment
+# Provides full isolation — no writes to host ~/.config/shaka/, ~/.pi/, or
+# global bun state.
+
+# Trixie (not Bookworm) for `nodejs` — Pi needs Node 20+ and Bookworm only
+# ships Node 18.
+FROM debian:trixie-slim
+
+LABEL org.opencontainers.image.title="shaka-pi" \
+      org.opencontainers.image.description="Shaka dev/test environment with Pi provider"
+
+# curl/unzip for the bun installer; jq for test assertions; git for the
+# autoresearch e2e; nodejs because Pi's `pi` bin script ships a
+# `#!/usr/bin/env node` shebang and Bun's global-install shim doesn't redirect
+# it — without `node` on PATH the smoke-load gate inside `shaka init --pi`
+# fails with "node not found" instead of exercising real Pi behaviour. Apt
+# cache cleanup at the end keeps the image small.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl ca-certificates unzip jq git nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -s /bin/bash shakaUser
+USER shakaUser
+WORKDIR /home/shakaUser
+
+# Install bun (user-level — everything under ~/.bun/). Pin the runtime so Pi
+# container failures don't drift with the install script's latest release.
+ENV BUN_VERSION=1.3.13
+RUN curl -fsSLo /tmp/bun-install.sh --retry 5 --connect-timeout 10 https://bun.sh/install && \
+    bash /tmp/bun-install.sh "bun-v${BUN_VERSION}" && \
+    rm -f /tmp/bun-install.sh
+ENV PATH="/home/shakaUser/.bun/bin:${PATH}"
+
+# Install Pi globally via bun. Pin the version Shaka integrates against so
+# extension shape changes upstream don't silently break this container.
+RUN bun add -g @earendil-works/pi-coding-agent@0.74.0 && \
+    mkdir -p /home/shakaUser/.pi/agent
+
+# Set up app directory
+WORKDIR /home/shakaUser/app
+
+# Install dependencies (layer caching)
+COPY --chown=shakaUser:shakaUser package.json bun.lock ./
+RUN bun install --frozen-lockfile && bun link
+
+# Copy source
+COPY --chown=shakaUser:shakaUser src/ src/
+COPY --chown=shakaUser:shakaUser defaults/ defaults/
+COPY --chown=shakaUser:shakaUser test/ test/
+COPY --chown=shakaUser:shakaUser tsconfig.json biome.json ./
+
+# Default: run all checks (typecheck + lint + test)
+CMD ["bun", "run", "check"]

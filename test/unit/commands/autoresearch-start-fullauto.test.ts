@@ -14,10 +14,7 @@ import { chmod, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runStart } from "../../../src/commands/autoresearch";
-import {
-  type AutoresearchMeta,
-  readAutoresearchMeta,
-} from "../../../src/services/autoresearch";
+import { type AutoresearchMeta, readAutoresearchMeta } from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
 async function sh(args: string[], cwd: string): Promise<void> {
@@ -58,7 +55,7 @@ async function makeRepoEnv(label: string): Promise<Env> {
   };
 }
 
-const CLAUDE_ONLY: DetectedProviders = { claude: true, opencode: false, codex: false };
+const CLAUDE_ONLY: DetectedProviders = { claude: true, opencode: false, codex: false, pi: false };
 
 function swapIsTTY(value: boolean): () => void {
   const descriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -399,7 +396,7 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
           "oneshot objective",
           { wizard: false, dryRun: false, oneshot: true },
           {
-            detectProviders: () => ({ claude: false, opencode: false, codex: false }),
+            detectProviders: () => ({ claude: false, opencode: false, codex: false, pi: false }),
           },
         ),
       ).rejects.toThrow(/__stub_exit__:1/);

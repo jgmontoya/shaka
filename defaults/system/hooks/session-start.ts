@@ -17,7 +17,7 @@ import {
   loadKnowledgeIndex,
   loadLearnings,
   loadShakaFile,
-  renderEntry,
+  renderEntryForContext,
   renderSessionSection,
   resolveDefaultsUserDir,
   resolveShakaHome,
@@ -89,7 +89,7 @@ async function loadLearnedKnowledge(
     const selected = selectLearnings(entries, cwd, budget, recencyWindowDays);
     if (selected.length === 0) return "";
 
-    const rendered = selected.map(renderEntry).join("\n\n---\n\n");
+    const rendered = selected.map(renderEntryForContext).join("\n\n---\n\n");
     return `## Learnings\n\n${rendered}`;
   } catch {
     return "";

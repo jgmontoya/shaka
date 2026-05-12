@@ -14,6 +14,7 @@ import {
   parseQualityAssessmentOutput,
   promoteToGlobal,
   renderEntry,
+  renderEntryForContext,
   renderLearnings,
   scoreEntry,
   selectLearnings,
@@ -235,6 +236,26 @@ describe("renderEntry", () => {
   });
 });
 
+describe("renderEntryForContext", () => {
+  test("includes title and body", () => {
+    const rendered = renderEntryForContext(makeEntry());
+    expect(rendered).toContain("### Use Bun.file() instead of fs.readFile()");
+    expect(rendered).toContain("This project uses Bun runtime.");
+  });
+
+  test("omits metadata comment", () => {
+    const rendered = renderEntryForContext(makeEntry());
+    expect(rendered).not.toContain("<!--");
+    expect(rendered).not.toContain("exposures:");
+    expect(rendered).not.toContain("cwd:");
+  });
+
+  test("entry without body renders just the title", () => {
+    const rendered = renderEntryForContext(makeEntry({ body: "" }));
+    expect(rendered).toBe("### Use Bun.file() instead of fs.readFile()");
+  });
+});
+
 describe("renderLearnings", () => {
   test("includes file header", () => {
     const result = renderLearnings([]);
@@ -402,9 +423,20 @@ describe("selectLearnings", () => {
       exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
     });
     // Give enough budget for only one — CWD match has same base score as global
-    const entrySize = renderEntry(cwdMatch).length;
+    const entrySize = renderEntryForContext(cwdMatch).length;
     const selected = selectLearnings([globalEntry, cwdMatch], "/projects/myapp", entrySize + 10);
     expect(selected).toHaveLength(1);
+  });
+
+  test("budget is measured against context render, not storage render", () => {
+    const a = makeEntry({ title: "Entry A", body: "Body A." });
+    const b = makeEntry({ title: "Entry B", body: "Body B." });
+    // Budget fits exactly two context-rendered entries. The storage render
+    // is larger (it carries metadata), so a probe sized against storage
+    // would admit only one entry and under-fill the budget.
+    const budget = renderEntryForContext(a).length + renderEntryForContext(b).length;
+
+    expect(selectLearnings([a, b], "/projects/myapp", budget)).toHaveLength(2);
   });
 
   test("excludes non-matching CWD entries before scoring", () => {

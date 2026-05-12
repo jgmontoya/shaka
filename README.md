@@ -12,15 +12,15 @@ bun link
 shaka init
 ```
 
-`shaka init` will detect your installed providers (Claude Code, opencode, Codex, or any combination) and set everything up.
+`shaka init` will detect your installed providers (Claude Code, opencode, Codex, Pi, or any combination) and set everything up.
 
-**Prerequisites:** [Bun](https://bun.sh) (make sure it's [on your `PATH`](https://bun.com/docs/installation#add-bun-to-your-path)) and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai), or [Codex](https://github.com/openai/codex).
+**Prerequisites:** [Bun](https://bun.sh) (make sure it's [on your `PATH`](https://bun.com/docs/installation#add-bun-to-your-path)) and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai), [Codex](https://github.com/openai/codex), or [Pi](https://pi.dev).
 
 ## What Happens
 
 Shaka doesn't replace your AI coding assistant — it enhances it. Once installed, it works invisibly through hooks:
 
-1. **You start a session** (Claude Code, opencode, or Codex). The `SessionStart` hook loads your identity, preferences, goals, and reasoning framework into the conversation context. The AI knows who you are and how to think.
+1. **You start a session** (Claude Code, opencode, Codex, or Pi). The `SessionStart` hook loads your identity, preferences, goals, and reasoning framework into the conversation context. The AI knows who you are and how to think.
 
 2. **You work normally.** Type prompts, ask questions, write code. Shaka is transparent.
 
@@ -48,7 +48,7 @@ Inspired by [PAI](https://github.com/danielmiessler/Personal_AI_Infrastructure),
 2. **Hooks are standalone scripts** -- Run directly with `bun`, no CLI binary required at runtime.
 3. **Content is declarative** -- Markdown files, JSON config, YAML patterns. Code only where determinism is needed.
 4. **Dependencies at root level** -- `defaults/` is pure content. No `node_modules/` inside it.
-5. **All providers are first-class** -- Claude Code, opencode, and Codex all get the same treatment, not one primary + others as afterthoughts.
+5. **All providers are first-class** -- Claude Code, opencode, Codex, and Pi all get the same treatment, not one primary + others as afterthoughts.
 
 For the rationale behind key structural decisions, see [Architecture Decisions](docs/architecture-decisions.md).
 
@@ -140,6 +140,7 @@ shaka init                    # Set up Shaka (creates dirs, symlinks, installs h
 shaka init --claude           # Set up for Claude Code only
 shaka init --opencode         # Set up for opencode only
 shaka init --codex            # Set up for Codex only
+shaka init --pi               # Set up for Pi only
 shaka init --all              # Set up for all detected providers
 shaka update                  # Upgrade to latest release (tag-based)
 shaka uninstall               # Remove hooks and config
@@ -168,8 +169,8 @@ shaka memory consolidate      # Deduplicate, resolve contradictions, and condens
 
 `shaka init` does the following:
 
-1. Detects which providers (Claude Code, opencode, Codex) are installed
-2. Prompts for provider selection (or use `--claude`/`--opencode`/`--codex`/`--all`)
+1. Detects which providers (Claude Code, opencode, Codex, Pi) are installed
+2. Prompts for provider selection (or use `--claude`/`--opencode`/`--codex`/`--pi`/`--all`)
 3. Creates `user/`, `memory/`, `customizations/` directories
 4. Symlinks `system/` to the repo's `defaults/system/`
 5. Copies user file templates (identity.md, preferences.md, etc.)
@@ -222,8 +223,10 @@ Deterministic TypeScript functions that execute code, not prompts. Tools do the 
 
 Currently, two tools ship with Shaka:
 
-- **`inference.ts`** — Provider-agnostic AI inference (wraps Claude CLI, opencode CLI, or Codex CLI)
-- **`memory-search.ts`** — Search session summaries by keyword (exposed via MCP)
+- **`inference.ts`** — Provider-agnostic AI inference (wraps Claude CLI, opencode CLI, Codex CLI, or Pi CLI)
+- **`memory-search.ts`** — Search session summaries by keyword
+
+Both tools are surfaced to every supported provider's model: Claude Code and Codex via Shaka's MCP server (`shaka mcp serve`), opencode via the generated plugin's `tool` field, and Pi via `pi.registerTool()` in the generated extension. The generated opencode and Pi bridges shell out to `shaka tool <name>` when those tools run, while MCP providers execute the same tool definitions through the MCP server. Tool definitions live in one place (`defaults/system/tools/`) regardless of which provider the model is running under.
 
 Shaka adopts [opencode's tool format](https://opencode.ai/docs/custom-tools/) for consistency across providers. Tools are TypeScript files using the `tool()` helper:
 
@@ -246,6 +249,7 @@ Tools are exposed to AI providers via:
 - **opencode**: Symlinked to `.opencode/tools/` (native)
 - **Claude Code**: Exposed via `shaka mcp serve` (MCP server)
 - **Codex**: Exposed via `shaka mcp serve` (MCP server)
+- **Pi**: Exposed via `pi.registerTool()` in the generated extension (native)
 
 ### Commands
 
@@ -392,8 +396,8 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 
 **Shipped skills:**
 
-| Skill           | Purpose                                          |
-| --------------- | ------------------------------------------------ |
+| Skill            | Purpose                                          |
+| ---------------- | ------------------------------------------------ |
 | tdd              | Test-driven development (default for all builds) |
 | be-creative      | Extended thinking + diverse option generation    |
 | council          | Multi-perspective debate (3-7 agents)            |
@@ -535,13 +539,14 @@ See [docs/autoresearch-walkthrough.md](docs/autoresearch-walkthrough.md) for an 
 
 ## Provider Support
 
-Shaka integrates with three AI coding assistants:
+Shaka integrates with four AI coding assistants:
 
-| Provider    | Tools                          | Hooks                      | Context    |
-| ----------- | ------------------------------ | -------------------------- | ---------- |
-| Claude Code | MCP server (`shaka mcp serve`) | Subprocess in `~/.claude/` | CLAUDE.md  |
-| opencode    | Native (`.opencode/tools/`)    | In-process plugin          | .opencode/ |
-| Codex       | MCP server (`shaka mcp serve`) | Subprocess in `~/.codex/`  | AGENTS.md  |
+| Provider    | Tools                                 | Hooks                                                    | Context               |
+| ----------- | ------------------------------------- | -------------------------------------------------------- | --------------------- |
+| Claude Code | MCP server (`shaka mcp serve`)        | Subprocess in `~/.claude/`                               | CLAUDE.md             |
+| opencode    | Native (`.opencode/tools/`)           | In-process plugin                                        | .opencode/            |
+| Codex       | MCP server (`shaka mcp serve`)        | Subprocess in `~/.codex/`                                | AGENTS.md             |
+| Pi          | Native bridge via `pi.registerTool()` | Generated extension at `~/.pi/agent/extensions/shaka.ts` | AGENTS.md / CLAUDE.md |
 
 You write hooks once — provider-specific adapters handle the translation. For details on hook abstraction, event mapping, and tool integration, see [Providers](docs/providers.md).
 
@@ -598,6 +603,7 @@ just e2e             # Run all e2e tests
 just e2e-claude      # Claude Code e2e only
 just e2e-opencode    # opencode e2e only
 just e2e-codex       # Codex e2e only
+just e2e-pi          # Pi e2e only (mount ~/.pi/agent/auth.json to exercise the auth path)
 ```
 
 ## Prior Art

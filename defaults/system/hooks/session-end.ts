@@ -34,6 +34,7 @@ import {
   parseCodexTranscript,
   parseExtractedLearnings,
   parseOpencodeTranscript,
+  parsePiTranscript,
   parseSummaryOutput,
   projectSlug,
   readExistingTopicTitles,
@@ -66,7 +67,7 @@ interface SessionEndInput {
 
 /** Type guard narrowing the on-wire `provider` string to ProviderName. */
 function isProviderName(value: unknown): value is ProviderName {
-  return value === "claude" || value === "opencode" || value === "codex";
+  return value === "claude" || value === "opencode" || value === "codex" || value === "pi";
 }
 
 /**
@@ -104,6 +105,8 @@ async function loadTranscript(input: SessionEndInput): Promise<NormalizedMessage
       return await loadClaudeTranscript(input.transcript_path);
     case "codex":
       return await loadCodexTranscript(input.transcript_path);
+    case "pi":
+      return await loadPiTranscript(input.transcript_path);
     case "opencode":
       return await loadOpencodeTranscript(input.session_id);
     default:
@@ -128,6 +131,22 @@ async function loadCodexTranscript(
     return parseCodexTranscript(content);
   } catch {
     console.error(`Failed to read Codex transcript: ${transcriptPath}`);
+    return [];
+  }
+}
+
+async function loadPiTranscript(transcriptPath: string | undefined): Promise<NormalizedMessage[]> {
+  if (!transcriptPath) {
+    // Mirror loadClaudeTranscript's diagnostic — turns a miswired Pi hook
+    // into a distinct stderr line instead of looking like an empty session.
+    console.error("Pi session missing transcript_path");
+    return [];
+  }
+  try {
+    const content = await Bun.file(transcriptPath).text();
+    return parsePiTranscript(content);
+  } catch {
+    console.error(`Failed to read Pi transcript: ${transcriptPath}`);
     return [];
   }
 }

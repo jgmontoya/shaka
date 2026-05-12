@@ -9,7 +9,7 @@ import type {
 import { type BenchResult, runLoop, setupWorkspace } from "../../../src/services/autoresearch";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
 
-const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false };
+const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false, pi: false };
 
 async function sh(args: string[], cwd: string): Promise<string> {
   const proc = Bun.spawn(args, { cwd, stdout: "pipe", stderr: "pipe" });

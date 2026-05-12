@@ -135,7 +135,7 @@ section "Hook command format"
 
 HOOK_CMD=$(jq -r '.hooks.SessionStart[0].hooks[0].command // empty' "$HOOKS_JSON")
 
-if echo "$HOOK_CMD" | grep -q "bun run.*shaka-hook-wrapper.ts"; then
+if echo "$HOOK_CMD" | grep -q "bun .*shaka-hook-wrapper.ts"; then
   pass "Hook command uses wrapper script"
 else
   fail "Hook command missing wrapper: $HOOK_CMD"
@@ -149,8 +149,10 @@ else
   exit 1
 fi
 
-# Verify the hook file referenced in the command exists
-HOOK_FILE=$(echo "$HOOK_CMD" | awk '{print $NF}')
+# Verify the hook file referenced in the command exists. Use Shaka's
+# non-evaluating parser so POSIX-quoted paths with spaces or apostrophes
+# round-trip without evaluating user-editable hooks.json content.
+HOOK_FILE=$(bun "$(dirname "$0")/lib/shell-argv.ts" --last "$HOOK_CMD")
 if [ -f "$HOOK_FILE" ]; then
   pass "Referenced hook file exists: $HOOK_FILE"
 else
@@ -336,10 +338,10 @@ section "Feature flag"
 CONFIG_TOML="$HOME/.codex/config.toml"
 
 if [ -f "$CONFIG_TOML" ]; then
-  if grep -q "codex_hooks.*=.*true" "$CONFIG_TOML"; then
-    pass "codex_hooks feature flag enabled in config.toml"
+  if grep -q "^[[:space:]]*hooks[[:space:]]*=[[:space:]]*true" "$CONFIG_TOML"; then
+    pass "hooks feature flag enabled in config.toml"
   else
-    warn "codex_hooks flag not found in config.toml (may have been enabled but file format differs)"
+    warn "hooks flag not found in config.toml (may have been enabled but file format differs)"
     cat "$CONFIG_TOML"
   fi
 else

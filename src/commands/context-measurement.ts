@@ -20,7 +20,7 @@ import {
   resolveShakaHome,
 } from "../domain/config";
 import { loadKnowledgeIndex, readExistingTopicTitles } from "../memory/knowledge";
-import { loadLearnings, renderEntry, selectLearnings } from "../memory/learnings";
+import { loadLearnings, renderEntryForContext, selectLearnings } from "../memory/learnings";
 import { loadRollups, projectSlug } from "../memory/rollups";
 import { listSummaries, renderSessionSection, selectRecentSummaries } from "../memory/storage";
 
@@ -224,7 +224,7 @@ async function measureLearnings(shakaHome: string): Promise<LearningsComponent> 
     selectedCount = selected.length;
 
     if (selected.length > 0) {
-      const rendered = selected.map(renderEntry).join("\n\n---\n\n");
+      const rendered = selected.map(renderEntryForContext).join("\n\n---\n\n");
       const section = `## Learnings\n\n${rendered}`;
       injectedChars = section.length;
     }
