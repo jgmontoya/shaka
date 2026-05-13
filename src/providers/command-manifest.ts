@@ -6,6 +6,7 @@
  */
 
 import { join } from "node:path";
+import { validateCommandName } from "./command-name";
 
 const MANIFEST_FILE = "commands-manifest.json";
 
@@ -14,26 +15,79 @@ export interface CommandManifest {
   scoped: Record<string, string[]>;
 }
 
+function emptyManifest(): CommandManifest {
+  return { global: [], scoped: {} };
+}
+
+function readCommandNames(value: unknown, label: string, options?: { strict?: boolean }): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    if (options?.strict) {
+      throw new Error(`Invalid command manifest ${label}: expected array`);
+    }
+    return [];
+  }
+  return value.map((item, index) => {
+    if (typeof item !== "string") {
+      throw new Error(`Invalid command manifest ${label}[${index}]: expected command name string`);
+    }
+    const error = validateCommandName(item);
+    if (error) {
+      throw new Error(`Invalid command manifest ${label}[${index}]: ${error}`);
+    }
+    return item;
+  });
+}
+
+function readScopedCommands(
+  value: unknown,
+  options?: { strict?: boolean },
+): Record<string, string[]> {
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    if (options?.strict) {
+      throw new Error("Invalid command manifest scoped: expected object");
+    }
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([cwd, names]) => [
+      cwd,
+      readCommandNames(names, `scoped[${JSON.stringify(cwd)}]`, options),
+    ]),
+  );
+}
+
+export function assertValidCommandManifest(manifest: CommandManifest): void {
+  if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+    throw new Error("Invalid command manifest: expected object");
+  }
+  const raw = manifest as unknown as Record<string, unknown>;
+  readCommandNames(raw.global, "global", { strict: true });
+  readScopedCommands(raw.scoped, { strict: true });
+}
+
 /** Read manifest from shakaHome. Returns empty manifest if file doesn't exist. */
 export async function readManifest(shakaHome: string): Promise<CommandManifest> {
   const file = Bun.file(join(shakaHome, MANIFEST_FILE));
-  if (!(await file.exists())) return { global: [], scoped: {} };
+  if (!(await file.exists())) return emptyManifest();
+
+  let raw: unknown;
   try {
-    const raw = (await file.json()) as Record<string, unknown>;
-    return {
-      global: Array.isArray(raw.global) ? raw.global : [],
-      scoped:
-        raw.scoped && typeof raw.scoped === "object" && !Array.isArray(raw.scoped)
-          ? (Object.fromEntries(
-              Object.entries(raw.scoped as Record<string, unknown>).filter(([, v]) =>
-                Array.isArray(v),
-              ),
-            ) as Record<string, string[]>)
-          : {},
-    };
+    raw = await file.json();
   } catch {
-    return { global: [], scoped: {} };
+    return emptyManifest();
   }
+
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return emptyManifest();
+
+  const obj = raw as Record<string, unknown>;
+
+  return {
+    global: readCommandNames(obj.global, "global", { strict: true }),
+    scoped: readScopedCommands(obj.scoped, { strict: true }),
+  };
 }
 
 /** Write manifest to shakaHome. Overwrites existing. */

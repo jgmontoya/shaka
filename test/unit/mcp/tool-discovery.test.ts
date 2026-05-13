@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,16 +23,16 @@ describe("default tools", () => {
 });
 
 describe("tool-discovery", () => {
-  const testToolsDir = join(tmpdir(), "shaka-test-tools");
-
-  beforeEach(async () => {
-    await rm(testToolsDir, { recursive: true, force: true });
+  async function withTestToolsDir<T>(run: (testToolsDir: string) => Promise<T>): Promise<T> {
+    const testId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const testToolsDir = join(tmpdir(), `shaka-test-tools-${testId}`);
     await mkdir(testToolsDir, { recursive: true });
-  });
-
-  afterEach(async () => {
-    await rm(testToolsDir, { recursive: true, force: true });
-  });
+    try {
+      return await run(testToolsDir);
+    } finally {
+      await rm(testToolsDir, { recursive: true, force: true });
+    }
+  }
 
   describe("isToolDefinition", () => {
     test("returns true for valid tool definition", () => {
@@ -104,70 +104,81 @@ describe("tool-discovery", () => {
     });
 
     test("returns empty array for empty directory", async () => {
-      const tools = await discoverTools(testToolsDir);
-      expect(tools).toEqual([]);
+      await withTestToolsDir(async (testToolsDir) => {
+        const tools = await discoverTools(testToolsDir);
+        expect(tools).toEqual([]);
+      });
     });
 
     test("ignores files without valid tool export", async () => {
-      await Bun.write(`${testToolsDir}/helper.ts`, `export const notATool = { foo: "bar" };`);
-      const tools = await discoverTools(testToolsDir);
-      expect(tools).toEqual([]);
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(`${testToolsDir}/helper.ts`, `export const notATool = { foo: "bar" };`);
+        const tools = await discoverTools(testToolsDir);
+        expect(tools).toEqual([]);
+      });
     });
 
     test("discovers tool from .ts file", async () => {
-      await Bun.write(
-        `${testToolsDir}/echo.ts`,
-        `export default {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(
+          `${testToolsDir}/echo.ts`,
+          `export default {
           description: "Echo the input",
           inputSchema: { type: "object", properties: { message: { type: "string" } } },
           execute: async (args) => args.message,
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      expect(tools).toHaveLength(1);
-      expect(tools[0]?.name).toBe("echo");
-      expect(tools[0]?.description).toBe("Echo the input");
+        expect(tools).toHaveLength(1);
+        expect(tools[0]?.name).toBe("echo");
+        expect(tools[0]?.description).toBe("Echo the input");
+      });
     });
 
     test("uses tool name from definition if provided", async () => {
-      await Bun.write(
-        `${testToolsDir}/file.ts`,
-        `export default {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(
+          `${testToolsDir}/file.ts`,
+          `export default {
           name: "custom-name",
           description: "A tool with custom name",
           inputSchema: { type: "object", properties: {} },
           execute: async () => "result",
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      expect(tools).toHaveLength(1);
-      expect(tools[0]?.name).toBe("custom-name");
+        expect(tools).toHaveLength(1);
+        expect(tools[0]?.name).toBe("custom-name");
+      });
     });
 
     test("discovers named export ending with Tool", async () => {
-      await Bun.write(
-        `${testToolsDir}/utils.ts`,
-        `export const helperTool = {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(
+          `${testToolsDir}/utils.ts`,
+          `export const helperTool = {
           description: "A helper tool",
           inputSchema: { type: "object", properties: {} },
           execute: async () => "helped",
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      expect(tools).toHaveLength(1);
-      expect(tools[0]?.name).toBe("helper");
+        expect(tools).toHaveLength(1);
+        expect(tools[0]?.name).toBe("helper");
+      });
     });
 
     test("discovers multiple tools from one file", async () => {
-      await Bun.write(
-        `${testToolsDir}/multi.ts`,
-        `export default {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(
+          `${testToolsDir}/multi.ts`,
+          `export default {
           description: "Default tool",
           inputSchema: { type: "object", properties: {} },
           execute: async () => "default",
@@ -177,36 +188,40 @@ describe("tool-discovery", () => {
           inputSchema: { type: "object", properties: {} },
           execute: async () => "extra",
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      expect(tools).toHaveLength(2);
-      expect(tools.map((t) => t.name).sort()).toEqual(["extra", "multi"]);
+        expect(tools).toHaveLength(2);
+        expect(tools.map((t) => t.name).sort()).toEqual(["extra", "multi"]);
+      });
     });
 
     test("handles invalid tool files gracefully", async () => {
-      await Bun.write(`${testToolsDir}/broken.ts`, "this is not valid javascript");
-      await Bun.write(
-        `${testToolsDir}/valid.ts`,
-        `export default {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(`${testToolsDir}/broken.ts`, "this is not valid javascript");
+        await Bun.write(
+          `${testToolsDir}/valid.ts`,
+          `export default {
           description: "Valid tool",
           inputSchema: { type: "object", properties: {} },
           execute: async () => "valid",
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      // Should still load the valid tool
-      expect(tools).toHaveLength(1);
-      expect(tools[0]?.name).toBe("valid");
+        // Should still load the valid tool
+        expect(tools).toHaveLength(1);
+        expect(tools[0]?.name).toBe("valid");
+      });
     });
 
     test("tools can be executed", async () => {
-      await Bun.write(
-        `${testToolsDir}/math.ts`,
-        `export default {
+      await withTestToolsDir(async (testToolsDir) => {
+        await Bun.write(
+          `${testToolsDir}/math.ts`,
+          `export default {
           description: "Add two numbers",
           inputSchema: {
             type: "object",
@@ -217,13 +232,14 @@ describe("tool-discovery", () => {
           },
           execute: async (args) => String(Number(args.a) + Number(args.b)),
         };`,
-      );
+        );
 
-      const tools = await discoverTools(testToolsDir);
+        const tools = await discoverTools(testToolsDir);
 
-      expect(tools).toHaveLength(1);
-      const result = await tools[0]?.execute({ a: 2, b: 3 });
-      expect(result).toBe("5");
+        expect(tools).toHaveLength(1);
+        const result = await tools[0]?.execute({ a: 2, b: 3 });
+        expect(result).toBe("5");
+      });
     });
   });
 });

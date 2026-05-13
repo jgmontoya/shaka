@@ -1,17 +1,15 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
+import type { ProcessInvocation, ProcessResult } from "../../../src/platform/process-runner";
+import { DEFAULT_SETUP_TIMEOUT_MS } from "../../../src/providers/setup-defaults";
 import type { ProviderName } from "../../../src/providers/types";
 import {
-  type SetupOneshotDeps,
   buildClaudeArgs,
   buildCodexArgs,
   buildOpencodeArgs,
-  buildOpencodeOneshotArgs,
   buildPiArgs,
   runSetupInteractive,
   runSetupOneshot,
 } from "../../../src/services/setup-session";
-
-type FakeRunAgent = NonNullable<SetupOneshotDeps["runAgent"]>;
 
 test("buildClaudeArgs returns claude argv with positional objective and --append-system-prompt", () => {
   expect(buildClaudeArgs("make it fast", "SKILL BODY")).toEqual([
@@ -22,7 +20,7 @@ test("buildClaudeArgs returns claude argv with positional objective and --append
   ]);
 });
 
-test("buildOpencodeArgs returns opencode argv with --prompt and the setup agent name", () => {
+test("buildOpencodeArgs returns opencode argv with worktree path and setup agent name", () => {
   expect(buildOpencodeArgs("make it fast", "/tmp/wt")).toEqual([
     "opencode",
     "/tmp/wt",
@@ -31,21 +29,6 @@ test("buildOpencodeArgs returns opencode argv with --prompt and the setup agent 
     "--agent",
     "autoresearch-setup",
   ]);
-});
-
-test("buildOpencodeOneshotArgs returns opencode run argv with the setup agent", () => {
-  const args = buildOpencodeOneshotArgs("make it fast", "/tmp/wt");
-  expect(args.slice(0, 7)).toEqual([
-    "opencode",
-    "run",
-    "--dir",
-    "/tmp/wt",
-    "--agent",
-    "autoresearch-setup",
-    "--",
-  ]);
-  expect(args[7]).toContain("make it fast");
-  expect(args[7]?.toLowerCase()).toContain("do not ask follow-up questions");
 });
 
 test("buildCodexArgs prepends skill body to the objective as a single positional prompt", () => {
@@ -123,32 +106,25 @@ test("runSetupInteractive returns exit code, provider, and null resume fields", 
 });
 
 test("runSetupOneshot composes prompt with skill body, objective, and the no-user directive", async () => {
-  const captured: { prompt?: string; cwd?: string; timeout?: number }[] = [];
-  const fakeRunAgent = (async (opts: {
-    prompt: string;
-    cwd?: string;
-    timeout?: number;
-  }) => {
-    captured.push({ prompt: opts.prompt, cwd: opts.cwd, timeout: opts.timeout });
-    return {
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      provider: "claude" as const,
-      timedOut: false,
-    };
-  }) as unknown as FakeRunAgent;
+  const captured: ProcessInvocation[] = [];
+  const runProcess = async (invocation: ProcessInvocation): Promise<ProcessResult> => {
+    captured.push(invocation);
+    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  };
 
   const result = await runSetupOneshot("/tmp/wt", "make it fast", "claude", "SKILL BODY CONTENT", {
-    runAgent: fakeRunAgent,
+    runProcess,
   });
 
   expect(captured).toHaveLength(1);
-  const prompt = captured[0]?.prompt ?? "";
+  const prompt = captured[0]?.stdin ?? "";
   expect(prompt).toContain("SKILL BODY CONTENT");
   expect(prompt).toContain("make it fast");
   expect(prompt).toContain("do NOT have a user to ask");
+  expect(captured[0]?.command).toBe("claude");
+  expect(captured[0]?.args).toEqual(["-p"]);
   expect(captured[0]?.cwd).toBe("/tmp/wt");
+  expect(captured[0]?.timeout).toBe(DEFAULT_SETUP_TIMEOUT_MS);
 
   expect(result).toEqual({
     exitCode: 0,
@@ -158,29 +134,35 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
   });
 });
 
-test("runSetupOneshot uses opencode's setup agent for opencode oneshot", async () => {
-  const calls: { args: string[]; opts: { cwd?: string; stdout?: unknown; stderr?: unknown } }[] =
-    [];
-  const spawn = ((args: string[], opts: { cwd?: string; stdout?: unknown; stderr?: unknown }) => {
-    calls.push({ args, opts });
-    return {
-      stdout: new Response("created files").body,
-      stderr: new Response("").body,
-      exited: Promise.resolve(0),
-    };
-  }) as unknown as typeof Bun.spawn;
-  const fakeRunAgent = (async () => {
-    throw new Error("generic runAgentStep should not be used for opencode setup");
-  }) as unknown as FakeRunAgent;
+test("runSetupOneshot dispatches directly to the selected provider setup capability", async () => {
+  const captured: ProcessInvocation[] = [];
+  const runProcess = async (invocation: ProcessInvocation): Promise<ProcessResult> => {
+    captured.push(invocation);
+    return { exitCode: 0, stdout: "", stderr: "", timedOut: false };
+  };
 
-  const result = await runSetupOneshot("/tmp/wt", "make it fast", "opencode", "SKILL", {
-    runAgent: fakeRunAgent,
-    spawn,
+  const result = await runSetupOneshot("/tmp/wt", "obj", "codex", "skill", { runProcess });
+
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.command).toBe("codex");
+  expect(captured[0]?.args?.slice(0, 2)).toEqual(["exec", "--full-auto"]);
+  expect(result.provider).toBe("codex");
+});
+
+test("runSetupOneshot routes opencode setup through its setup agent and explicit worktree dir", async () => {
+  const captured: ProcessInvocation[] = [];
+  const runProcess = async (invocation: ProcessInvocation): Promise<ProcessResult> => {
+    captured.push(invocation);
+    return { exitCode: 0, stdout: "created setup files", stderr: "", timedOut: false };
+  };
+  const result = await runSetupOneshot("/tmp/wt", "make it fast", "opencode", "SKILL BODY", {
+    runProcess,
   });
 
-  expect(calls).toHaveLength(1);
-  expect(calls[0]?.args.slice(0, 7)).toEqual([
-    "opencode",
+  expect(captured).toHaveLength(1);
+  expect(captured[0]?.command).toBe("opencode");
+  const args = captured[0]?.args ?? [];
+  expect(args.slice(0, 6)).toEqual([
     "run",
     "--dir",
     "/tmp/wt",
@@ -188,36 +170,16 @@ test("runSetupOneshot uses opencode's setup agent for opencode oneshot", async (
     "autoresearch-setup",
     "--",
   ]);
-  expect(calls[0]?.opts.cwd).toBe("/tmp/wt");
-  expect(calls[0]?.opts.stdout).toBe("pipe");
-  expect(calls[0]?.opts.stderr).toBe("pipe");
-  expect(result.exitCode).toBe(0);
-  expect(result.provider).toBe("opencode");
-});
-
-test("runSetupOneshot forces the selected provider via DetectedProviders override", async () => {
-  // Regression guard: without the override, runAgentStep falls back to
-  // detectInstalledProviders() and can silently pick a different backend.
-  // Using a non-claude provider makes an unforced routing bug observable —
-  // the captured DetectedProviders should have exactly one true flag.
-  const captured: {
-    detected?: { claude: boolean; opencode: boolean; codex: boolean; pi: boolean };
-  }[] = [];
-  const fakeRunAgent = (async (
-    _opts: { prompt: string; cwd?: string; timeout?: number },
-    detected?: { claude: boolean; opencode: boolean; codex: boolean; pi: boolean },
-  ) => {
-    captured.push({ detected });
-    return {
-      exitCode: 0,
-      stdout: "",
-      stderr: "",
-      provider: "codex" as const,
-      timedOut: false,
-    };
-  }) as unknown as FakeRunAgent;
-
-  await runSetupOneshot("/tmp/wt", "obj", "codex", "skill", { runAgent: fakeRunAgent });
-
-  expect(captured[0]?.detected).toEqual({ claude: false, opencode: false, codex: true, pi: false });
+  expect(args).toHaveLength(7);
+  expect(args[6]).toContain("SKILL BODY");
+  expect(args[6]).toContain("make it fast");
+  expect(captured[0]?.cwd).toBe("/tmp/wt");
+  expect(captured[0]?.timeout).toBe(DEFAULT_SETUP_TIMEOUT_MS);
+  expect(result).toEqual({
+    exitCode: 0,
+    provider: "opencode",
+    resumeHint: null,
+    sessionId: null,
+    stdout: "created setup files",
+  });
 });

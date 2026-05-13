@@ -7,7 +7,7 @@
  * - defaults/ templates (via import from 'shaka')
  */
 
-import { getProviderNames } from "../providers/registry";
+import { getProviderModule, getProviderModules } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
 
 // Re-export from the canonical definition in types.ts
@@ -22,7 +22,7 @@ let cachedDetection: DetectedProviders | null = null;
  * Check if a specific provider CLI is installed.
  */
 export function isProviderInstalled(provider: ProviderName): boolean {
-  return Bun.which(provider) !== null;
+  return Bun.which(getProviderModule(provider).metadata.executable) !== null;
 }
 
 /**
@@ -35,8 +35,9 @@ export function detectInstalledProviders(): DetectedProviders {
   }
 
   const result = {} as DetectedProviders;
-  for (const name of getProviderNames()) {
-    result[name] = isProviderInstalled(name);
+  for (const provider of getProviderModules()) {
+    const name = provider.metadata.name;
+    result[name] = Bun.which(provider.metadata.executable) !== null;
   }
   cachedDetection = result;
   return cachedDetection;

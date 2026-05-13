@@ -117,3 +117,36 @@ Since hooks run at `~/.config/shaka/` (not in the repo), any code they import mu
 Forcing autoresearch into workflow shape would mean inheriting branch-per-step commits, step-scoped variables, and one-shot semantics — all wrong. It reuses backend primitives (`runAgentStep`, git helpers from `src/services/git.ts`, `Bun.spawn` for the benchmark) without wearing the workflow-runner's clothes.
 
 **Consequences:** `src/commands/autoresearch.ts` + `src/services/autoresearch.ts` are their own files. `listWorktrees`, `commitAllExcept`, `isCleanExcept`, and `revertWorkingTree` live in `src/services/git.ts` so future loop-shaped features can reuse them. A separate skill (`defaults/system/skills/autoresearch/SKILL.md`) carries the agent-facing protocol; the runner carries the mechanics.
+
+---
+
+## ADR-011: Provider Capabilities over Provider Switches
+
+**Status:** Accepted
+
+**Context:** Shaka supports Claude Code, opencode, Codex, and Pi. Install code
+already lived under `src/providers/`, but execution behavior had drifted into
+shared orchestration files: inference, agent execution, setup sessions, command
+compilation, and doctor status checks each knew provider-specific CLI flags,
+env guards, output formats, model mapping, or credentials.
+
+**Decision:** Use small provider capability interfaces and concrete provider
+modules instead of provider-name switches in orchestration code. The registry is
+the explicit wiring point for provider order and module lookup. Provider modules
+own their CLI quirks, generated artifacts, command formats, model mapping,
+credential checks, and install paths. Shared orchestration may select and
+iterate providers, but it must call provider capabilities for provider-specific
+behavior.
+
+**Rationale:** Adding a provider should change one provider module and one
+registry entry, not inference, setup sessions, agent execution, commands, and
+doctor in parallel. TypeScript interfaces plus composition fit the codebase
+better than an abstract provider base class with many overrides.
+
+**Consequences:** Provider-specific argv, env guards, output parsing, command
+formatting, setup invocation, and health checks live beside the provider. Shared
+helpers are allowed when at least two providers use the same behavior and tests
+name that shared contract. A warning-only architecture check guards large
+configurers, provider branches outside provider modules, stale opencode agent
+names, provider-specific generic option fields, and duplicate process timeout
+chains.

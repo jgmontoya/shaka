@@ -57,6 +57,7 @@ describe("UninstallService", () => {
       name,
       label: name,
       skillsDir: join(testHome, "fake-provider-skills", name),
+      commands: { install: async () => {} },
       isInstalled: () => true,
       install: async () => ok(undefined),
       installCommands: async () => {},

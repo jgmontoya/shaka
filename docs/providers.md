@@ -6,10 +6,33 @@ Shaka integrates with four AI coding assistants, treating each as a first-class 
 | ----------- | -------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------- | ----------------------------------------------------------- |
 | Claude Code | Subprocess via `~/.claude/settings.json`                 | MCP server (`shaka mcp serve`)                   | `~/.claude/commands/`                     | `~/.claude/skills/`, `~/.claude/agents/`                    |
 | opencode    | In-process plugin (`~/.config/opencode/plugins/`)        | Native `tool` field on the plugin                | `~/.config/opencode/commands/`            | `~/.config/opencode/skills/`, `~/.config/opencode/agents/`  |
-| Codex       | Wrapper script via `~/.codex/config.toml`                | MCP server (`shaka mcp serve`)                   | `~/.codex/prompts/`                       | `~/.codex/skills/`, `~/.codex/agents/`                      |
+| Codex       | Wrapper script via `~/.codex/hooks.json`                 | MCP server (`shaka mcp serve`)                   | `~/.agents/skills/<command>/SKILL.md`     | `~/.agents/skills/`, `~/.codex/agents/*.toml`               |
 | Pi          | Generated extension at `~/.pi/agent/extensions/shaka.ts` | Native `pi.registerTool()` in the same extension | `~/.pi/agent/prompts/` (prompt templates) | `~/.pi/agent/skills/` with `shaka-` / `shaka-agent-` prefix |
 
 `shaka init` detects every installed provider and configures all four if present. Pass `--<provider>` to scope to one. Pass `--all` to install every detected provider explicitly.
+
+## Provider Capability Architecture
+
+Provider behavior is owned by provider modules under `src/providers/<name>/`.
+The registry (`src/providers/registry.ts`) is the only central place that
+orders providers and maps names to modules. Shared orchestration may choose,
+filter, and iterate providers, but it should not build provider-specific argv,
+set provider-specific env guards, parse provider-specific output, or check
+provider-specific credentials.
+
+Each provider module owns these capabilities:
+
+- `agent.ts` — provider CLI invocation for sub-agent work.
+- `inference.ts` — provider CLI invocation, output parsing, isolation flags, and model mapping.
+- `setup.ts` — interactive and oneshot autoresearch setup invocation.
+- `commands.ts` — native command format compilation and install behavior.
+- `configurer.ts` — hooks, agents, skills, install/uninstall, and install status.
+- provider runtime templates/renderers where generated plugin or wrapper text is the artifact.
+
+Adding a provider should mean adding a provider module, registering it once,
+adding default config/docs, and adding fake-binary plus generated-artifact
+tests. It should not require editing inference, agent execution, setup-session,
+doctor, or command orchestration switches.
 
 ## Hook Abstraction
 
@@ -17,7 +40,7 @@ The four providers expose hooks differently:
 
 - **Claude Code** — subprocess hooks; `~/.claude/settings.json` lists `bun <hook-path>` per event.
 - **opencode** — in-process plugin callbacks; canonical Shaka hook logic still runs through Shaka hook runners.
-- **Codex** — wrapper script registered in `~/.codex/config.toml`; spawns Shaka as a subprocess on each event.
+- **Codex** — wrapper script registered in `~/.codex/hooks.json`; spawns Shaka as a subprocess on each event.
 - **Pi** — generated TypeScript extension at `~/.pi/agent/extensions/shaka.ts` loaded via jiti; hook handlers shell to `shaka hook <event>` per fire.
 
 Shaka hides this: hook logic lives once in `defaults/system/hooks/`, and each provider's configurer translates events automatically.
@@ -55,7 +78,7 @@ Shaka uses canonical event names internally. Each provider maps them to its nati
 
 - **Claude Code:** `shaka init` writes `~/.claude/settings.json` entries pointing at `bun <hook-path>` for each event.
 - **opencode:** `shaka init` generates `~/.config/opencode/plugins/shaka.ts` with native plugin callbacks that dispatch canonical hook logic via Shaka hook runners.
-- **Codex:** `shaka init` registers a wrapper script in `~/.codex/config.toml`; the wrapper sets `SHAKA_CODEX_SUBAGENT=true` for spawned subagents.
+- **Codex:** `shaka init` registers a wrapper script in `~/.codex/hooks.json`; the wrapper sets `SHAKA_CODEX_SUBAGENT=true` for spawned subagents.
 - **Pi:** `shaka init` generates `~/.pi/agent/extensions/shaka.ts` from `defaults/pi/extension.ts`, injecting the install-time `SHAKA_HOME`. Each handler shells to `shaka hook <event>` and short-circuits when `SHAKA_PI_SUBAGENT=true`.
 
 ## Tool Integration
@@ -113,8 +136,8 @@ Each provider has a Shaka-owned environment sentinel that hook handlers check at
 | Provider    | Env var                                                                    | Set by                                  |
 | ----------- | -------------------------------------------------------------------------- | --------------------------------------- |
 | Claude Code | `CLAUDE_AGENT_TYPE` (and `CLAUDE_PROJECT_DIR` matching `/.claude/Agents/`) | Claude Code itself for sub-agents       |
-| opencode    | `SHAKA_OPENCODE_SUBAGENT`                                                  | `callOpenCodeCLI` in `src/inference.ts` |
-| Codex       | `SHAKA_CODEX_SUBAGENT`                                                     | Codex wrapper script + `callCodexCLI`   |
-| Pi          | `SHAKA_PI_SUBAGENT`                                                        | `callPiCLI` in `src/inference.ts`       |
+| opencode    | `SHAKA_OPENCODE_SUBAGENT`                                                  | `src/providers/opencode/inference.ts`   |
+| Codex       | `SHAKA_CODEX_SUBAGENT`                                                     | Codex wrapper script + Codex provider inference |
+| Pi          | `SHAKA_PI_SUBAGENT`                                                        | `src/providers/pi/inference.ts`         |
 
 `isSubagent()` in `src/domain/config.ts` checks all four; hooks early-return when any is set.

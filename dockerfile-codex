@@ -1,9 +1,7 @@
 # Shaka + Codex — isolated test environment
 # Provides full isolation — no writes to host ~/.codex/ or global bun state
-#
-# Uses Trixie (not Bookworm like claude/opencode) because the Codex CLI binary
-# requires GLIBC 2.38+ and Bookworm only ships 2.36.
-
+# Trixie stays aligned with the current Codex e2e image baseline; the CLI
+# download below uses the upstream Linux musl release asset.
 FROM debian:trixie-slim
 
 LABEL org.opencontainers.image.title="shaka-codex" \

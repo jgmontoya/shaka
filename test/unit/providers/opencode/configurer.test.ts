@@ -7,10 +7,13 @@ import { installCommandsForProviders } from "../../../../src/providers/command-o
 import { OpencodeProviderConfigurer } from "../../../../src/providers/opencode/configurer";
 
 describe("OpencodeProviderConfigurer", () => {
-  const testProjectRoot = join(tmpdir(), "shaka-test-opencode-project");
-  const testShakaHome = join(tmpdir(), "shaka-test-shaka");
+  let testProjectRoot = "";
+  let testShakaHome = "";
 
   beforeEach(async () => {
+    const testId = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    testProjectRoot = join(tmpdir(), `shaka-test-opencode-project-${testId}`);
+    testShakaHome = join(tmpdir(), `shaka-test-shaka-${testId}`);
     await rm(testProjectRoot, { recursive: true, force: true });
     await rm(testShakaHome, { recursive: true, force: true });
     await mkdir(testProjectRoot, { recursive: true });
@@ -27,7 +30,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: "test" } }
 `,
     );
 
-    // Create critical agent for inference (resolved by frontmatter name)
+    // Create critical agent for inference; opencode resolves it by frontmatter name.
     await Bun.write(
       `${testShakaHome}/system/agents/inference.md`,
       `---
@@ -94,6 +97,30 @@ You are a text-only inference assistant.
 
       const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
       expect(content).toContain("async function runHookRaw");
+    });
+
+    test("plugin bounds raw hooks with timeout and drains stderr", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).toContain("HOOK_TIMEOUT_MS");
+      expect(content).toContain("bufferReadableStream(proc.stderr)");
+      expect(content).toContain('proc.kill("SIGTERM")');
+      expect(content).toContain('proc.kill("SIGKILL")');
+      expect(content).toContain("Hook timed out after");
+    });
+
+    test("plugin skips failed session-start hook output when building context", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).toMatch(
+        /const \{ exitCode, output, rawOutput \} = await runHookRaw\(hookPath\);[\s\S]*?if \(exitCode !== 0\) continue;[\s\S]*?contextParts\.push/,
+      );
     });
 
     test("plugin includes system.transform hook for session.start", async () => {
@@ -165,7 +192,7 @@ export const MATCHER = ["Bash", "Edit"] as const;
       expect(content).toContain("security.ts (tool.before, matchers: Bash, Edit)");
     });
 
-    test("generates TOOL_HOOKS array with matcher configuration", async () => {
+    test("generates pre/post tool hook arrays with matcher configuration", async () => {
       await Bun.write(
         `${testShakaHome}/system/hooks/security.ts`,
         `export const TRIGGER = ["tool.before"] as const;
@@ -177,7 +204,8 @@ export const MATCHER = ["Bash"] as const;
       await configurer.install({ shakaHome: testShakaHome });
 
       const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
-      expect(content).toContain("const TOOL_HOOKS: ToolHookConfig[]");
+      expect(content).toContain("const PRE_TOOL_HOOKS: ToolHookConfig[]");
+      expect(content).toContain("const POST_TOOL_HOOKS: ToolHookConfig[]");
       expect(content).toContain('"matchers"');
       expect(content).toContain('"Bash"');
     });
@@ -467,6 +495,18 @@ console.log("format");
       expect(content).toMatch(/SIGKILL/);
     });
 
+    test("runShakaTool does not wait for stream EOF after the timeout grace window", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).not.toContain("new Response(proc.stdout).text()");
+      expect(content).not.toContain("new Response(proc.stderr).text()");
+      expect(content).toContain(".getReader()");
+      expect(content).toContain(".cancel()");
+      expect(content).toContain("settleAfterKillGrace");
+    });
+
     test("runShakaTool bounds the subprocess with a timeout (so a hung shaka can't wedge the model turn)", async () => {
       // Live-path symmetry with Pi's bridge — both shells to `shaka tool
       // <name>` on every model invocation, both must fail fast if the
@@ -542,6 +582,27 @@ console.log("format");
       expect(await Bun.file(`${testShakaHome}/commands-manifest.json`).exists()).toBe(true);
     });
 
+    test("does not overwrite or uninstall a pre-existing global command after manifest records a skip", async () => {
+      const userContent = "---\ndescription: Mine\n---\nUser body\n";
+      await mkdir(`${testProjectRoot}/commands`, { recursive: true });
+      await Bun.write(`${testProjectRoot}/commands/commit.md`, userContent);
+      await mkdir(`${testShakaHome}/system/commands`, { recursive: true });
+      await Bun.write(
+        `${testShakaHome}/system/commands/commit.md`,
+        "---\ndescription: Create a commit\n---\nGenerated body",
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await installWithCommands(configurer);
+      await installWithCommands(configurer);
+
+      expect(await Bun.file(`${testProjectRoot}/commands/commit.md`).text()).toBe(userContent);
+
+      await configurer.uninstall({ shakaHome: testShakaHome });
+
+      expect(await Bun.file(`${testProjectRoot}/commands/commit.md`).text()).toBe(userContent);
+    });
+
     test("checkInstallation includes commands status", async () => {
       const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
 
@@ -567,6 +628,39 @@ console.log("format");
       expect(await cmdFile.exists()).toBe(true);
       const content = await cmdFile.text();
       expect(content).toContain("description: Deploy");
+    });
+
+    test("checkInstallation reports missing scoped command files", async () => {
+      const projectDir = join(testProjectRoot, "my-project");
+      const commandPath = join(projectDir, ".opencode", "commands", "deploy.md");
+      await mkdir(projectDir, { recursive: true });
+      await mkdir(`${testShakaHome}/system/commands`, { recursive: true });
+      await Bun.write(
+        `${testShakaHome}/system/commands/deploy.md`,
+        `---\ndescription: Deploy\ncwd: ${projectDir}\n---\nDeploy body`,
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await installWithCommands(configurer);
+      await rm(commandPath, { force: true });
+
+      const status = await configurer.checkInstallation({ shakaHome: testShakaHome });
+
+      expect(status.commands.ok).toBe(false);
+      expect(status.commands.issue).toContain("run shaka reload");
+    });
+
+    test("checkInstallation reports stale command manifest entries", async () => {
+      await mkdir(`${testShakaHome}/system/commands`, { recursive: true });
+      const commandPath = `${testShakaHome}/system/commands/commit.md`;
+      await Bun.write(commandPath, "---\ndescription: Commit\n---\nCommit body");
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      await installWithCommands(configurer);
+      await rm(commandPath, { force: true });
+
+      const status = await configurer.checkInstallation({ shakaHome: testShakaHome });
+
+      expect(status.commands.ok).toBe(false);
+      expect(status.commands.issue).toContain("run shaka reload");
     });
 
     test("skips scoped command when cwd does not exist", async () => {

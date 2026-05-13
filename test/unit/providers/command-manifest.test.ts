@@ -76,4 +76,35 @@ describe("command-manifest", () => {
     expect(manifest.global).toEqual(["commit"]);
     expect(manifest.scoped).toEqual({});
   });
+
+  test("rejects invalid command names in a manifest", async () => {
+    await Bun.write(
+      join(testHome, "commands-manifest.json"),
+      JSON.stringify({ global: ["../escape"], scoped: {} }),
+    );
+
+    await expect(readManifest(testHome)).rejects.toThrow("Invalid command manifest");
+  });
+
+  test("rejects a non-array global field in a manifest", async () => {
+    await Bun.write(
+      join(testHome, "commands-manifest.json"),
+      JSON.stringify({ global: "commit", scoped: {} }),
+    );
+
+    await expect(readManifest(testHome)).rejects.toThrow(
+      "Invalid command manifest global: expected array",
+    );
+  });
+
+  test("rejects a non-array scoped field in a manifest", async () => {
+    await Bun.write(
+      join(testHome, "commands-manifest.json"),
+      JSON.stringify({ global: [], scoped: { "/tmp/app": "deploy" } }),
+    );
+
+    await expect(readManifest(testHome)).rejects.toThrow(
+      'Invalid command manifest scoped["/tmp/app"]: expected array',
+    );
+  });
 });

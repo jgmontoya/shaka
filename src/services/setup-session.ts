@@ -1,99 +1,52 @@
 /**
- * Per-provider argv builders for the full-auto autoresearch setup session,
- * plus the `runSetupInteractive` orchestrator that dispatches to the right
- * builder and hands stdio to the provider's native TUI via `Bun.spawn`.
+ * Autoresearch setup session orchestration.
  *
- * Each builder returns the argv passed to `Bun.spawn`. Pure functions; no
- * side effects. Empirically verified against claude v2.1.116, opencode
- * 1.14.19, and codex v0.122.0 in Experiment 39.
+ * Provider-specific argv and oneshot behavior live in provider setup
+ * capabilities. This module composes the shared setup prompt and dispatches
+ * to the selected provider.
  */
 
-import { runAgentStep } from "../domain/agent-execution";
-import { DEFAULT_PI_MODEL, DEFAULT_PI_PROVIDER } from "../providers/pi/defaults";
+import { type ProcessRunner, runProcess } from "../platform/process-runner";
+import { getProviderModule } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
-import type { DetectedProviders } from "../services/provider-detection";
-
-/** Single-provider DetectedProviders override — forces `runAgentStep` to dispatch to one backend. */
-function onlyProvider(provider: ProviderName): DetectedProviders {
-  return {
-    claude: provider === "claude",
-    opencode: provider === "opencode",
-    codex: provider === "codex",
-    pi: provider === "pi",
-  };
-}
 
 /**
  * Claude: positional seeds the first user turn; `--append-system-prompt`
  * layers the setup skill on top of the default system prompt.
  */
 export function buildClaudeArgs(objective: string, skillBody: string): string[] {
-  return ["claude", objective, "--append-system-prompt", skillBody];
+  return getProviderModule("claude").setupSession.buildInteractiveArgs({ objective, skillBody });
 }
 
 /**
  * Opencode: `--prompt` seeds the first message; `--agent` references the
- * frontmatter name from the agent file installed at init time. Current
- * opencode discovers `name: ...`, not symlink paths like `shaka/<name>`.
- * The explicit project/dir argument is required for git-linked worktrees:
- * otherwise opencode may resolve the main worktree as its project root.
+ * setup agent by its frontmatter name. The explicit project argument keeps
+ * git-linked experiment worktrees from resolving back to the main worktree.
  */
-const OPENCODE_AUTORESEARCH_SETUP_AGENT = "autoresearch-setup";
-
-export function buildOpencodeArgs(objective: string, projectPath?: string): string[] {
-  return [
-    "opencode",
-    ...(projectPath ? [projectPath] : []),
-    "--prompt",
+export function buildOpencodeArgs(objective: string, worktreePath?: string): string[] {
+  return getProviderModule("opencode").setupSession.buildInteractiveArgs({
     objective,
-    "--agent",
-    OPENCODE_AUTORESEARCH_SETUP_AGENT,
-  ];
-}
-
-export function buildOpencodeOneshotArgs(objective: string, worktreePath: string): string[] {
-  return [
-    "opencode",
-    "run",
-    "--dir",
+    skillBody: "",
     worktreePath,
-    "--agent",
-    OPENCODE_AUTORESEARCH_SETUP_AGENT,
-    "--",
-    `${objective}\n\nYou are running in non-interactive --oneshot mode. Create the setup artifacts now. Do not ask follow-up questions.`,
-  ];
+  });
 }
 
 /**
  * Codex interactive exposes neither `--agent` nor `--system-prompt`, so we
  * prepend the skill body to the objective as a single positional prompt.
- * Mirrors `callCodexCLI` in `src/inference.ts`.
  */
 export function buildCodexArgs(objective: string, skillBody: string): string[] {
-  return ["codex", `${skillBody}\n\n## Objective\n\n${objective}`];
+  return getProviderModule("codex").setupSession.buildInteractiveArgs({ objective, skillBody });
 }
 
 /**
  * Pi: pin Anthropic explicitly (Pi defaults to google per Exp 42), append
  * the setup skill on top of Pi's default coding-assistant prompt with
  * `--append-system-prompt`, and pass the objective as the positional
- * initial-prompt slot. Repeatable per Exp 42.
+ * initial-prompt slot.
  */
 export function buildPiArgs(objective: string, skillBody: string): string[] {
-  return [
-    "pi",
-    "--provider",
-    DEFAULT_PI_PROVIDER,
-    "--model",
-    DEFAULT_PI_MODEL,
-    "--append-system-prompt",
-    skillBody,
-    // Terminate option parsing so an objective starting with `-` (YAML
-    // frontmatter, Markdown lists, etc.) isn't misread as a Pi flag —
-    // see memory/feedback_argv_prompts_need_double_dash.md.
-    "--",
-    objective,
-  ];
+  return getProviderModule("pi").setupSession.buildInteractiveArgs({ objective, skillBody });
 }
 
 export interface SetupSessionResult {
@@ -137,14 +90,12 @@ export async function runSetupInteractive(
   deps?: SetupSessionDeps,
 ): Promise<SetupSessionResult> {
   const spawn = deps?.spawn ?? Bun.spawn;
-  const argv =
-    provider === "claude"
-      ? buildClaudeArgs(objective, skillBody)
-      : provider === "opencode"
-        ? buildOpencodeArgs(objective, worktreePath)
-        : provider === "pi"
-          ? buildPiArgs(objective, skillBody)
-          : buildCodexArgs(objective, skillBody);
+  const providerModule = getProviderModule(provider);
+  const argv = providerModule.setupSession.buildInteractiveArgs({
+    objective,
+    skillBody,
+    worktreePath,
+  });
   const proc = spawn(argv, {
     cwd: worktreePath,
     stdio: ["inherit", "inherit", "inherit"],
@@ -154,7 +105,8 @@ export async function runSetupInteractive(
 }
 
 /**
- * Run the setup agent non-interactively as a single `runAgentStep` call.
+ * Run the setup agent non-interactively through the selected provider's setup
+ * capability.
  *
  * Opt-in alternative to `runSetupInteractive` for unattended overnight queues,
  * CI, scripted invocations, or unambiguous objectives where the TTY round-trip
@@ -174,8 +126,11 @@ export async function runSetupInteractive(
  * unconditionally.
  */
 export interface SetupOneshotDeps {
-  readonly runAgent?: typeof runAgentStep;
-  readonly spawn?: typeof Bun.spawn;
+  readonly runProcess?: ProcessRunner;
+}
+
+function buildOneshotPrompt(skillBody: string, objective: string): string {
+  return `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
 }
 
 export async function runSetupOneshot(
@@ -185,56 +140,16 @@ export async function runSetupOneshot(
   skillBody: string,
   deps?: SetupOneshotDeps,
 ): Promise<SetupSessionResult> {
-  if (provider === "opencode") {
-    return runOpencodeSetupOneshot(worktreePath, objective, deps);
-  }
-
-  const prompt = `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
-  // Force the selected provider so `--provider X` is honored — without this,
-  // runAgentStep falls back to detectInstalledProviders() and dispatches to
-  // whichever backend happens to be first-available, silently ignoring the
-  // user's choice.
-  const result = await (deps?.runAgent ?? runAgentStep)(
-    {
-      prompt,
-      cwd: worktreePath,
-      timeout: 15 * 60 * 1000,
-    },
-    onlyProvider(provider),
+  const result = await getProviderModule(provider).setupSession.runOneshot(
+    { worktreePath, prompt: buildOneshotPrompt(skillBody, objective) },
+    { processRunner: deps?.runProcess ?? runProcess },
   );
   return {
     exitCode: result.exitCode,
-    provider: result.provider ?? provider,
+    provider: result.provider,
     resumeHint: null,
     sessionId: null,
     ...(result.stdout ? { stdout: result.stdout } : {}),
     ...(result.stderr ? { stderr: result.stderr } : {}),
-  };
-}
-
-async function runOpencodeSetupOneshot(
-  worktreePath: string,
-  objective: string,
-  deps?: SetupOneshotDeps,
-): Promise<SetupSessionResult> {
-  const spawn = deps?.spawn ?? Bun.spawn;
-  const proc = spawn(buildOpencodeOneshotArgs(objective, worktreePath), {
-    cwd: worktreePath,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ]);
-
-  return {
-    exitCode,
-    provider: "opencode",
-    resumeHint: null,
-    sessionId: null,
-    ...(stdout ? { stdout } : {}),
-    ...(stderr ? { stderr } : {}),
   };
 }

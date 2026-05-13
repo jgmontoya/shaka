@@ -1,13 +1,14 @@
 /**
- * Command compilers for provider-native formats.
+ * Provider-neutral command rendering helpers.
  *
- * Takes a DiscoveredCommand and produces the file content + path
- * for each provider's command format.
+ * Provider modules own their native command formats. This file keeps the
+ * shared mechanics: frontmatter rendering, provider metadata overrides, and
+ * argument-reference transformations used by more than one provider.
  */
 
-import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import type { CommandFields, DiscoveredCommand } from "./command-discovery";
+import type { ProviderName } from "./types";
 
 export interface CompiledCommand {
   /** Absolute path where this file should be written. */
@@ -16,90 +17,39 @@ export interface CompiledCommand {
   content: string;
 }
 
-/** Check if a command body contains any argument references (ignoring shell-injection blocks). */
 function hasArgReferences(body: string): boolean {
   const stripped = body.replace(/!`[^`]*`/g, "");
   return /\$ARGUMENTS|\$\d+/.test(stripped);
 }
 
-/**
- * Pi recognizes additional bash-style arg expansions: `$@` (all args),
- * `${@:N}` (drop the first N-1), `${@:N:L}` (slice). Only `compileForPi`
- * uses this — claude/opencode/codex don't understand `$@`, so for them the
- * conservative `hasArgReferences` is correct.
- */
-function hasPiArgReferences(body: string): boolean {
-  const stripped = body.replace(/!`[^`]*`/g, "");
-  return /\$ARGUMENTS|\$\d+|\$@|\$\{@:\d+(?::\d+)?\}/.test(stripped);
-}
-
-/** Append $ARGUMENTS to body if no argument references are present. */
-function autoAppendArguments(body: string): string {
+export function autoAppendArguments(body: string): string {
   return hasArgReferences(body) ? body : `${body}\n\n$ARGUMENTS`;
-}
-
-/** Pi-aware variant — preserves bodies whose only arg refs are `$@` / `${@:N}` / `${@:N:L}`. */
-function autoAppendArgumentsPi(body: string): string {
-  return hasPiArgReferences(body) ? body : `${body}\n\n$ARGUMENTS`;
 }
 
 /**
  * Translate 1-based positional args to 0-based for Claude Code.
  * Skips $N inside shell injection blocks (!`...`) and leaves $0 untouched.
  */
-function decrementPositionalArgs(body: string): string {
+export function decrementPositionalArgs(body: string): string {
   return body.replace(/!`[^`]*`|\$(\d+)/g, (match, n) => {
-    if (n == null) return match; // shell injection block
+    if (n === undefined) return match;
     const num = Number(n);
     return num === 0 ? match : `$${num - 1}`;
   });
 }
 
-/** Build frontmatter string from key-value pairs, omitting undefined values. */
-function buildFrontmatter(fields: Record<string, unknown>): string {
+export function buildFrontmatter(fields: Record<string, unknown>): string {
   const filtered: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) filtered[key] = value;
   }
-  // yaml.stringify adds a trailing newline, so trim it
   return `---\n${stringifyYaml(filtered).trimEnd()}\n---\n`;
 }
 
-/** Merge base command fields with provider-specific overrides. */
-function applyOverrides(
-  command: DiscoveredCommand,
-  provider: "claude" | "opencode" | "codex" | "pi",
-): CommandFields {
+export function applyOverrides(command: DiscoveredCommand, provider: ProviderName): CommandFields {
   const overrides = command.providers?.[provider];
   if (!overrides) return command;
   return { ...command, ...overrides };
-}
-
-/** Compile a Shaka command to Claude Code skill format. */
-export function compileForClaude(command: DiscoveredCommand, targetDir: string): CompiledCommand {
-  const fields = applyOverrides(command, "claude");
-  // Body is intentionally not overridable — provider overrides apply to metadata only
-  const rawBody = autoAppendArguments(command.body);
-  if (/\$0\b/.test(rawBody)) {
-    console.error(
-      `  ⚠ "${command.name}" uses $0 — Shaka positional args are 1-based ($1, $2, ...)`,
-    );
-  }
-  const body = decrementPositionalArgs(rawBody);
-
-  const frontmatter = buildFrontmatter({
-    name: command.name,
-    description: fields.description,
-    "argument-hint": fields.argumentHint,
-    model: fields.model,
-    context: fields.subtask ? "fork" : undefined, // Claude Code uses "context: fork" for background subagents
-    "user-invocable": fields.userInvocable ?? true,
-  });
-
-  return {
-    path: join(targetDir, command.name, "SKILL.md"),
-    content: frontmatter + body,
-  };
 }
 
 const ORDINALS = [
@@ -116,9 +66,10 @@ const ORDINALS = [
 
 /**
  * Replace $ARGUMENTS and positional $N with natural-language descriptions.
- * Skips $N inside shell injection blocks (!`...`), same guard as decrementPositionalArgs.
+ * Skips $N inside shell injection blocks (!`...`), same guard as
+ * decrementPositionalArgs.
  */
-function replaceArgsWithNaturalLanguage(body: string): string {
+export function replaceArgsWithNaturalLanguage(body: string): string {
   return body
     .replace(/!`[^`]*`|\$ARGUMENTS/g, (match) =>
       match.startsWith("!`")
@@ -126,79 +77,10 @@ function replaceArgsWithNaturalLanguage(body: string): string {
         : "Interpret the user's message after the skill name to determine the target.",
     )
     .replace(/!`[^`]*`|\$(\d+)/g, (match, n) => {
-      if (n == null) return match; // shell injection block
+      if (n === undefined) return match;
       const num = Number(n);
       if (num === 0) return match;
       const ord = ORDINALS[num - 1] ?? `#${num}`;
       return `the ${ord} argument from the user's message`;
     });
-}
-
-/** Compile a Shaka command to Codex skill format (SKILL.md). */
-export function compileForCodex(command: DiscoveredCommand, targetDir: string): CompiledCommand {
-  const fields = applyOverrides(command, "codex");
-  const rawBody = autoAppendArguments(command.body);
-  const body = replaceArgsWithNaturalLanguage(rawBody);
-
-  // Merge argument-hint into description for Codex skill discovery
-  const description = fields.argumentHint
-    ? `${fields.description}. Invoke with $${command.name} ${fields.argumentHint}`
-    : fields.description;
-
-  const frontmatter = buildFrontmatter({
-    name: command.name,
-    description,
-  });
-
-  return {
-    path: join(targetDir, command.name, "SKILL.md"),
-    content: frontmatter + body,
-  };
-}
-
-/** Compile a Shaka command to opencode command format. */
-export function compileForOpencode(command: DiscoveredCommand, targetDir: string): CompiledCommand {
-  const fields = applyOverrides(command, "opencode");
-  const body = autoAppendArguments(command.body);
-
-  const frontmatter = buildFrontmatter({
-    description: fields.description,
-    model: fields.model,
-    subtask: fields.subtask,
-  });
-
-  return {
-    path: join(targetDir, `${command.name}.md`),
-    content: frontmatter + body,
-  };
-}
-
-/**
- * Compile a Shaka command to a Pi prompt template.
- *
- * Pi natively supports `$1, $2, $@, $ARGUMENTS, ${@:N}, ${@:N:L}` (Exp 46),
- * so existing argument refs in the body pass through untouched.
- * `autoAppendArgumentsPi` only appends a fresh `$ARGUMENTS` when no
- * Pi-recognized arg ref is present — same shape as the claude/opencode/
- * codex compilers above, but matches Pi's wider arg-syntax set. Pi also
- * accepts `argument-hint` in frontmatter, unlike opencode.
- *
- * The `shaka-` prefix on the filename keeps Shaka commands from colliding
- * with user-installed templates that Pi auto-discovers from `~/.pi/agent/prompts`
- * and ambient `.pi/prompts` paths (Exp 47 + 51).
- */
-export function compileForPi(command: DiscoveredCommand, targetDir: string): CompiledCommand {
-  const fields = applyOverrides(command, "pi");
-  const body = autoAppendArgumentsPi(command.body);
-
-  const frontmatter = buildFrontmatter({
-    description: fields.description,
-    "argument-hint": fields.argumentHint,
-    model: fields.model,
-  });
-
-  return {
-    path: join(targetDir, `shaka-${command.name}.md`),
-    content: frontmatter + body,
-  };
 }

@@ -21,6 +21,7 @@
     "lint:all": "biome check .",
     "lint:all:fix": "biome check --write .",
     "format": "biome format --write .",
+    "architecture:check": "bun scripts/architecture-check.ts",
     "check": "bun run typecheck && bun run lint && bun test"
   },
   "dependencies": {

@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { logProviderStatus } from "../../../src/commands/doctor";
 import { PiProviderConfigurer } from "../../../src/providers/pi/configurer";
-import type { InstallationStatus } from "../../../src/providers/types";
+import type { InstallationStatus, ProviderConfigurer } from "../../../src/providers/types";
 
 const SCOPED_PI_HOME = join(tmpdir(), `shaka-doctor-pi-${process.pid}`);
 
@@ -26,6 +26,23 @@ const OK_STATUS: InstallationStatus = {
 const captured: string[] = [];
 const originalLog = console.log;
 const savedEnv = { ...process.env };
+
+function createProvider(overrides: Partial<ProviderConfigurer> = {}): ProviderConfigurer {
+  return {
+    name: "codex",
+    label: "Codex",
+    skillsDir: "/unused/skills",
+    commands: {
+      install: async () => {},
+    },
+    isInstalled: () => true,
+    install: async () => ({ ok: true, value: undefined }),
+    installCommands: async () => {},
+    uninstall: async () => ({ ok: true, value: undefined }),
+    checkInstallation: async () => OK_STATUS,
+    ...overrides,
+  };
+}
 
 beforeEach(async () => {
   captured.length = 0;
@@ -113,5 +130,38 @@ describe("logProviderStatus — Pi credential surface", () => {
     const output = captured.join("\n");
     expect(output).toMatch(/Credentials:/i);
     expect(output).toMatch(/ANTHROPIC_API_KEY/);
+  });
+
+  test("checks credentials in the configurer's resolved Pi home", async () => {
+    const configuredPiHome = join(SCOPED_PI_HOME, "configured-agent");
+    await mkdir(configuredPiHome, { recursive: true });
+    await Bun.write(join(configuredPiHome, "auth.json"), "{}");
+    const pi = new PiProviderConfigurer({
+      piHome: configuredPiHome,
+      runSmokeLoad: async () => ({ exitCode: 0, stderr: "" }),
+    });
+
+    const hasIssues = logProviderStatus(pi, true, OK_STATUS, true);
+
+    const output = captured.join("\n");
+    expect(hasIssues).toBe(false);
+    expect(output).toMatch(/Credentials:.*yes/i);
+    expect(output).not.toMatch(/no credentials found/i);
+  });
+});
+
+describe("logProviderStatus — provider health checks", () => {
+  test("reports health hook failures as provider issues instead of throwing", () => {
+    const provider = createProvider({
+      checkHealth: () => {
+        throw new Error("credential probe crashed");
+      },
+    });
+
+    const hasIssues = logProviderStatus(provider, true, OK_STATUS, true);
+
+    const output = captured.join("\n");
+    expect(hasIssues).toBe(true);
+    expect(output).toMatch(/Health:.*credential probe crashed/);
   });
 });

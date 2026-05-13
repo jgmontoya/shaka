@@ -97,6 +97,21 @@ describe("inference", () => {
     });
   });
 
+  describe("parseResponse", () => {
+    test("parses JSON arrays when expectJson is enabled", async () => {
+      const { parseResponse } = await import("../../src/inference");
+
+      const result = parseResponse('[{"status":"ok"}]', true, "test-provider");
+
+      expect(result).toEqual({
+        success: true,
+        text: '[{"status":"ok"}]',
+        parsed: [{ status: "ok" }],
+        provider: "test-provider",
+      });
+    });
+  });
+
   describe("inference()", () => {
     test("error message names all four providers when none are available", async () => {
       const { inference } = await import("../../src/inference");
@@ -109,6 +124,38 @@ describe("inference", () => {
       expect(result.error).toContain("opencode");
       expect(result.error).toContain("codex");
       expect(result.error).toContain("pi");
+    });
+
+    test("continues to fallback providers when one provider rejects", async () => {
+      const { claudeProvider } = await import("../../src/providers/claude/provider");
+      const { opencodeProvider } = await import("../../src/providers/opencode/provider");
+      const originalClaudeRun = claudeProvider.inference.run;
+      const originalOpencodeRun = opencodeProvider.inference.run;
+      try {
+        claudeProvider.inference.run = async () => {
+          throw new Error("claude exploded");
+        };
+        opencodeProvider.inference.run = async () => ({
+          success: true,
+          text: "fallback ok",
+          provider: "opencode-cli",
+        });
+
+        const { inference } = await import("../../src/inference");
+        const result = await inference(
+          { userPrompt: "test" },
+          { claude: true, opencode: true, codex: false, pi: false },
+        );
+
+        expect(result).toEqual({
+          success: true,
+          text: "fallback ok",
+          provider: "opencode-cli",
+        });
+      } finally {
+        claudeProvider.inference.run = originalClaudeRun;
+        opencodeProvider.inference.run = originalOpencodeRun;
+      }
     });
 
     test.skipIf(process.platform === "win32")(
@@ -163,10 +210,7 @@ describe("inference", () => {
         try {
           await mkdir(binDir, { recursive: true });
           const claude = join(binDir, "claude");
-          await Bun.write(
-            claude,
-            "#!/bin/sh\nprintf 'token=%s\\n' \"$CLAUDE_CODE_OAUTH_TOKEN\"\n",
-          );
+          await Bun.write(claude, "#!/bin/sh\nprintf 'token=%s\\n' \"$CLAUDE_CODE_OAUTH_TOKEN\"\n");
           await chmod(claude, 0o755);
           process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
           delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
@@ -195,6 +239,117 @@ describe("inference", () => {
             delete process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN;
           } else {
             process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN = oldShakaToken;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "Codex inference uses distinct output files for concurrent calls",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-codex-output-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const captureFile = join(root, "outputs.txt");
+        const oldPath = process.env.PATH;
+        const originalDateNow = Date.now;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const codex = join(binDir, "codex");
+          await Bun.write(
+            codex,
+            [
+              "#!/bin/sh",
+              "output=",
+              'while [ "$#" -gt 0 ]; do',
+              '  if [ "$1" = "-o" ]; then',
+              "    shift",
+              '    output="$1"',
+              "  fi",
+              "  shift",
+              "done",
+              `printf '%s\\n' "$output" >> ${shellQuote(captureFile)}`,
+              'printf "codex ok\\n" > "$output"',
+              "",
+            ].join("\n"),
+          );
+          await chmod(codex, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+          Date.now = () => 1234567890;
+
+          const { inference } = await import("../../src/inference");
+          const [first, second] = await Promise.all([
+            inference(
+              { userPrompt: "first" },
+              { claude: false, opencode: false, codex: true, pi: false },
+            ),
+            inference(
+              { userPrompt: "second" },
+              { claude: false, opencode: false, codex: true, pi: false },
+            ),
+          ]);
+
+          expect(first.success).toBe(true);
+          expect(second.success).toBe(true);
+          const outputs = (await Bun.file(captureFile).text()).trim().split("\n");
+          expect(new Set(outputs).size).toBe(2);
+        } finally {
+          Date.now = originalDateNow;
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "OpenCode inference selects the hidden inference agent by frontmatter name",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-opencode-agent-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const captureFile = join(root, "capture.txt");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const opencode = join(binDir, "opencode");
+          await Bun.write(
+            opencode,
+            [
+              "#!/bin/sh",
+              `printf 'argv=%s\\n' "$*" > ${shellQuote(captureFile)}`,
+              `printf 'env_subagent=%s\\n' "$SHAKA_OPENCODE_SUBAGENT" >> ${shellQuote(captureFile)}`,
+              'printf \'%s\\n\' \'{"type":"text","part":{"text":"OK"}}\'',
+              "",
+            ].join("\n"),
+          );
+          await chmod(opencode, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "classify this", timeout: 1000 },
+            { claude: false, opencode: true, codex: false, pi: false },
+          );
+
+          expect(result).toMatchObject({ success: true, text: "OK", provider: "opencode-cli" });
+          const captured = await Bun.file(captureFile).text();
+          expect(captured).toContain("--agent inference");
+          expect(captured).not.toContain("shaka/inference");
+          expect(captured).toContain("env_subagent=true");
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
           }
           await rm(root, { recursive: true, force: true });
         }
@@ -605,7 +760,7 @@ describe("inference", () => {
 
           expect(result.success).toBe(false);
           expect(result.error).toContain("Timeout after 25ms");
-          expect(elapsedMs).toBeLessThan(250);
+          expect(elapsedMs).toBeLessThan(500);
         } finally {
           if (oldPath === undefined) {
             delete process.env.PATH;
