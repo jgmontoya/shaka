@@ -33,10 +33,35 @@ export function buildClaudeArgs(objective: string, skillBody: string): string[] 
 
 /**
  * Opencode: `--prompt` seeds the first message; `--agent` references the
- * `shaka/autoresearch-setup` agent file installed at init time.
+ * frontmatter name from the agent file installed at init time. Current
+ * opencode discovers `name: ...`, not symlink paths like `shaka/<name>`.
+ * The explicit project/dir argument is required for git-linked worktrees:
+ * otherwise opencode may resolve the main worktree as its project root.
  */
-export function buildOpencodeArgs(objective: string): string[] {
-  return ["opencode", "--prompt", objective, "--agent", "shaka/autoresearch-setup"];
+const OPENCODE_AUTORESEARCH_SETUP_AGENT = "autoresearch-setup";
+
+export function buildOpencodeArgs(objective: string, projectPath?: string): string[] {
+  return [
+    "opencode",
+    ...(projectPath ? [projectPath] : []),
+    "--prompt",
+    objective,
+    "--agent",
+    OPENCODE_AUTORESEARCH_SETUP_AGENT,
+  ];
+}
+
+export function buildOpencodeOneshotArgs(objective: string, worktreePath: string): string[] {
+  return [
+    "opencode",
+    "run",
+    "--dir",
+    worktreePath,
+    "--agent",
+    OPENCODE_AUTORESEARCH_SETUP_AGENT,
+    "--",
+    `${objective}\n\nYou are running in non-interactive --oneshot mode. Create the setup artifacts now. Do not ask follow-up questions.`,
+  ];
 }
 
 /**
@@ -77,6 +102,8 @@ export interface SetupSessionResult {
   /** Captured from provider's exit output, if emitted. Null when absent. */
   readonly resumeHint: string | null;
   readonly sessionId: string | null;
+  readonly stdout?: string;
+  readonly stderr?: string;
 }
 
 export interface SetupSessionDeps {
@@ -114,7 +141,7 @@ export async function runSetupInteractive(
     provider === "claude"
       ? buildClaudeArgs(objective, skillBody)
       : provider === "opencode"
-        ? buildOpencodeArgs(objective)
+        ? buildOpencodeArgs(objective, worktreePath)
         : provider === "pi"
           ? buildPiArgs(objective, skillBody)
           : buildCodexArgs(objective, skillBody);
@@ -148,6 +175,7 @@ export async function runSetupInteractive(
  */
 export interface SetupOneshotDeps {
   readonly runAgent?: typeof runAgentStep;
+  readonly spawn?: typeof Bun.spawn;
 }
 
 export async function runSetupOneshot(
@@ -157,6 +185,10 @@ export async function runSetupOneshot(
   skillBody: string,
   deps?: SetupOneshotDeps,
 ): Promise<SetupSessionResult> {
+  if (provider === "opencode") {
+    return runOpencodeSetupOneshot(worktreePath, objective, deps);
+  }
+
   const prompt = `${skillBody}\n\n## Objective\n\n${objective}\n\n## Task\n\nCreate the setup artifacts in the current working directory. You do NOT have a user to ask clarifying questions — make your best judgment from the objective and the repo. Run \`./autoresearch.sh\` yourself to verify the METRIC line emits correctly before you finish.`;
   // Force the selected provider so `--provider X` is honored — without this,
   // runAgentStep falls back to detectInstalledProviders() and dispatches to
@@ -175,5 +207,34 @@ export async function runSetupOneshot(
     provider: result.provider ?? provider,
     resumeHint: null,
     sessionId: null,
+    ...(result.stdout ? { stdout: result.stdout } : {}),
+    ...(result.stderr ? { stderr: result.stderr } : {}),
+  };
+}
+
+async function runOpencodeSetupOneshot(
+  worktreePath: string,
+  objective: string,
+  deps?: SetupOneshotDeps,
+): Promise<SetupSessionResult> {
+  const spawn = deps?.spawn ?? Bun.spawn;
+  const proc = spawn(buildOpencodeOneshotArgs(objective, worktreePath), {
+    cwd: worktreePath,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+
+  return {
+    exitCode,
+    provider: "opencode",
+    resumeHint: null,
+    sessionId: null,
+    ...(stdout ? { stdout } : {}),
+    ...(stderr ? { stderr } : {}),
   };
 }

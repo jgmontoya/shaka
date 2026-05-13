@@ -250,7 +250,13 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
             detectProviders: () => CLAUDE_ONLY,
             runSetupInteractive: async (worktreePath, _objective, provider, _skill) => {
               await writeInvalidSetup(worktreePath)();
-              return { exitCode: 0, provider, resumeHint: null, sessionId: null };
+              return {
+                exitCode: 0,
+                provider,
+                resumeHint: null,
+                sessionId: null,
+                stderr: 'agent "missing" not found',
+              };
             },
             runLoop: async (args) => {
               loopCalls.push({ cwd: args.cwd });
@@ -265,6 +271,7 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
       const combined = errLines.join("\n");
       // Error names the failing phase.
       expect(combined.toLowerCase()).toMatch(/benchmark|metric/);
+      expect(combined).toContain('agent "missing" not found');
       expect(exitCalls).toContain(1);
     } finally {
       process.exit = realExit;
@@ -405,6 +412,61 @@ describe.skipIf(process.platform === "win32")("autoresearch start — full-auto 
       // Same message as the default path: names --wizard and `shaka init`.
       expect(combined).toMatch(/--wizard/);
       expect(combined).toMatch(/shaka init/);
+      expect(exitCalls).toContain(1);
+    } finally {
+      process.exit = realExit;
+      console.error = realErr;
+      restoreTTY();
+      process.chdir(oldCwd);
+    }
+  });
+
+  test("setup session failure exits before validating missing artifacts", async () => {
+    const env = await makeRepoEnv("setup-failure");
+    envs.push(env);
+    const oldCwd = process.cwd();
+    const restoreTTY = swapIsTTY(false);
+    const loopCalls: Array<{ cwd: string }> = [];
+
+    const realExit = process.exit;
+    const realErr = console.error;
+    const exitCalls: number[] = [];
+    const errLines: string[] = [];
+    process.exit = ((code?: string | number | null | undefined): never => {
+      exitCalls.push(typeof code === "number" ? code : 0);
+      throw new Error(`__stub_exit__:${code ?? 0}`);
+    }) as typeof process.exit;
+    console.error = (...args: unknown[]): void => {
+      errLines.push(args.map(String).join(" "));
+    };
+
+    try {
+      process.chdir(env.repo);
+      await expect(
+        runStart(
+          "setup failure objective",
+          { wizard: false, dryRun: false, oneshot: true },
+          {
+            detectProviders: () => CLAUDE_ONLY,
+            runSetupOneshot: async (_worktreePath, _objective, provider, _skill) => ({
+              exitCode: 7,
+              provider,
+              resumeHint: null,
+              sessionId: null,
+              stderr: "provider refused to write files",
+            }),
+            runLoop: async (args) => {
+              loopCalls.push({ cwd: args.cwd });
+            },
+          },
+        ),
+      ).rejects.toThrow(/__stub_exit__:1/);
+
+      expect(loopCalls).toHaveLength(0);
+      const combined = errLines.join("\n");
+      expect(combined).toContain("Setup session failed");
+      expect(combined).toContain("provider refused to write files");
+      expect(combined).not.toContain("ENOENT");
       expect(exitCalls).toContain(1);
     } finally {
       process.exit = realExit;

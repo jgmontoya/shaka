@@ -27,7 +27,7 @@ console.log(JSON.stringify({ hookSpecificOutput: { additionalContext: "test" } }
 `,
     );
 
-    // Create critical agent for inference (will be symlinked as shaka/inference)
+    // Create critical agent for inference (resolved by frontmatter name)
     await Bun.write(
       `${testShakaHome}/system/agents/inference.md`,
       `---
