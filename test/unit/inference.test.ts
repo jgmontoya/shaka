@@ -112,6 +112,96 @@ describe("inference", () => {
     });
 
     test.skipIf(process.platform === "win32")(
+      "includes Claude stdout in failure messages when stderr is empty",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-claude-stdout-error-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const claude = join(binDir, "claude");
+          await Bun.write(
+            claude,
+            "#!/bin/sh\nprintf 'Not logged in · Please run /login\\n'\nexit 1\n",
+          );
+          await chmod(claude, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "test" },
+            { claude: true, opencode: false, codex: false, pi: false },
+          );
+
+          expect(result.success).toBe(false);
+          expect(result.error).toContain("Not logged in");
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
+      "maps Shaka's Claude hook auth bridge env var to Claude's expected token name",
+      async () => {
+        const root = join(
+          tmpdir(),
+          `shaka-inference-claude-auth-bridge-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        );
+        const binDir = join(root, "bin");
+        const oldPath = process.env.PATH;
+        const oldClaudeToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        const oldShakaToken = process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN;
+        try {
+          await mkdir(binDir, { recursive: true });
+          const claude = join(binDir, "claude");
+          await Bun.write(
+            claude,
+            "#!/bin/sh\nprintf 'token=%s\\n' \"$CLAUDE_CODE_OAUTH_TOKEN\"\n",
+          );
+          await chmod(claude, 0o755);
+          process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+          delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+          process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN = "from-shaka-hook";
+
+          const { inference } = await import("../../src/inference");
+          const result = await inference(
+            { userPrompt: "test" },
+            { claude: true, opencode: false, codex: false, pi: false },
+          );
+
+          expect(result.success).toBe(true);
+          expect(result.text).toBe("token=from-shaka-hook");
+        } finally {
+          if (oldPath === undefined) {
+            delete process.env.PATH;
+          } else {
+            process.env.PATH = oldPath;
+          }
+          if (oldClaudeToken === undefined) {
+            delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+          } else {
+            process.env.CLAUDE_CODE_OAUTH_TOKEN = oldClaudeToken;
+          }
+          if (oldShakaToken === undefined) {
+            delete process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN;
+          } else {
+            process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN = oldShakaToken;
+          }
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    test.skipIf(process.platform === "win32")(
       "pins Pi inference to anthropic + full isolation flag set + SHAKA_PI_SUBAGENT env",
       async () => {
         // Pi inference must:

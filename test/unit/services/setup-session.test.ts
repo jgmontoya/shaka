@@ -5,6 +5,7 @@ import {
   buildClaudeArgs,
   buildCodexArgs,
   buildOpencodeArgs,
+  buildOpencodeOneshotArgs,
   buildPiArgs,
   runSetupInteractive,
   runSetupOneshot,
@@ -21,14 +22,30 @@ test("buildClaudeArgs returns claude argv with positional objective and --append
   ]);
 });
 
-test("buildOpencodeArgs returns opencode argv with --prompt and --agent shaka/autoresearch-setup", () => {
-  expect(buildOpencodeArgs("make it fast")).toEqual([
+test("buildOpencodeArgs returns opencode argv with --prompt and the setup agent name", () => {
+  expect(buildOpencodeArgs("make it fast", "/tmp/wt")).toEqual([
     "opencode",
+    "/tmp/wt",
     "--prompt",
     "make it fast",
     "--agent",
-    "shaka/autoresearch-setup",
+    "autoresearch-setup",
   ]);
+});
+
+test("buildOpencodeOneshotArgs returns opencode run argv with the setup agent", () => {
+  const args = buildOpencodeOneshotArgs("make it fast", "/tmp/wt");
+  expect(args.slice(0, 7)).toEqual([
+    "opencode",
+    "run",
+    "--dir",
+    "/tmp/wt",
+    "--agent",
+    "autoresearch-setup",
+    "--",
+  ]);
+  expect(args[7]).toContain("make it fast");
+  expect(args[7]?.toLowerCase()).toContain("do not ask follow-up questions");
 });
 
 test("buildCodexArgs prepends skill body to the objective as a single positional prompt", () => {
@@ -80,7 +97,7 @@ function fakeSpawn(exitCode: number) {
 test("runSetupInteractive dispatches to the correct argv per provider", async () => {
   const cases: { provider: ProviderName; expected: string[] }[] = [
     { provider: "claude", expected: buildClaudeArgs("obj", "skill") },
-    { provider: "opencode", expected: buildOpencodeArgs("obj") },
+    { provider: "opencode", expected: buildOpencodeArgs("obj", "/tmp/wt") },
     { provider: "codex", expected: buildCodexArgs("obj", "skill") },
     { provider: "pi", expected: buildPiArgs("obj", "skill") },
   ];
@@ -139,6 +156,43 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
     resumeHint: null,
     sessionId: null,
   });
+});
+
+test("runSetupOneshot uses opencode's setup agent for opencode oneshot", async () => {
+  const calls: { args: string[]; opts: { cwd?: string; stdout?: unknown; stderr?: unknown } }[] =
+    [];
+  const spawn = ((args: string[], opts: { cwd?: string; stdout?: unknown; stderr?: unknown }) => {
+    calls.push({ args, opts });
+    return {
+      stdout: new Response("created files").body,
+      stderr: new Response("").body,
+      exited: Promise.resolve(0),
+    };
+  }) as unknown as typeof Bun.spawn;
+  const fakeRunAgent = (async () => {
+    throw new Error("generic runAgentStep should not be used for opencode setup");
+  }) as unknown as FakeRunAgent;
+
+  const result = await runSetupOneshot("/tmp/wt", "make it fast", "opencode", "SKILL", {
+    runAgent: fakeRunAgent,
+    spawn,
+  });
+
+  expect(calls).toHaveLength(1);
+  expect(calls[0]?.args.slice(0, 7)).toEqual([
+    "opencode",
+    "run",
+    "--dir",
+    "/tmp/wt",
+    "--agent",
+    "autoresearch-setup",
+    "--",
+  ]);
+  expect(calls[0]?.opts.cwd).toBe("/tmp/wt");
+  expect(calls[0]?.opts.stdout).toBe("pipe");
+  expect(calls[0]?.opts.stderr).toBe("pipe");
+  expect(result.exitCode).toBe(0);
+  expect(result.provider).toBe("opencode");
 });
 
 test("runSetupOneshot forces the selected provider via DetectedProviders override", async () => {

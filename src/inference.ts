@@ -114,12 +114,18 @@ async function callClaudeCLI(options: InferenceOptions): Promise<InferenceResult
   if (options.systemPrompt) args.push("--system-prompt", options.systemPrompt);
   args.push("-p");
 
-  const result = await spawnCLI("claude", args, options.userPrompt, options.timeout);
+  const result = await spawnCLI(
+    "claude",
+    args,
+    options.userPrompt,
+    options.timeout,
+    buildClaudeCliEnv(),
+  );
 
   if (result.code !== 0) {
     return {
       success: false,
-      error: `Claude CLI error: ${result.stderr}`,
+      error: `Claude CLI error: ${formatCliFailure(result)}`,
       provider: "claude-cli",
     };
   }
@@ -127,14 +133,28 @@ async function callClaudeCLI(options: InferenceOptions): Promise<InferenceResult
   return parseResponse(result.stdout.trim(), options.expectJson, "claude-cli");
 }
 
+function formatCliFailure(result: { stdout: string; stderr: string }): string {
+  const stderr = result.stderr.trim();
+  if (stderr) return stderr;
+  const stdout = result.stdout.trim();
+  return stdout || "no output";
+}
+
+function buildClaudeCliEnv(): NodeJS.ProcessEnv | undefined {
+  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return undefined;
+  const token = process.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN;
+  if (!token) return undefined;
+  return { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: token };
+}
+
 async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResult> {
   const prompt = options.systemPrompt
     ? `${options.systemPrompt}\n\n${options.userPrompt}`
     : options.userPrompt;
 
-  // Use the "shaka/inference" agent which has all tools disabled ("*": "deny")
+  // Use the "inference" agent which has all tools disabled ("*": "deny").
   // This prevents the LLM from writing files or running commands during inference.
-  // The agent is installed by shaka via symlink: ~/.config/opencode/agents/shaka/ → source.
+  // opencode resolves agents by frontmatter name, not symlink path.
   // NOTE: Requires `shaka init` to have been run. This is intentional — inference is only
   // called from hooks, which already require shaka installation to function.
   //
@@ -147,7 +167,7 @@ async function callOpenCodeCLI(options: InferenceOptions): Promise<InferenceResu
   // --format json: emit newline-delimited JSON events on stdout. First event is
   // step_start with the created session's ID (which we use to fire-and-forget a
   // cleanup subprocess after this call returns — see parseOpencodeJsonStream).
-  const args = ["run", "--pure", "--format", "json", "--agent", "shaka/inference"];
+  const args = ["run", "--pure", "--format", "json", "--agent", "inference"];
   // opencode expects provider/model format (e.g., "anthropic/claude-haiku-4-5")
   // Skip bare aliases like "haiku" which are Claude CLI-specific
   if (options.model?.includes("/")) args.push("--model", options.model);

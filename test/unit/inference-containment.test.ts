@@ -34,6 +34,12 @@ test("callOpenCodeCLI disables external plugins via --pure", async () => {
   expect(src).toMatch(/callOpenCodeCLI[\s\S]*?"--pure"/);
 });
 
+test("callOpenCodeCLI uses opencode's frontmatter agent name for inference", async () => {
+  const src = await Bun.file("src/inference.ts").text();
+  expect(src).toMatch(/callOpenCodeCLI[\s\S]*?"--agent"[\s\S]*?"inference"/);
+  expect(src).not.toContain('"shaka/inference"');
+});
+
 test("callOpenCodeCLI terminates options before passing the prompt", async () => {
   const src = await Bun.file("src/inference.ts").text();
   expect(src).toMatch(/callOpenCodeCLI[\s\S]*?args\.push\("--", prompt\)/);

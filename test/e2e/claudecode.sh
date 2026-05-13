@@ -237,6 +237,32 @@ else
   exit 1
 fi
 
+# ── Hook auth ─────────────────────────────────────────────────────────
+
+section "Hook auth"
+
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  # Claude Code does not forward arbitrary parent-process env vars to command
+  # hooks, and it also strips the reserved CLAUDE_CODE_OAUTH_TOKEN name from
+  # settings.env. Pass it under a Shaka-owned name; src/inference.ts maps that
+  # name back to CLAUDE_CODE_OAUTH_TOKEN only for its child `claude -p` call.
+  TMP_SETTINGS=$(mktemp)
+  jq --arg token "$CLAUDE_CODE_OAUTH_TOKEN" \
+    '.env = ((.env // {}) + {SHAKA_CLAUDE_CODE_OAUTH_TOKEN: $token})' \
+    "$SETTINGS" >"$TMP_SETTINGS"
+  mv "$TMP_SETTINGS" "$SETTINGS"
+  chmod 600 "$SETTINGS"
+
+  if jq -e '.env.SHAKA_CLAUDE_CODE_OAUTH_TOKEN | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+    pass "CLAUDE_CODE_OAUTH_TOKEN forwarded to Shaka's Claude hook env bridge"
+  else
+    fail "CLAUDE_CODE_OAUTH_TOKEN was not written to Shaka's Claude hook env bridge"
+    exit 1
+  fi
+else
+  warn "CLAUDE_CODE_OAUTH_TOKEN not set; authenticated Claude e2e will be skipped"
+fi
+
 # ── Session start hook (requires auth) ────────────────────────────────
 
 section "Session start hook"
@@ -319,9 +345,10 @@ if ls "$MEMORY_DIR"/*.md >/dev/null 2>&1; then
   pass "Memory sessions populated ($COUNT summary file(s))"
 else
   warn "No session summaries found in $MEMORY_DIR after 60s (SessionEnd pipeline may be slow or inference stalled)"
-  if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/.session-end-worker.log" ]; then
+  WORKER_LOG="${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/.session-end-worker.log"
+  if [ -f "$WORKER_LOG" ]; then
     echo "  session-end worker log:"
-    tail -40 "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/.session-end-worker.log" || true
+    tail -40 "$WORKER_LOG" || true
   fi
   ls -laR "${XDG_CONFIG_HOME:-$HOME/.config}/shaka/memory/" 2>&1 || true
   if [ "${FLAKY_E2E_ALLOW_MISSING_SUMMARY:-}" = "true" ]; then

@@ -29,9 +29,9 @@ ENV PATH="/home/shakaUser/.bun/bin:${PATH}"
 RUN mkdir -p /home/shakaUser/.local/bin && \
     ARCH=$(uname -m) && \
     if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-      TRIPLE="aarch64-unknown-linux-gnu"; \
+      TRIPLE="aarch64-unknown-linux-musl"; \
     else \
-      TRIPLE="x86_64-unknown-linux-gnu"; \
+      TRIPLE="x86_64-unknown-linux-musl"; \
     fi && \
     curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-${TRIPLE}.tar.gz" | \
     tar xz -C /home/shakaUser/.local/bin && \

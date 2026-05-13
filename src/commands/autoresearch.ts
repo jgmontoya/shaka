@@ -414,14 +414,31 @@ function reportValidationFailure(
   worktreePath: string,
   validation: Extract<Awaited<ReturnType<typeof validateSetup>>, { ok: false }>,
   commandName: "autoresearch" | "optimize",
+  setupSession?: Awaited<ReturnType<typeof runSetupOneshot>>,
 ): never {
   console.error(`\nSetup validation failed at phase '${validation.phase}': ${validation.message}`);
   if (validation.stdout) console.error(`\nSTDOUT:\n${validation.stdout}`);
   if (validation.stderr) console.error(`\nSTDERR:\n${validation.stderr}`);
+  if (setupSession?.stdout) console.error(`\nSetup session STDOUT:\n${setupSession.stdout}`);
+  if (setupSession?.stderr) console.error(`\nSetup session STDERR:\n${setupSession.stderr}`);
   console.error(`\nWorktree left at: ${worktreePath}`);
   console.error(
     `Re-run \`shaka ${commandName} start\` with a more specific objective, or open the worktree and fix the setup by hand.`,
   );
+  process.exit(1);
+}
+
+function reportSetupSessionFailure(
+  worktreePath: string,
+  result: Awaited<ReturnType<typeof runSetupOneshot>>,
+): never {
+  console.error(
+    `\nSetup session failed for provider '${result.provider}' (exit ${result.exitCode}).`,
+  );
+  if (result.stdout) console.error(`\nSTDOUT:\n${result.stdout}`);
+  if (result.stderr) console.error(`\nSTDERR:\n${result.stderr}`);
+  console.error(`\nWorktree left at: ${worktreePath}`);
+  console.error("Fix the setup session failure, then re-run `shaka autoresearch start`.");
   process.exit(1);
 }
 
@@ -471,7 +488,10 @@ Run \`shaka init\` to install one, or re-run with \`--wizard\` to fill the setup
 
   const setupSkill = await loadSkill("autoresearch-setup");
   const sessionFn = opts.oneshot === true ? oneshotFn : interactiveFn;
-  await sessionFn(setup.worktreePath, objective, provider, setupSkill);
+  const setupSession = await sessionFn(setup.worktreePath, objective, provider, setupSkill);
+  if (setupSession.exitCode !== 0) {
+    reportSetupSessionFailure(setup.worktreePath, setupSession);
+  }
 
   // The provider TUI (or oneshot subprocess) just exited. The following
   // phases run silently — validation can take tens of seconds because it
@@ -480,7 +500,8 @@ Run \`shaka init\` to install one, or re-run with \`--wizard\` to fill the setup
   // Shaka is working rather than hung.
   console.log("\nSetup session ended. Validating generated artifacts...");
   const validation = await validateSetup(setup.worktreePath);
-  if (!validation.ok) reportValidationFailure(setup.worktreePath, validation, commandName);
+  if (!validation.ok)
+    reportValidationFailure(setup.worktreePath, validation, commandName, setupSession);
   console.log(
     `✓ Setup validated (${validation.measurement.name}=${validation.measurement.value}${validation.measurement.unit}).`,
   );
