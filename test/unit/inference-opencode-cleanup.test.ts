@@ -15,8 +15,8 @@ import { test, expect } from "bun:test";
 // tested as a pure function in inference.test.ts.
 
 test("callOpenCodeCLI requests JSON output via --format json", async () => {
-  const src = await Bun.file("src/inference.ts").text();
-  expect(src).toMatch(/callOpenCodeCLI[\s\S]*?"--format"[\s\S]*?"json"/);
+  const src = await Bun.file("src/providers/opencode/inference.ts").text();
+  expect(src).toMatch(/"--format",\s*"json"/);
 });
 
 test("callOpenCodeCLI fires-and-forgets opencode session delete with --pure", async () => {
@@ -26,7 +26,7 @@ test("callOpenCodeCLI fires-and-forgets opencode session delete with --pure", as
   //      would accept `Bun.spawn([..., "ses_abc"])` which regresses correctness.
   //   2. The spawned child is unref'ed. Without that, the caller's process stays
   //      alive until cleanup exits, even though we don't await .exited.
-  const src = await Bun.file("src/inference.ts").text();
+  const src = await Bun.file("src/providers/opencode/inference.ts").text();
   expect(src).toMatch(
     /Bun\.spawn\(\s*\[\s*"opencode",\s*"--pure",\s*"session",\s*"delete",\s*sessionId\s*\][\s\S]*?\)\.unref\(\)/,
   );

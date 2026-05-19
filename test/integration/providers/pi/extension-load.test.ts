@@ -30,6 +30,7 @@ const SHAKA_BIN = join(BIN_DIR, "shaka");
 const STDIN_LOG = join(ROOT, "stdin.log");
 const ARGV_LOG = join(ROOT, "argv.log");
 let importCounter = 0;
+let eventsLogCounter = 0;
 
 const savedEnv = { ...process.env };
 
@@ -105,6 +106,34 @@ async function writeStubShaka(exitCode: number, stderr = "blocked: dangerous"): 
 
 function shellEscape(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function nextEventsLog(): string {
+  eventsLogCounter += 1;
+  return join(ROOT, `events-${eventsLogCounter}.log`);
+}
+
+function hookEventCount(text: string, eventName: string): number {
+  const escaped = eventName.replaceAll(".", "\\.");
+  return (text.match(new RegExp(`hook ${escaped}`, "g")) ?? []).length;
+}
+
+async function readEventLogWhen(
+  path: string,
+  predicate: (text: string) => boolean,
+  timeoutMs = 750,
+): Promise<string> {
+  const deadline = performance.now() + timeoutMs;
+  let last = "";
+  while (performance.now() < deadline) {
+    const file = Bun.file(path);
+    if (await file.exists()) {
+      last = await file.text();
+      if (predicate(last)) return last;
+    }
+    await Bun.sleep(10);
+  }
+  throw new Error(`event log ${path} did not reach expected state within ${timeoutMs}ms: ${last}`);
 }
 
 beforeAll(async () => {
@@ -319,8 +348,7 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     // first id-less session permanently registers "unknown" in the set
     // and every later id-less session in the same Pi host skips
     // session.start. Pin the contract.
-    const eventsLog = join(ROOT, "events.log");
-    await rm(eventsLog, { force: true });
+    const eventsLog = nextEventsLog();
     await Bun.write(
       SHAKA_BIN,
       ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
@@ -343,8 +371,11 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
       ctxNoId,
     );
 
-    const events = await Bun.file(eventsLog).text();
-    const sessionStartCount = (events.match(/hook session\.start/g) ?? []).length;
+    const events = await readEventLogWhen(
+      eventsLog,
+      (text) => hookEventCount(text, "session.start") >= 2,
+    );
+    const sessionStartCount = hookEventCount(events, "session.start");
     expect(sessionStartCount).toBe(2);
   });
 
@@ -368,8 +399,7 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
 
     // Second turn — install an appending stub so we can count which
     // events actually shelled out (the default stub overwrites per call).
-    const eventsLog = join(ROOT, "events.log");
-    await rm(eventsLog, { force: true });
+    const eventsLog = nextEventsLog();
     await Bun.write(
       SHAKA_BIN,
       ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
@@ -381,14 +411,16 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
       ctx,
     );
 
-    const events = await Bun.file(eventsLog).text();
+    const events = await readEventLogWhen(
+      eventsLog,
+      (text) => text.includes("hook session.start") && text.includes("hook prompt.submit"),
+    );
     expect(events).toContain("hook session.start");
     expect(events).toContain("hook prompt.submit");
   });
 
   test("session.end fires once when idle end is followed by session shutdown", async () => {
-    const eventsLog = join(ROOT, "events.log");
-    await rm(eventsLog, { force: true });
+    const eventsLog = nextEventsLog();
     await Bun.write(
       SHAKA_BIN,
       ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
@@ -403,14 +435,16 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     handlers.session_shutdown?.({ type: "session_shutdown" }, ctx);
     await Bun.sleep(100);
 
-    const events = await Bun.file(eventsLog).text();
-    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    const events = await readEventLogWhen(
+      eventsLog,
+      (text) => hookEventCount(text, "session.end") >= 1,
+    );
+    const sessionEndCount = hookEventCount(events, "session.end");
     expect(sessionEndCount).toBe(1);
   });
 
   test("two id-less session shutdowns each fire session.end", async () => {
-    const eventsLog = join(ROOT, "events.log");
-    await rm(eventsLog, { force: true });
+    const eventsLog = nextEventsLog();
     await Bun.write(
       SHAKA_BIN,
       ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
@@ -424,14 +458,16 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     handlers.session_shutdown?.({ type: "session_shutdown" }, ctxNoId);
     await Bun.sleep(100);
 
-    const events = await Bun.file(eventsLog).text();
-    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    const events = await readEventLogWhen(
+      eventsLog,
+      (text) => hookEventCount(text, "session.end") >= 2,
+    );
+    const sessionEndCount = hookEventCount(events, "session.end");
     expect(sessionEndCount).toBe(2);
   });
 
   test("new turn cancels a pending idle session.end timer", async () => {
-    const eventsLog = join(ROOT, "events.log");
-    await rm(eventsLog, { force: true });
+    const eventsLog = nextEventsLog();
     await Bun.write(
       SHAKA_BIN,
       ["#!/bin/sh", `printf '%s\\n' "$*" >> ${shellEscape(eventsLog)}`, "exit 0", ""].join("\n"),
@@ -454,8 +490,11 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     handlers.session_shutdown?.({ type: "session_shutdown" }, ctx);
     await Bun.sleep(100);
 
-    const events = await Bun.file(eventsLog).text();
-    const sessionEndCount = (events.match(/hook session\.end/g) ?? []).length;
+    const events = await readEventLogWhen(
+      eventsLog,
+      (text) => hookEventCount(text, "session.end") >= 1,
+    );
+    const sessionEndCount = hookEventCount(events, "session.end");
     expect(sessionEndCount).toBe(1);
   });
 

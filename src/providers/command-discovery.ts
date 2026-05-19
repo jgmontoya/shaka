@@ -11,12 +11,10 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { normalizeCwd } from "../domain/paths";
+import { MAX_NAME_LENGTH, NAME_PATTERN, validateCommandName } from "./command-name";
 import type { ProviderName } from "./types";
 
-/** Valid command name: lowercase alphanumeric with hyphens, no leading/trailing hyphens, max 64 chars. */
-export const NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-export const MAX_NAME_LENGTH = 64;
-const RESERVED_NAMES = new Set(["shaka"]);
+export { MAX_NAME_LENGTH, NAME_PATTERN };
 // `Record<ProviderName, true>` makes the table exhaustive: adding a new
 // member to `ProviderName` without a key here is a TypeScript error, not a
 // silent runtime "Unknown provider" rejection. The array and set are
@@ -113,7 +111,7 @@ async function parseCommandFile(
   name: string,
   sourcePath: string,
 ): Promise<DiscoveredCommand | CommandError> {
-  const nameError = validateName(name);
+  const nameError = validateCommandName(name);
   if (nameError) return { name, sourcePath, error: nameError };
 
   let raw: string;
@@ -163,16 +161,6 @@ async function parseCommandFile(
 
 function nameFromFilename(filename: string): string {
   return filename.replace(/\.md$/, "");
-}
-
-function validateName(name: string): string | null {
-  if (RESERVED_NAMES.has(name)) {
-    return `Reserved command name "${name}" — collides with Shaka's skills directory`;
-  }
-  if (name.length > MAX_NAME_LENGTH || !NAME_PATTERN.test(name)) {
-    return `Invalid command name "${name}" — must match [a-z0-9], no leading/trailing hyphens, max 64 chars`;
-  }
-  return null;
 }
 
 async function listCommandFiles(dir: string): Promise<string[]> {

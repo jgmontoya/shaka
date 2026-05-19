@@ -34,7 +34,7 @@ export async function installCommandsForProviders(
 
   for (const provider of providers) {
     try {
-      await provider.installCommands({ commands, manifest });
+      await provider.commands.install({ commands, manifest });
     } catch (e) {
       console.error(
         `  ⚠ Command installation failed for ${provider.name}: ${e instanceof Error ? e.message : String(e)}`,

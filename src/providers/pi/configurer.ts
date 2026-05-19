@@ -31,19 +31,19 @@ import {
   unlink,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { type Result, err, ok } from "../../domain/result";
 import { resolveFromModule } from "../../platform/paths";
 import { installAssetSymlink, verifyAssetSymlink } from "../asset-installer";
-import { compileForPi } from "../command-compiler";
 import type {
   CommandInstallConfig,
   InstallConfig,
   InstallationStatus,
   ProviderConfigurer,
 } from "../types";
-
-const PROMPTS_DIR_NAME = "prompts";
+import { checkPiCommands, installPiCommands, uninstallPiCommands } from "./commands";
+import { checkPiHealth } from "./health";
+import { type SmokeLoadRunner, defaultSmokeLoadRunner } from "./smoke-load";
 
 /** Source of truth for the generated Pi extension template. */
 const EXTENSION_TEMPLATE_PATH = resolveFromModule(
@@ -57,17 +57,6 @@ const EXTENSION_MARKER = "SHAKA_GENERATED_EXTENSION";
 /** Smoke-load gate signal emitted by Pi on a broken extension (Exp 44). */
 const PI_LOAD_FAILURE_MARKER = "Failed to load extension";
 const SHAKA_HOME_PLACEHOLDER = "__SHAKA_INSTALLED_HOME__";
-
-export interface SmokeLoadResult {
-  exitCode: number;
-  stderr: string;
-}
-
-/**
- * Run Pi against the freshly written extension to verify it loads. Implementations
- * can short-circuit (return clean stderr) when Pi isn't installed locally.
- */
-export type SmokeLoadRunner = (piHome: string) => Promise<SmokeLoadResult>;
 
 /**
  * Pi auto-discovers skills from `~/.agents/skills/` regardless of
@@ -90,6 +79,9 @@ export class PiProviderConfigurer implements ProviderConfigurer {
   readonly name = "pi" as const;
   readonly label = "Pi";
   readonly skillsDir: string;
+  readonly commands = {
+    install: (config: CommandInstallConfig) => this.installCommands(config),
+  };
   private readonly piHome: string;
   private readonly runSmokeLoad: SmokeLoadRunner;
   private readonly extensionTemplatePath: string;
@@ -109,6 +101,10 @@ export class PiProviderConfigurer implements ProviderConfigurer {
 
   isInstalled(): boolean {
     return Bun.which("pi") !== null;
+  }
+
+  checkHealth() {
+    return checkPiHealth(this.piHome);
   }
 
   async install(config: InstallConfig): Promise<Result<void, Error>> {
@@ -352,26 +348,7 @@ export class PiProviderConfigurer implements ProviderConfigurer {
   }
 
   async installCommands(config: CommandInstallConfig): Promise<void> {
-    const promptsDir = join(this.piHome, PROMPTS_DIR_NAME);
-    await mkdir(promptsDir, { recursive: true });
-
-    const compiledCommands = config.commands
-      // Pi v1 ships global commands only; scoped commands deferred.
-      .filter((command) => !command.cwd)
-      .map((command) => compileForPi(command, promptsDir));
-    const expected = new Set(compiledCommands.map((command) => basename(command.path)));
-
-    const entries = await readdir(promptsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.startsWith("shaka-") || !entry.name.endsWith(".md")) continue;
-      if (expected.has(entry.name)) continue;
-      await rm(join(promptsDir, entry.name), { force: true });
-    }
-
-    for (const compiled of compiledCommands) {
-      await Bun.write(compiled.path, compiled.content);
-    }
+    await installPiCommands(config, this.piHome);
   }
 
   async uninstall(_config: InstallConfig): Promise<Result<void, Error>> {
@@ -386,20 +363,8 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     }
   }
 
-  /**
-   * Remove every `shaka-*.md` prompt template `installCommands` may have
-   * written under `<piHome>/prompts/`. Scope is the `shaka-` prefix only —
-   * user-authored prompt templates at the same directory are preserved.
-   */
   private async uninstallCommands(): Promise<void> {
-    const promptsDir = join(this.piHome, PROMPTS_DIR_NAME);
-    if (!(await directoryExists(promptsDir))) return;
-    const entries = await readdir(promptsDir, { withFileTypes: true });
-    for (const entry of entries) {
-      if (!entry.isFile()) continue;
-      if (!entry.name.startsWith("shaka-") || !entry.name.endsWith(".md")) continue;
-      await rm(join(promptsDir, entry.name), { force: true });
-    }
+    await uninstallPiCommands(this.piHome);
   }
 
   /** Remove the extension only if it carries the Shaka marker (preserves user files at the same path). */
@@ -460,10 +425,7 @@ export class PiProviderConfigurer implements ProviderConfigurer {
       agents: await this.checkAgentSkills(join(config.shakaHome, "system", "agents")),
       skills: skills.ok ? staleSkills : skills,
       installedSkills,
-      // Pi commands are written by the separate `installCommands`
-      // orchestration step. `install()` produces no command files, so the
-      // contract here is "no broken state" — mirrors the codex configurer.
-      commands: { ok: true },
+      commands: await checkPiCommands(config, this.piHome),
     };
   }
 
@@ -632,94 +594,4 @@ async function isSymlink(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/** Smoke-load budget. Generous enough for slow CI but tight enough that a
- * real hang surfaces during install instead of after the user gives up.
- */
-const SMOKE_LOAD_TIMEOUT_MS = 30_000;
-
-/**
- * Race a spawned process against a wall-clock budget. On timeout the child
- * is killed and a synthetic non-zero `SmokeLoadResult` is returned so
- * callers can distinguish "load failed" from "load hung." Exported solely
- * for unit-test access — production code calls it via
- * `defaultSmokeLoadRunner`.
- */
-export async function runProcessWithTimeout(
-  proc: ReturnType<typeof Bun.spawn>,
-  timeoutMs: number,
-): Promise<SmokeLoadResult> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let killTimer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<SmokeLoadResult>((resolve) => {
-    timer = setTimeout(() => {
-      // SIGTERM → 500ms grace → SIGKILL. A `pi` process that traps
-      // SIGTERM would otherwise keep running orphaned and hold
-      // `proc.exited` open forever. Same escalation as runAgentStep,
-      // opencode runShakaTool, and inference.spawnCLI.
-      proc.kill("SIGTERM");
-      killTimer = setTimeout(() => proc.kill("SIGKILL"), 500);
-      killTimer.unref?.();
-      resolve({ exitCode: 1, stderr: `Pi smoke-load timed out after ${timeoutMs}ms` });
-    }, timeoutMs);
-    timer.unref?.();
-  });
-  const completion = (async (): Promise<SmokeLoadResult> => {
-    try {
-      // Caller is expected to spawn with `stderr: "pipe"`. The wider
-      // Bun.spawn return type covers inherit/ignore variants too, so we
-      // narrow here.
-      const stderr = await new Response(proc.stderr as ReadableStream<Uint8Array>).text();
-      const exitCode = await proc.exited;
-      return { exitCode, stderr };
-    } finally {
-      // Once the process has actually exited, the SIGKILL backstop is
-      // unnecessary. Clearing it removes the theoretical PID-recycle
-      // window where SIGKILL could land on an unrelated process.
-      // Mirrors the opencode runShakaTool finally-clears pattern.
-      if (killTimer) clearTimeout(killTimer);
-    }
-  })();
-  try {
-    return await Promise.race([completion, timeout]);
-  } finally {
-    completion.catch(() => {});
-    // SIGTERM trigger: cancel if completion won the race (process exited
-    // on its own — timeout never fired).
-    if (timer) clearTimeout(timer);
-  }
-}
-
-/**
- * Default smoke-load runner. Skips silently when `pi` isn't on PATH (test and
- * CI environments). Otherwise spawns `pi --offline -p ""` with tools,
- * sessions, skills, prompt templates, and context files disabled so Pi
- * triggers extension discovery + load against `<piHome>/extensions/shaka.ts`
- * and reports any error on stderr (Exp 44 — independent of `--verbose`).
- * Wrapped in a wall-clock budget so a hung `pi` never blocks `shaka init`.
- */
-async function defaultSmokeLoadRunner(piHome: string): Promise<SmokeLoadResult> {
-  if (!Bun.which("pi")) {
-    return { exitCode: 0, stderr: "" };
-  }
-  const proc = Bun.spawn(
-    [
-      "pi",
-      "--offline",
-      "-p",
-      "--no-tools",
-      "--no-session",
-      "--no-skills",
-      "--no-prompt-templates",
-      "--no-context-files",
-      "",
-    ],
-    {
-      env: { ...process.env, PI_CODING_AGENT_DIR: piHome, PI_TELEMETRY: "0" },
-      stdout: "ignore",
-      stderr: "pipe",
-    },
-  );
-  return runProcessWithTimeout(proc, SMOKE_LOAD_TIMEOUT_MS);
 }

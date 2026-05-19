@@ -1,30 +1,45 @@
 /**
  * Provider registry and factory.
- * Central place to get provider configurers.
+ * Central place to get provider modules and configurers.
  */
 
-import { ClaudeProviderConfigurer } from "./claude/configurer";
-import { CodexProviderConfigurer } from "./codex/configurer";
-import { OpencodeProviderConfigurer } from "./opencode/configurer";
-import { PiProviderConfigurer } from "./pi/configurer";
-import type { ProviderConfigurer, ProviderName } from "./types";
+import type { DetectedProviders } from "../services/provider-detection";
+import { claudeProvider } from "./claude/provider";
+import { codexProvider } from "./codex/provider";
+import { opencodeProvider } from "./opencode/provider";
+import { piProvider } from "./pi/provider";
+import type { ProviderConfigurer, ProviderModule, ProviderName } from "./types";
 
-const PROVIDERS = {
-  claude: () => new ClaudeProviderConfigurer(),
-  opencode: () => new OpencodeProviderConfigurer(),
-  codex: () => new CodexProviderConfigurer(),
-  pi: () => new PiProviderConfigurer(),
-} satisfies Record<ProviderName, () => ProviderConfigurer>;
+const PROVIDER_MODULE_BY_NAME = {
+  claude: claudeProvider,
+  opencode: opencodeProvider,
+  codex: codexProvider,
+  pi: piProvider,
+} satisfies Record<ProviderName, ProviderModule>;
+
+const PROVIDER_MODULES = Object.values(PROVIDER_MODULE_BY_NAME) satisfies ProviderModule[];
 
 export function createProvider(name: ProviderName): ProviderConfigurer {
-  return PROVIDERS[name]();
+  return getProviderModule(name).createConfigurer();
 }
 
 export function getAllProviders(): ProviderConfigurer[] {
-  return getProviderNames().map((name) => createProvider(name));
+  return getProviderModules().map((provider) => provider.createConfigurer());
 }
 
 /** Return all registered provider names without constructing configurers. */
 export function getProviderNames(): ProviderName[] {
-  return Object.keys(PROVIDERS) as ProviderName[];
+  return getProviderModules().map((provider) => provider.metadata.name);
+}
+
+export function getProviderModule(name: ProviderName): ProviderModule {
+  return PROVIDER_MODULE_BY_NAME[name];
+}
+
+export function getProviderModules(): ProviderModule[] {
+  return [...PROVIDER_MODULES].sort((a, b) => a.metadata.priority - b.metadata.priority);
+}
+
+export function getInstalledProviderModules(detected: DetectedProviders): ProviderModule[] {
+  return getProviderModules().filter((provider) => detected[provider.metadata.name]);
 }

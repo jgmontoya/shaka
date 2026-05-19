@@ -3,7 +3,13 @@ import { ClaudeProviderConfigurer } from "../../../src/providers/claude/configur
 import { CodexProviderConfigurer } from "../../../src/providers/codex/configurer";
 import { OpencodeProviderConfigurer } from "../../../src/providers/opencode/configurer";
 import { PiProviderConfigurer } from "../../../src/providers/pi/configurer";
-import { createProvider, getAllProviders, getProviderNames } from "../../../src/providers/registry";
+import {
+  createProvider,
+  getAllProviders,
+  getInstalledProviderModules,
+  getProviderModules,
+  getProviderNames,
+} from "../../../src/providers/registry";
 import type { ProviderName } from "../../../src/providers/types";
 
 describe("Provider Registry", () => {
@@ -54,6 +60,32 @@ describe("Provider Registry", () => {
       const names: ProviderName[] = getProviderNames();
       expect(names).toBeDefined();
       expect(names.length).toBe(4);
+    });
+  });
+
+  describe("getProviderModules", () => {
+    test("returns provider metadata in stable priority order", () => {
+      const modules = getProviderModules();
+
+      expect(modules.map((provider) => provider.metadata)).toEqual([
+        { name: "claude", label: "Claude Code", executable: "claude", priority: 0 },
+        { name: "opencode", label: "opencode", executable: "opencode", priority: 1 },
+        { name: "codex", label: "Codex", executable: "codex", priority: 2 },
+        { name: "pi", label: "Pi", executable: "pi", priority: 3 },
+      ]);
+    });
+  });
+
+  describe("getInstalledProviderModules", () => {
+    test("filters detected providers without changing provider priority order", () => {
+      const modules = getInstalledProviderModules({
+        claude: false,
+        opencode: true,
+        codex: false,
+        pi: true,
+      });
+
+      expect(modules.map((provider) => provider.metadata.name)).toEqual(["opencode", "pi"]);
     });
   });
 });

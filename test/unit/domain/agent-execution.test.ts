@@ -79,6 +79,42 @@ describe("agent-execution", () => {
     }
   });
 
+  test.skipIf(process.platform === "win32")("passes cwd to opencode via --dir", async () => {
+    const root = join(
+      tmpdir(),
+      `shaka-agent-opencode-dir-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    );
+    const binDir = join(root, "bin");
+    const workDir = join(root, "work");
+    const oldPath = process.env.PATH;
+    try {
+      await mkdir(binDir, { recursive: true });
+      await mkdir(workDir, { recursive: true });
+      const opencode = join(binDir, "opencode");
+      await Bun.write(opencode, "#!/bin/sh\nprintf 'args=%s\\n' \"$*\"\n");
+      await chmod(opencode, 0o755);
+      process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
+
+      const result = await runAgentStep(
+        { prompt: "---\nsetup", cwd: workDir },
+        { claude: false, opencode: true, codex: false, pi: false },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.provider).toBe("opencode");
+      expect(result.stdout).toContain(`--dir ${workDir}`);
+      expect(result.stdout).toContain(" -- ---");
+      expect(result.stdout).toContain("setup");
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test.skipIf(process.platform === "win32")("pipes Codex prompts via stdin", async () => {
     const root = join(
       tmpdir(),
@@ -224,7 +260,7 @@ describe("agent-execution", () => {
         process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 
         const result = await runAgentStep(
-          { prompt: "do the thing", piModel: "openai/gpt-5.1" },
+          { prompt: "do the thing", model: "openai/gpt-5.1" },
           { claude: false, opencode: false, codex: false, pi: true },
         );
 
@@ -242,29 +278,6 @@ describe("agent-execution", () => {
       }
     },
   );
-
-  test("rejects Pi provider overrides without a matching model override", async () => {
-    const result = await runAgentStep(
-      { prompt: "do the thing", piProvider: "openai-codex" },
-      { claude: false, opencode: false, codex: false, pi: true },
-    );
-
-    expect(result.provider).toBe("pi");
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("piModel");
-  });
-
-  test("rejects Pi provider overrides that disagree with the model namespace", async () => {
-    const result = await runAgentStep(
-      { prompt: "do the thing", piProvider: "anthropic", piModel: "openai/gpt-5.1" },
-      { claude: false, opencode: false, codex: false, pi: true },
-    );
-
-    expect(result.provider).toBe("pi");
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain("does not match");
-    expect(result.stderr).toContain("openai-codex");
-  });
 
   test.skipIf(process.platform === "win32")(
     "rejects unsupported Pi model namespaces before spawning pi",
@@ -287,7 +300,7 @@ describe("agent-execution", () => {
         process.env.PATH = `${binDir}${delimiter}${oldPath ?? ""}`;
 
         const result = await runAgentStep(
-          { prompt: "do the thing", piModel: "openrouter/anthropic/claude-sonnet-4-5" },
+          { prompt: "do the thing", model: "openrouter/anthropic/claude-sonnet-4-5" },
           { claude: false, opencode: false, codex: false, pi: true },
         );
 

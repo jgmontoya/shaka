@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmod, lstat, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { PiProviderConfigurer } from "../../../../src/providers/pi/configurer";
 
@@ -491,7 +491,7 @@ describe("PiProviderConfigurer", () => {
         // (round-9), runAgentStep (original). Without escalation, a `pi`
         // process that traps SIGTERM keeps running orphaned after the
         // installer thinks it's done.
-        const { runProcessWithTimeout } = await import("../../../../src/providers/pi/configurer");
+        const { runProcessWithTimeout } = await import("../../../../src/providers/pi/smoke-load");
         const proc = Bun.spawn(
           [
             process.argv[0] ?? "bun",
@@ -524,7 +524,7 @@ describe("PiProviderConfigurer", () => {
       // block `shaka init --pi` indefinitely with no user feedback.
       // `runProcessWithTimeout` races the process against a budget and
       // surfaces a clean error when the budget elapses, killing the child.
-      const { runProcessWithTimeout } = await import("../../../../src/providers/pi/configurer");
+      const { runProcessWithTimeout } = await import("../../../../src/providers/pi/smoke-load");
       // The test's own bun runtime + a hanging JS snippet replaces the
       // POSIX-only `sleep` binary so runProcessWithTimeout is exercised
       // cross-platform. process.argv[0] is the bun binary path on every OS
@@ -543,6 +543,69 @@ describe("PiProviderConfigurer", () => {
       // be generous to absorb CI noise without missing genuine hangs.
       expect(elapsed).toBeLessThan(2000);
     });
+
+    test.skipIf(process.platform === "win32")(
+      "default smoke-load runner passes only intentional Pi flags",
+      async () => {
+        const binDir = join(testRoot, "bin");
+        const argvFile = join(testRoot, "pi-argv.txt");
+        const runnerPath = join(testRoot, "run-smoke-load.ts");
+        try {
+          await mkdir(binDir, { recursive: true });
+          await Bun.write(argvFile, "");
+          const pi = join(binDir, "pi");
+          await Bun.write(
+            pi,
+            [
+              "#!/bin/sh",
+              'for arg in "$@"; do',
+              `  printf '<%s>\\n' "$arg" >> ${shellEscape(argvFile)}`,
+              "done",
+              "",
+            ].join("\n"),
+          );
+          await chmod(pi, 0o755);
+          await Bun.write(
+            runnerPath,
+            [
+              `import { defaultSmokeLoadRunner } from ${JSON.stringify(pathToFileURL(join(process.cwd(), "src/providers/pi/smoke-load.ts")).href)};`,
+              `const result = await defaultSmokeLoadRunner(${JSON.stringify(testPiHome)});`,
+              "console.log(JSON.stringify(result));",
+              "",
+            ].join("\n"),
+          );
+
+          const proc = Bun.spawn([process.argv[0] ?? "bun", runnerPath], {
+            env: { ...process.env, PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}` },
+            stdout: "pipe",
+            stderr: "pipe",
+          });
+          const [stdout, stderr, exitCode] = await Promise.all([
+            new Response(proc.stdout).text(),
+            new Response(proc.stderr).text(),
+            proc.exited,
+          ]);
+
+          expect(exitCode).toBe(0);
+          expect(stderr).toBe("");
+          const result = JSON.parse(stdout) as { exitCode: number };
+
+          expect(result.exitCode).toBe(0);
+          const argv = (await Bun.file(argvFile).text()).trim().split("\n");
+          expect(argv).toEqual([
+            "<--offline>",
+            "<-p>",
+            "<--no-tools>",
+            "<--no-session>",
+            "<--no-skills>",
+            "<--no-prompt-templates>",
+            "<--no-context-files>",
+          ]);
+        } finally {
+          await rm(runnerPath, { force: true });
+        }
+      },
+    );
 
     test("install rolls back the extension when smoke-load throws (not just when it returns an error)", async () => {
       // `smokeLoadExtension` calls into `runSmokeLoad`, which can throw
@@ -1091,6 +1154,54 @@ describe("PiProviderConfigurer", () => {
       // orchestration step). `install()` alone produces no command files,
       // so the contract is "no broken state" — same as the codex check.
       expect(status.commands.ok).toBe(true);
+    });
+
+    test("commands report not ok when an installed Pi prompt is missing", async () => {
+      await mkdir(`${testShakaHome}/system/commands`, { recursive: true });
+      await Bun.write(
+        `${testShakaHome}/system/commands/commit.md`,
+        "---\ndescription: Commit\n---\nCommit body",
+      );
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+      await configurer.installCommands({
+        commands: [
+          {
+            name: "commit",
+            description: "Commit",
+            body: "Commit body",
+            sourcePath: `${testShakaHome}/system/commands/commit.md`,
+          },
+        ],
+        manifest: { global: ["commit"], scoped: {} },
+      });
+      await rm(`${testPiHome}/prompts/shaka-commit.md`, { force: true });
+
+      const status = await configurer.checkInstallation({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(status.commands.ok).toBe(false);
+      expect(status.commands.issue).toContain("run shaka reload");
+    });
+
+    test("commands report not ok when a stale Pi prompt remains", async () => {
+      const configurer = createConfigurer();
+      await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
+      await mkdir(`${testPiHome}/prompts`, { recursive: true });
+      await Bun.write(
+        `${testPiHome}/prompts/shaka-stale.md`,
+        "---\ndescription: stale\n---\nStale body",
+      );
+
+      const status = await configurer.checkInstallation({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(status.commands.ok).toBe(false);
+      expect(status.commands.issue).toContain("stale");
     });
 
     test("no field reports the legacy 'not implemented yet' placeholder", async () => {

@@ -9,10 +9,8 @@
  * Each hook declares its trigger event via: TRIGGER: EventName
  */
 
-import { mkdir, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../../domain/config";
 import { type Result, err, ok } from "../../domain/result";
 import { shellQuotePosix } from "../../platform/paths";
 import {
@@ -23,9 +21,6 @@ import {
   verifyAssetSymlink,
   verifyPerSkillSymlinks,
 } from "../asset-installer";
-import { compileForClaude } from "../command-compiler";
-import { type DiscoveredCommand, discoverCommands } from "../command-discovery";
-import { type CommandManifest, readManifest } from "../command-manifest";
 import {
   type DiscoveredHook,
   type HookEvent,
@@ -40,6 +35,7 @@ import type {
   PermissionMode,
   ProviderConfigurer,
 } from "../types";
+import { checkClaudeCommands, installClaudeCommands, uninstallClaudeCommands } from "./commands";
 
 /** Default command runner using Bun.spawn. */
 async function defaultRunCommand(args: string[]): Promise<{ exitCode: number; stderr: string }> {
@@ -173,6 +169,9 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
   readonly name = "claude" as const;
   readonly label = "Claude Code";
   readonly skillsDir: string;
+  readonly commands = {
+    install: (config: CommandInstallConfig) => this.installCommands(config),
+  };
   private readonly claudeHome: string;
   private readonly runCommand: (args: string[]) => Promise<{ exitCode: number; stderr: string }>;
 
@@ -461,122 +460,14 @@ export class ClaudeProviderConfigurer implements ProviderConfigurer {
   }
 
   async installCommands(config: CommandInstallConfig): Promise<void> {
-    const { commands, manifest } = config;
-    const globalSkillsDir = join(this.claudeHome, "skills");
-
-    // Clean previous global commands
-    for (const name of manifest.global) {
-      await rm(join(globalSkillsDir, name), { recursive: true, force: true });
-    }
-    // Clean previous scoped commands
-    for (const [cwdPath, names] of Object.entries(manifest.scoped)) {
-      for (const name of names) {
-        await rm(join(cwdPath, ".claude", "skills", name), { recursive: true, force: true });
-      }
-    }
-
-    const manifestGlobalSet = new Set(manifest.global);
-
-    for (const cmd of commands) {
-      if (cmd.cwd) {
-        await this.installScopedSkill(cmd, manifest);
-      } else {
-        await this.installGlobalSkill(cmd, globalSkillsDir, manifestGlobalSet);
-      }
-    }
-  }
-
-  private async installGlobalSkill(
-    cmd: DiscoveredCommand,
-    skillsDir: string,
-    manifestSet: Set<string>,
-  ): Promise<void> {
-    const targetPath = join(skillsDir, cmd.name);
-    if (!manifestSet.has(cmd.name) && (await Bun.file(join(targetPath, "SKILL.md")).exists())) {
-      console.error(
-        `  ⚠ Skipped "${cmd.name}" — pre-existing skill found at ${targetPath}/\n    To let Shaka manage it, remove the existing skill first, then run shaka reload.`,
-      );
-      return;
-    }
-
-    const compiled = compileForClaude(cmd, skillsDir);
-    await mkdir(join(skillsDir, cmd.name), { recursive: true });
-    await Bun.write(compiled.path, compiled.content);
-  }
-
-  private async installScopedSkill(
-    cmd: DiscoveredCommand,
-    manifest: CommandManifest,
-  ): Promise<void> {
-    for (const cwdPath of cmd.cwd ?? []) {
-      const dirExists = await stat(cwdPath)
-        .then((s) => s.isDirectory())
-        .catch(() => false);
-      if (!dirExists) {
-        console.error(`  ⚠ Skipped "${cmd.name}" at ${cwdPath} — directory does not exist`);
-        continue;
-      }
-
-      const skillsDir = join(cwdPath, ".claude", "skills");
-      const targetPath = join(skillsDir, cmd.name);
-      const previousScoped = new Set(manifest.scoped[cwdPath] ?? []);
-
-      if (
-        !previousScoped.has(cmd.name) &&
-        (await Bun.file(join(targetPath, "SKILL.md")).exists())
-      ) {
-        console.error(
-          `  ⚠ Skipped "${cmd.name}" — pre-existing skill found at ${targetPath}/\n    To let Shaka manage it, remove the existing skill first, then run shaka reload.`,
-        );
-        continue;
-      }
-
-      const compiled = compileForClaude(cmd, skillsDir);
-      await mkdir(join(skillsDir, cmd.name), { recursive: true });
-      await Bun.write(compiled.path, compiled.content);
-
-      console.log(`  ℹ Installed "${cmd.name}" to ${targetPath}/`);
-      console.log(
-        `    These are generated files. Consider adding .claude/skills/${cmd.name}/ to .gitignore`,
-      );
-    }
+    await installClaudeCommands(config, this.claudeHome);
   }
 
   private async uninstallCommands(config: InstallConfig): Promise<void> {
-    const skillsDir = join(this.claudeHome, "skills");
-    const manifest = await readManifest(config.shakaHome);
-
-    for (const name of manifest.global) {
-      await rm(join(skillsDir, name), { recursive: true, force: true });
-    }
-    for (const [cwdPath, names] of Object.entries(manifest.scoped)) {
-      for (const name of names) {
-        await rm(join(cwdPath, ".claude", "skills", name), { recursive: true, force: true });
-      }
-    }
+    await uninstallClaudeCommands(config, this.claudeHome);
   }
 
   private async checkCommands(config: InstallConfig): Promise<{ ok: boolean; issue?: string }> {
-    const manifest = await readManifest(config.shakaHome);
-    const shakaConfig = await loadConfig(config.shakaHome);
-    const { commands } = await discoverCommands(config.shakaHome, shakaConfig?.commands?.disabled);
-
-    const isEmpty =
-      commands.length === 0 &&
-      manifest.global.length === 0 &&
-      Object.keys(manifest.scoped).length === 0;
-    if (isEmpty) return { ok: true };
-
-    // Scoped commands are excluded — their target directories may not exist yet
-    const manifestGlobal = new Set(manifest.global);
-    const missing = commands.filter((c) => !c.cwd && !manifestGlobal.has(c.name));
-    if (missing.length > 0) {
-      return {
-        ok: false,
-        issue: `${missing.length} command(s) not installed (run shaka reload)`,
-      };
-    }
-
-    return { ok: true };
+    return checkClaudeCommands(config, this.claudeHome);
   }
 }

@@ -1,13 +1,77 @@
 /**
- * Provider abstraction for Claude Code and opencode.
- * Each provider implements this interface to handle installation.
+ * Provider abstractions for installed AI CLIs.
+ * Each provider implements installation plus runtime capabilities.
  */
 
+import type { AgentExecutionOptions, AgentExecutionResult } from "../domain/agent-execution";
 import type { Result } from "../domain/result";
+import type { InferenceOptions, InferenceResult } from "../inference";
+import type { ProcessRunner } from "../platform/process-runner";
 import type { DiscoveredCommand } from "./command-discovery";
 import type { CommandManifest } from "./command-manifest";
 
 export type ProviderName = "claude" | "opencode" | "codex" | "pi";
+
+export interface ProviderMetadata {
+  readonly name: ProviderName;
+  readonly label: string;
+  readonly executable: string;
+  readonly priority: number;
+}
+
+export interface ProviderModule {
+  readonly metadata: ProviderMetadata;
+  readonly agentExecution: ProviderAgentExecution;
+  readonly inference: ProviderInference;
+  readonly setupSession: ProviderSetupSession;
+  createConfigurer(): ProviderConfigurer;
+}
+
+export interface ProviderRuntimeDeps {
+  readonly processRunner: ProcessRunner;
+}
+
+export interface ProviderAgentExecution {
+  run(options: AgentExecutionOptions, deps: ProviderRuntimeDeps): Promise<AgentExecutionResult>;
+}
+
+export interface ProviderInference {
+  run(options: InferenceOptions, deps: ProviderRuntimeDeps): Promise<InferenceResult>;
+}
+
+export interface SetupSessionInvocationInput {
+  readonly objective: string;
+  readonly skillBody: string;
+  readonly worktreePath?: string;
+}
+
+export interface SetupOneshotInput {
+  readonly worktreePath: string;
+  readonly prompt: string;
+}
+
+export interface ProviderSetupSession {
+  buildInteractiveArgs(input: SetupSessionInvocationInput): string[];
+  runOneshot(
+    input: SetupOneshotInput,
+    deps: ProviderRuntimeDeps,
+  ): Promise<{
+    readonly exitCode: number;
+    readonly provider: ProviderName;
+    readonly stdout?: string;
+    readonly stderr?: string;
+  }>;
+}
+
+export interface ProviderCommandSupport {
+  install(config: CommandInstallConfig): Promise<void>;
+}
+
+export interface ProviderHealthItem {
+  readonly label: string;
+  readonly ok: boolean;
+  readonly issue?: string;
+}
 
 export interface ProviderConfigurer {
   readonly name: ProviderName;
@@ -17,6 +81,9 @@ export interface ProviderConfigurer {
 
   /** Absolute path to this provider's skills directory */
   readonly skillsDir: string;
+
+  /** Provider-owned native command installation capability. */
+  readonly commands: ProviderCommandSupport;
 
   /** Check if provider CLI is installed */
   isInstalled(): boolean;
@@ -32,6 +99,9 @@ export interface ProviderConfigurer {
 
   /** Check installation status: hooks, agents, skills, commands */
   checkInstallation(config: InstallConfig): Promise<InstallationStatus>;
+
+  /** Provider-specific health checks that are not install-file checks. */
+  checkHealth?(): ProviderHealthItem[];
 
   /** Register MCP server with this provider (e.g., `claude mcp add`, `codex mcp add`) */
   registerMcpServer?(): Promise<Result<void, Error>>;

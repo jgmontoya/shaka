@@ -7,9 +7,10 @@ default:
 
 # ── Dev ───────────────────────────────────────────────────────────────
 
-# Run all checks (typecheck + lint + tests)
+# Run all hard checks, then warning-only architecture tripwires
 check:
     bun run check
+    bun run architecture:check
 
 # Run tests
 test *args:
@@ -22,6 +23,18 @@ typecheck:
 # Run linter
 lint:
     bun run lint
+
+# Run warning-only architecture tripwires
+architecture-check:
+    bun run architecture:check
+
+# Hermetic unit/integration regression lane
+test-hermetic:
+    bun test test/unit test/integration
+
+# Generated provider artifact load/build lane
+test-generated-artifacts:
+    bun test test/integration/providers test/unit/providers/codex/configurer.test.ts test/unit/providers/opencode/configurer.test.ts test/integration/providers/pi/extension-load.test.ts
 
 # Fix lint issues
 lint-fix:

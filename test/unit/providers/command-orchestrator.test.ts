@@ -24,17 +24,19 @@ describe("command-orchestrator", () => {
     fn?: (config: CommandInstallConfig) => Promise<void>,
   ): ProviderConfigurer & { calls: CommandInstallConfig[] } {
     const calls: CommandInstallConfig[] = [];
+    const installCommands = async (config: CommandInstallConfig) => {
+      calls.push(config);
+      if (fn) await fn(config);
+    };
     return {
       name,
       label: name,
       skillsDir: "/tmp/test-skills",
       calls,
+      commands: { install: installCommands },
       isInstalled: () => true,
       install: async () => ({ ok: true as const, value: undefined }),
-      installCommands: async (config: CommandInstallConfig) => {
-        calls.push(config);
-        if (fn) await fn(config);
-      },
+      installCommands,
       uninstall: async () => ({ ok: true as const, value: undefined }),
       checkInstallation: async () => ({
         hooks: { ok: true },

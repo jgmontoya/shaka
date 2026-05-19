@@ -244,8 +244,8 @@ section "Hook auth"
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
   # Claude Code does not forward arbitrary parent-process env vars to command
   # hooks, and it also strips the reserved CLAUDE_CODE_OAUTH_TOKEN name from
-  # settings.env. Pass it under a Shaka-owned name; src/inference.ts maps that
-  # name back to CLAUDE_CODE_OAUTH_TOKEN only for its child `claude -p` call.
+  # settings.env. Pass it under a Shaka-owned name; the Claude provider maps
+  # that name back to CLAUDE_CODE_OAUTH_TOKEN only for its child `claude -p` call.
   TMP_SETTINGS=$(mktemp)
   jq --arg token "$CLAUDE_CODE_OAUTH_TOKEN" \
     '.env = ((.env // {}) + {SHAKA_CLAUDE_CODE_OAUTH_TOKEN: $token})' \

@@ -3,9 +3,7 @@
  * Checks system health, installation status, and config-vs-reality alignment.
  */
 
-import { statSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import {
@@ -15,7 +13,6 @@ import {
   resolveShakaHome,
 } from "../domain/config";
 import { loadManifest } from "../domain/skills-manifest";
-import { checkPiCredentials } from "../providers/pi/credentials";
 import { getAllProviders } from "../providers/registry";
 import type { InstallationStatus, ProviderConfigurer, ProviderName } from "../providers/types";
 import { measureContext } from "./context-measurement";
@@ -50,60 +47,46 @@ export function logProviderStatus(
   console.log(`    Enabled:       ${enabled ? "✓ yes" : "– no"}`);
 
   if (cliInstalled && enabled) {
-    console.log(`    Hooks:         ${formatStatus(status.hooks.ok, status.hooks.issue)}`);
-    console.log(`    Agents:        ${formatStatus(status.agents.ok, status.agents.issue)}`);
-    console.log(`    Skills:        ${formatStatus(status.skills.ok, status.skills.issue)}`);
-    console.log(
-      `    Installed:     ${formatStatus(status.installedSkills.ok, status.installedSkills.issue)}`,
-    );
-    console.log(`    Commands:      ${formatStatus(status.commands.ok, status.commands.issue)}`);
-
-    if (!isFullyInstalled(status)) {
-      hasIssues = true;
-    }
+    hasIssues = logInstallationStatus(status);
+    hasIssues = logProviderHealth(provider) || hasIssues;
   } else if (cliInstalled && !enabled) {
-    console.log("    Hooks:         – skipped (not enabled)");
-    console.log("    Agents:        – skipped (not enabled)");
-    console.log("    Skills:        – skipped (not enabled)");
-    console.log("    Installed:     – skipped (not enabled)");
-    console.log("    Commands:      – skipped (not enabled)");
-  }
-
-  // Pi-specific: surface a credential warning when the CLI is installed but
-  // headless dispatch would silently fail (Exp 43). Missing credentials mark
-  // the run as having issues so doctor exits non-zero — headless workflows
-  // (autoresearch, agent steps) would otherwise fail silently mid-run.
-  // Gated on `enabled` so a user who explicitly disabled Pi doesn't get
-  // unrelated env-state complaints.
-  if (provider.name === "pi" && cliInstalled && enabled) {
-    const creds = checkPiCredentials({
-      env: {
-        ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
-        ANTHROPIC_OAUTH_TOKEN: process.env.ANTHROPIC_OAUTH_TOKEN,
-      },
-      hasAuthFile: piAuthFileExists(),
-    });
-    if (!creds.ok) {
-      console.log(`    Credentials:   ${formatStatus(false, creds.issue)}`);
-      // Match the per-provider verdict: a Credentials ✗ line shouldn't be
-      // followed by a ✓ All systems operational summary at the bottom.
-      hasIssues = true;
-    }
+    logSkippedInstallationStatus();
   }
   return hasIssues;
 }
 
-function piAuthFileExists(): boolean {
-  const piHome = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-  // statSync.isFile() — explicitly rejects directories, which Docker
-  // bind-mounts create at the host path when the file is missing.
-  // `Bun.file().size > 0` returned a non-zero block size for directories
-  // (upstream Bun behavior) and silently suppressed the credential warning.
+function logInstallationStatus(status: InstallationStatus): boolean {
+  console.log(`    Hooks:         ${formatStatus(status.hooks.ok, status.hooks.issue)}`);
+  console.log(`    Agents:        ${formatStatus(status.agents.ok, status.agents.issue)}`);
+  console.log(`    Skills:        ${formatStatus(status.skills.ok, status.skills.issue)}`);
+  console.log(
+    `    Installed:     ${formatStatus(status.installedSkills.ok, status.installedSkills.issue)}`,
+  );
+  console.log(`    Commands:      ${formatStatus(status.commands.ok, status.commands.issue)}`);
+  return !isFullyInstalled(status);
+}
+
+function logSkippedInstallationStatus(): void {
+  console.log("    Hooks:         – skipped (not enabled)");
+  console.log("    Agents:        – skipped (not enabled)");
+  console.log("    Skills:        – skipped (not enabled)");
+  console.log("    Installed:     – skipped (not enabled)");
+  console.log("    Commands:      – skipped (not enabled)");
+}
+
+function logProviderHealth(provider: ProviderConfigurer): boolean {
+  let hasIssues = false;
   try {
-    return statSync(join(piHome, "auth.json")).isFile();
-  } catch {
-    return false;
+    for (const item of provider.checkHealth?.() ?? []) {
+      console.log(`    ${`${item.label}:`.padEnd(15)} ${formatStatus(item.ok, item.issue)}`);
+      hasIssues = hasIssues || !item.ok;
+    }
+  } catch (error) {
+    const issue = error instanceof Error ? error.message : String(error);
+    console.log(`    Health:        ${formatStatus(false, issue)}`);
+    hasIssues = true;
   }
+  return hasIssues;
 }
 
 /** Check if all installation components are ok. */
