@@ -6,22 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-05-25
+
 ### Added
 
-- **Pi as a fourth provider** — `shaka init --pi` brings [Pi](https://pi.dev) (`@earendil-works/pi-coding-agent`) into the same first-class slot as Claude Code, opencode, and Codex.
-  - Detection, install, `runAgentStep`, `callPiCLI`, session-end memory, autoresearch, and `shaka doctor` all recognise Pi.
-  - Pi sees Shaka as a generated extension at `~/.pi/agent/extensions/shaka.ts` plus `shaka-`-prefixed skills, agents, and prompt templates; Shaka does not edit user-owned Pi resources or mutate settings.
-  - The extension short-circuits on `SHAKA_PI_SUBAGENT=true` as the primary recursion guard.
-  - Inference uses Pi's full isolation set (`--no-extensions --no-tools --no-session --no-skills --no-prompt-templates --no-context-files --offline`) and replaces Pi's default system prompt.
-  - `runPi` and `callPiCLI` pin `--provider anthropic --model anthropic/<id>` and scan stdout for Pi's exit-0 provider-error responses so 4xx failures surface as runner failures.
-  - Install runs a smoke-load gate and removes the extension if Pi reports `Failed to load extension`; `shaka doctor` warns when neither `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, nor `~/.pi/agent/auth.json` is reachable.
-  - The plan was pressure-tested through the validate-plan skill and grounded with ten empirical experiments (`experiments/{42..51}-pi-*`); every behaviour decision in `pi.md` cites the verifying experiment.
-- **Native tool bridges for Pi and opencode** — `inference` and `memory-search` are now first-class custom tools the model can call mid-session in every provider, not just Claude Code and Codex via MCP.
-  - `shaka tool <name>` reads JSON args on stdin and prints the tool result on stdout.
-  - The generated Pi extension calls tools via `pi.registerTool()`; the generated opencode plugin exposes them via the plugin's `tool` field.
-  - Tool definitions stay in one place (`defaults/system/tools/`) regardless of provider.
-  - Exp 52 caught Pi's required `{ content: [{ type, text }] }` tool-result shape; Exp 53 caught opencode's required `z.ZodRawShape` args shape.
-  - Both generated artifacts honor `SHAKA_BIN` so Shaka-spawned subprocesses can pin the bridge to a specific binary.
+- **Pi provider support** - `shaka init --pi` sets up Shaka for [Pi](https://pi.dev) alongside Claude Code, opencode, and Codex.
+  - Pi gets Shaka hooks, skills, agents, session memory, autoresearch, native tools, and `shaka doctor` support.
+  - `shaka doctor` checks Pi credentials through `ANTHROPIC_API_KEY`, `ANTHROPIC_OAUTH_TOKEN`, or `~/.pi/agent/auth.json`.
+- **Native tools for every provider** - `inference` and `memory-search` are now available to Pi and opencode as native tools, so all supported providers can call the same Shaka tools during a session.
+
+### Changed
+
+- **Uninstall now detaches by default** - `shaka uninstall` removes provider hooks, generated plugins/extensions/wrappers, command artifacts, and framework links while preserving `config.json`, `user/`, `customizations/`, `memory/`, installed skills, and skill metadata. `--delete-data` remains the explicit data-wipe path.
+  - `shaka uninstall --claude`, `--opencode`, `--codex`, and `--pi` remove only the named provider integration and leave the rest of the Shaka install untouched.
+  - The uninstall prompt now lists `config.json` with the user-owned data that Shaka keeps by default.
+- **Provider selection is more flexible** - `shaka init` supports `--pi`, `--all`, and comma-separated choices in the interactive provider prompt.
+- **Doctor reports command setup drift** - `shaka doctor` now reports missing or stale command files and tells users to run `shaka reload`.
+
+### Fixed
+
+- **Codex generated-agent cleanup preserves user files** - stale Shaka-generated Codex agent TOMLs are removed during reload/uninstall without touching handwritten TOML files.
 
 ## [0.11.0] — 2026-04-28
 
@@ -415,7 +419,8 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
-[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/jgmontoya/shaka/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jgmontoya/shaka/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jgmontoya/shaka/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/jgmontoya/shaka/compare/v0.9.0...v0.10.0
