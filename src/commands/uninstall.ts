@@ -1,8 +1,8 @@
 /**
  * CLI handler for `shaka uninstall` command.
  *
- * Removes Shaka hooks from providers and cleans up the shaka home directory.
- * Prompts before deleting user-owned data (user/, customizations/, memory/).
+ * Removes Shaka hooks from providers and cleans up framework-owned files.
+ * Prompts before deleting user-owned data (config.json, user/, customizations/, memory/).
  */
 
 import { createInterface } from "node:readline";
@@ -31,8 +31,9 @@ async function promptDeleteUserData(
   if (options.deleteData) return true;
   if (options.keepData) return false;
 
-  console.log("Shaka will remove hooks and framework files.");
+  console.log("Shaka will remove provider hooks and framework links.");
   console.log("Your personal data lives in:");
+  console.log(`  ${shakaHome}/config.json`);
   console.log(`  ${shakaHome}/user/`);
   console.log(`  ${shakaHome}/customizations/`);
   console.log(`  ${shakaHome}/memory/\n`);
@@ -111,13 +112,13 @@ function logResult(
 
 export function createUninstallCommand(): Command {
   return new Command("uninstall")
-    .description("Remove Shaka hooks and configuration")
+    .description("Remove Shaka provider hooks and framework links")
     .option("--claude", "Uninstall only the Claude Code integration")
     .option("--opencode", "Uninstall only the opencode integration")
     .option("--codex", "Uninstall only the Codex integration")
     .option("--pi", "Uninstall only the Pi integration")
-    .option("--keep-data", "Skip prompt and keep user/, customizations/, memory/")
-    .option("--delete-data", "Skip prompt and delete user/, customizations/, memory/")
+    .option("--keep-data", "Skip prompt and keep config.json, user/, customizations/, memory/")
+    .option("--delete-data", "Skip prompt and delete config.json, user/, customizations/, memory/")
     .action(async (options) => {
       const shakaHome = resolveShakaHome({
         SHAKA_HOME: process.env.SHAKA_HOME,

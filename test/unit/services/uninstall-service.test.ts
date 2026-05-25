@@ -129,7 +129,7 @@ describe("UninstallService", () => {
   });
 
   describe("removeFrameworkFiles", () => {
-    test("removes config.json", async () => {
+    test("preserves config.json", async () => {
       await setupInitializedHome();
       const service = createService();
 
@@ -138,10 +138,10 @@ describe("UninstallService", () => {
 
       const removed = await service.removeFrameworkFiles();
 
-      expect(removed).toContain(join(testHome, "config.json"));
+      expect(removed).not.toContain(join(testHome, "config.json"));
 
-      // Verify file is gone
-      expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(false);
+      // Verify user config survives framework cleanup.
+      expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
     });
 
     test("removes commands-manifest.json", async () => {
@@ -170,7 +170,7 @@ describe("UninstallService", () => {
   });
 
   describe("removeUserData", () => {
-    test("removes user/, customizations/, memory/", async () => {
+    test("removes config.json, user/, customizations/, memory/", async () => {
       await setupInitializedHome();
       // Add some user content
       await writeFile(join(testHome, "user", "user.md"), "custom content");
@@ -181,6 +181,7 @@ describe("UninstallService", () => {
       expect(removed).toContain(join(testHome, "user"));
       expect(removed).toContain(join(testHome, "customizations"));
       expect(removed).toContain(join(testHome, "memory"));
+      expect(removed).toContain(join(testHome, "config.json"));
     });
 
     test("handles missing directories gracefully", async () => {
@@ -215,7 +216,7 @@ describe("UninstallService", () => {
   });
 
   describe("uninstall", () => {
-    test("removes framework files but keeps user data by default", async () => {
+    test("removes framework files but keeps user data and config by default", async () => {
       await setupInitializedHome();
       const service = createService();
 
@@ -225,12 +226,84 @@ describe("UninstallService", () => {
       if (result.ok) {
         // Framework items removed
         expect(result.value.removed).toContain(join(testHome, "system"));
-        expect(result.value.removed).toContain(join(testHome, "config.json"));
+        expect(result.value.removed).not.toContain(join(testHome, "config.json"));
 
         // User dirs still exist
         const userStats = await lstat(join(testHome, "user"));
         expect(userStats.isDirectory()).toBe(true);
+        expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
       }
+    });
+
+    test("keeps custom data and installed skills across uninstall then re-init", async () => {
+      await setupInitializedHome();
+
+      await Bun.write(join(testHome, "user", "user.md"), "# Customized user context");
+      await mkdir(join(testHome, "customizations", "hooks"), { recursive: true });
+      await Bun.write(
+        join(testHome, "customizations", "hooks", "session-start.ts"),
+        "export default async function customHook() {}",
+      );
+      await mkdir(join(testHome, "customizations", "skills", "personal"), { recursive: true });
+      await Bun.write(
+        join(testHome, "customizations", "skills", "personal", "SKILL.md"),
+        "# Personal skill override",
+      );
+      await mkdir(join(testHome, "skills", "third-party"), { recursive: true });
+      await Bun.write(join(testHome, "skills", "third-party", "SKILL.md"), "# Third-party skill");
+      await Bun.write(
+        join(testHome, "skills.json"),
+        JSON.stringify({ skills: [{ name: "third-party", source: "local" }] }),
+      );
+      await mkdir(join(testHome, "memory", "rollups", "project-a"), { recursive: true });
+      await mkdir(join(testHome, "memory", "sessions"), { recursive: true });
+      await mkdir(join(testHome, "memory", "knowledge", "project-a"), { recursive: true });
+      await Bun.write(join(testHome, "memory", "learnings.md"), "- durable learning");
+      await Bun.write(join(testHome, "memory", "rollups", "project-a", "daily.md"), "# Rollup");
+      await Bun.write(join(testHome, "memory", "sessions", "session.md"), "# Session summary");
+      await Bun.write(join(testHome, "memory", "knowledge", "project-a", "index.md"), "# Knowledge");
+
+      const service = createService();
+      const uninstallResult = await service.uninstall({ deleteUserData: false });
+
+      expect(uninstallResult.ok).toBe(true);
+      if (!uninstallResult.ok) throw uninstallResult.error;
+      expect(uninstallResult.value.removed).toContain(join(testHome, "system"));
+      expect(uninstallResult.value.removed).not.toContain(join(testHome, "config.json"));
+      expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
+
+      const reinstallResult = await setupInitializedHome();
+
+      expect(reinstallResult.files).not.toContain(join(testHome, "user", "user.md"));
+      expect(await Bun.file(join(testHome, "user", "user.md")).text()).toBe(
+        "# Customized user context",
+      );
+      expect(
+        await Bun.file(join(testHome, "customizations", "hooks", "session-start.ts")).text(),
+      ).toBe("export default async function customHook() {}");
+      expect(
+        await Bun.file(join(testHome, "customizations", "skills", "personal", "SKILL.md")).text(),
+      ).toBe("# Personal skill override");
+      expect(await Bun.file(join(testHome, "skills", "third-party", "SKILL.md")).text()).toBe(
+        "# Third-party skill",
+      );
+      expect(await Bun.file(join(testHome, "skills.json")).json()).toEqual({
+        skills: [{ name: "third-party", source: "local" }],
+      });
+      expect(await Bun.file(join(testHome, "memory", "learnings.md")).text()).toBe(
+        "- durable learning",
+      );
+      expect(await Bun.file(join(testHome, "memory", "rollups", "project-a", "daily.md")).text())
+        .toBe("# Rollup");
+      expect(await Bun.file(join(testHome, "memory", "sessions", "session.md")).text()).toBe(
+        "# Session summary",
+      );
+      expect(
+        await Bun.file(join(testHome, "memory", "knowledge", "project-a", "index.md")).text(),
+      ).toBe("# Knowledge");
+      const systemStats = await lstat(join(testHome, "system"));
+      expect(systemStats.isSymbolicLink()).toBe(true);
+      expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
     });
 
     test("removes everything when deleteUserData is true", async () => {
@@ -244,6 +317,7 @@ describe("UninstallService", () => {
         expect(result.value.removed).toContain(join(testHome, "user"));
         expect(result.value.removed).toContain(join(testHome, "customizations"));
         expect(result.value.removed).toContain(join(testHome, "memory"));
+        expect(result.value.removed).toContain(join(testHome, "config.json"));
 
         // shakaHome itself should be removed (now empty)
         expect(result.value.removed).toContain(testHome);
@@ -336,8 +410,9 @@ describe("UninstallService", () => {
       expect(result.ok).toBe(true);
       if (result.ok) {
         // Framework files were removed → full-teardown path ran.
-        expect(result.value.removed).toContain(join(testHome, "config.json"));
         expect(result.value.removed).toContain(join(testHome, "system"));
+        expect(result.value.removed).not.toContain(join(testHome, "config.json"));
+        expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
       }
     });
 
@@ -435,9 +510,8 @@ describe("UninstallService", () => {
         expect(result.value.providers.claude.uninstalled).toBe(false);
         expect(result.value.providers.opencode.uninstalled).toBe(true);
         expect(result.value.errors.join("\n")).toContain("claude uninstall exploded");
-        expect(result.value.removed).toContain(join(testHome, "config.json"));
         expect(result.value.removed).toContain(join(testHome, "system"));
-        expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(false);
+        expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
         expect(uninstalled).toEqual(["opencode"]);
       }
     });
@@ -473,7 +547,8 @@ describe("UninstallService", () => {
         expect(result.value.providers.claude.uninstalled).toBe(false);
         expect(result.value.providers.opencode.uninstalled).toBe(true);
         expect(result.value.errors.join("\n")).toContain("mcp remove failed");
-        expect(result.value.removed).toContain(join(testHome, "config.json"));
+        expect(result.value.removed).not.toContain(join(testHome, "config.json"));
+        expect(await Bun.file(join(testHome, "config.json")).exists()).toBe(true);
         expect(uninstalled).toEqual(["claude", "opencode"]);
       }
     });

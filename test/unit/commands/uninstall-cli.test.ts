@@ -40,6 +40,14 @@ afterEach(async () => {
 });
 
 describe("shaka uninstall — CLI flag contract", () => {
+  test("unscoped uninstall prompt treats config.json as personal data", () => {
+    const result = runShaka(["uninstall"], "\n");
+    expect(result.status).toBe(0);
+    const output = result.stdout + result.stderr;
+    expect(output).toContain(`${TEST_HOME}/config.json`);
+    expect(output).toContain(`Your data is still at ${TEST_HOME}/`);
+  });
+
   test("scoped uninstall does not print the global 'Shaka uninstalled' success or rm -rf hint", async () => {
     // After `shaka uninstall --pi`, only Pi's integration was removed —
     // Shaka itself is intact. Printing "✅ Shaka uninstalled." plus a hint

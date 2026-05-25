@@ -310,12 +310,12 @@ else
   pass "system/ symlink removed"
 fi
 
-# config.json removed
+# config.json preserved
 if [ -f "$SHAKA_HOME/config.json" ]; then
-  fail "config.json still exists after uninstall"
-  exit 1
+  pass "config.json preserved"
 else
-  pass "config.json removed"
+  fail "config.json was deleted"
+  exit 1
 fi
 
 # User data preserved (--keep-data)

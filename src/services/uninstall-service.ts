@@ -4,8 +4,8 @@
  * Reverses what `shaka init` does:
  * - Removes provider hooks (Claude settings.json entries, opencode plugin)
  * - Removes system/ symlink
- * - Removes config.json
- * - Optionally removes user-owned directories (user/, customizations/, memory/)
+ * - Removes framework runtime files
+ * - Optionally removes user-owned data (config.json, user/, customizations/, memory/)
  */
 
 import { lstat, readdir, rm } from "node:fs/promises";
@@ -25,7 +25,7 @@ export interface UninstallServiceConfig {
 }
 
 export interface UninstallOptions {
-  /** Delete user-owned directories (user/, customizations/, memory/) */
+  /** Delete user-owned data (config.json, user/, customizations/, memory/) */
   deleteUserData: boolean;
   /**
    * Scope the uninstall to a subset of providers. When omitted, runs the
@@ -108,14 +108,11 @@ export class UninstallService {
   }
 
   /**
-   * Remove framework-owned files (config.json).
+   * Remove framework-owned files.
    */
   async removeFrameworkFiles(): Promise<string[]> {
     const removed: string[] = [];
-    const files = [
-      join(this.shakaHome, "config.json"),
-      join(this.shakaHome, "commands-manifest.json"),
-    ];
+    const files = [join(this.shakaHome, "commands-manifest.json")];
 
     for (const filePath of files) {
       try {
@@ -146,7 +143,7 @@ export class UninstallService {
   }
 
   /**
-   * Remove user-owned directories (user/, customizations/, memory/).
+   * Remove user-owned data (config.json, user/, customizations/, memory/).
    */
   async removeUserData(): Promise<string[]> {
     const removed: string[] = [];
@@ -163,6 +160,16 @@ export class UninstallService {
       } catch {
         // Doesn't exist — skip
       }
+    }
+
+    const configPath = join(this.shakaHome, "config.json");
+    try {
+      if (await Bun.file(configPath).exists()) {
+        await rm(configPath);
+        removed.push(configPath);
+      }
+    } catch {
+      // Best-effort — continue on failure
     }
 
     return removed;
@@ -205,8 +212,8 @@ export class UninstallService {
 
   /**
    * Per-provider scope: remove just the named providers' artifacts.
-   * Framework files (`system/`, `config.json`, `node_modules`) and user
-   * data belong to the install as a whole, so they're untouched here.
+   * Framework files (`system/`, `node_modules`) and user data belong to the
+   * install as a whole, so they're untouched here.
    */
   private async uninstallScoped(
     scopedOnly: readonly ProviderName[],
