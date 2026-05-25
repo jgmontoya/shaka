@@ -107,13 +107,14 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 
 ### Key Principle: Separation of Concerns
 
-| Directory         | Purpose                          | Owner | Upgrades          | Backup |
-| ----------------- | -------------------------------- | ----- | ----------------- | ------ |
-| `user/`           | Who you are (you write it)       | You   | Never touched     | Yes    |
-| `memory/`         | What Shaka learns (Shaka writes) | Shaka | Never touched     | Yes    |
-| `customizations/` | Your overrides for system/       | You   | Never touched     | Yes    |
-| `skills/`         | Installed third-party skills     | You   | Never touched     | Yes    |
-| `system/`         | Framework defaults (symlink)     | Shaka | Replaced entirely | No     |
+| Directory         | Purpose                           | Owner | Upgrades          | Backup |
+| ----------------- | --------------------------------- | ----- | ----------------- | ------ |
+| `user/`           | Who you are (you write it)        | You   | Never touched     | Yes    |
+| `memory/`         | What Shaka learns (Shaka writes)  | Shaka | Never touched     | Yes    |
+| `customizations/` | Your overrides for system/        | You   | Never touched     | Yes    |
+| `skills/`         | Installed third-party skills      | You   | Never touched     | Yes    |
+| `config.json`     | Shaka settings and provider prefs | You   | Never overwritten | Yes    |
+| `system/`         | Framework defaults (symlink)      | Shaka | Replaced entirely | No     |
 
 When Shaka upgrades, `system/` is re-symlinked to the new version. Everything else is preserved.
 
@@ -143,7 +144,7 @@ shaka init --codex            # Set up for Codex only
 shaka init --pi               # Set up for Pi only
 shaka init --all              # Set up for all detected providers
 shaka update                  # Upgrade to latest release (tag-based)
-shaka uninstall               # Remove hooks and config
+shaka uninstall               # Remove hooks and framework links; keep user data
 shaka reload-hooks            # Re-discover hooks and regenerate provider configs
 shaka doctor                  # Check installation health
 shaka mcp serve               # Start MCP server (for Claude Code tool integration)
