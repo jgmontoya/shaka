@@ -1,6 +1,19 @@
 # Shaka
 
-A personal AI assistant framework. Provider-agnostic. Clear architecture. Your data stays yours.
+Shaka is a local, provider-agnostic framework for shaping how AI coding assistants work. It adds shared context, reusable skills and commands, workflow automation, memory search, MCP tools, and safety hooks around assistants such as Claude Code, Codex, opencode, and Pi. The goal is to give the assistants you already use the same instructions, tool definitions, memories, and guardrails.
+
+It is built for developers who use AI assistants on real projects and want those assistants to remember preferences, follow repeatable workflows, reuse project-specific guidance, and avoid unsafe commands. Without a layer like Shaka, each provider tends to have its own config, history, commands, and safety model; switching tools means losing context or rebuilding the same conventions.
+
+AI-assisted development depends on more than the model. The surrounding runtime decides what context gets injected, which tool code the assistant can call, how commands are validated, and how past work is found again. Shaka keeps those pieces local, inspectable, and owned by you.
+
+Shaka is organized around a few concrete pieces:
+
+- **MCP tools** expose Shaka tools, including inference and memory search, to providers that speak MCP.
+- **Hooks** run on session and tool events, loading context at session start, writing memory at session end, and validating tool use before execution.
+- **Skills** are markdown-based playbooks for recurring tasks, domains, and operating styles.
+- **Workflows** chain commands, prompts, and shell steps into repeatable multi-step processes.
+- **Memory search** queries stored session summaries, active learnings, and archived learnings so future sessions can recover useful context without rereading every transcript.
+- **Command security validation** checks matched bash commands and file paths against safety patterns before execution.
 
 ## Getting Started
 
@@ -16,11 +29,29 @@ shaka init
 
 **Prerequisites:** [Bun](https://bun.sh) (make sure it's [on your `PATH`](https://bun.com/docs/installation#add-bun-to-your-path)) and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai), [Codex](https://github.com/openai/codex), or [Pi](https://pi.dev).
 
+After installation, the quickest inspection commands are:
+
+```bash
+shaka doctor                  # Check installation health
+shaka commands list           # See available commands
+shaka skill list              # See system and installed skills
+shaka memory search "query"   # Search summaries and learnings
+shaka mcp serve               # Start the MCP server for supported providers
+```
+
+For source development, run:
+
+```bash
+bun install
+just check
+bun run src/index.ts --help
+```
+
 ## What Happens
 
-Shaka doesn't replace your AI coding assistant — it enhances it. Once installed, it works invisibly through hooks:
+After `shaka init`, Shaka works through provider hooks:
 
-1. **You start a session** (Claude Code, opencode, Codex, or Pi). The `SessionStart` hook loads your identity, preferences, goals, and reasoning framework into the conversation context. The AI knows who you are and how to think.
+1. **You start a session** (Claude Code, opencode, Codex, or Pi). The `session-start` hook loads the reasoning framework, edited top-level user files, selected learnings, the project knowledge index, rollups, and recent session summaries into the conversation context.
 
 2. **You work normally.** Type prompts, ask questions, write code. Shaka is transparent.
 
@@ -28,7 +59,7 @@ Shaka doesn't replace your AI coding assistant — it enhances it. Once installe
 
 4. **You want to customize.** Copy any file from `system/` to `customizations/` and edit it. Your version takes priority. Upgrades never touch your files.
 
-That's it. No new UI to learn, no new commands to memorize. Shaka makes your existing tools smarter.
+That's it. There is no separate chat UI to learn; the day-to-day surface stays inside your existing assistant.
 
 ## Philosophy
 
@@ -66,8 +97,8 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 │   └── <your-folders>/       # Subdirectories are NOT auto-loaded
 │       └── ...
 │
-├── memory/                   # What Shaka LEARNS about you (dynamic)
-│   └── ...                   # Security logs, patterns (search TBD)
+├── memory/                   # What Shaka learns about you (dynamic)
+│   └── ...                   # Summaries, learnings, rollups, security logs
 │
 ├── customizations/           # Your OVERRIDES for system/
 │   ├── base-reasoning-framework.md  # (example) Your reasoning variant
@@ -83,13 +114,13 @@ For the rationale behind key structural decisions, see [Architecture Decisions](
 │   ├── commands/             # Slash commands (markdown)
 │   ├── workflows/            # Multi-step pipelines (yaml)
 │   ├── skills/               # Reusable playbooks (markdown)
-│   ├── tools/                # Deterministic operations
+│   ├── tools/                # Callable operations exposed to providers
 │   └── agents/               # Specialized personas (markdown)
 │
 └── config.json               # Configuration file
 ```
 
-> **User file loading:** All `.md` files directly under `user/` are automatically injected into the AI's context at session start. **Keep this level lean** — only files that are useful in every session (identity, preferences, goals). For detailed reference material (style guides, API docs, project specifics), create subdirectories. Subdirectory files are **not** auto-loaded — the model can read them on demand when relevant.
+> **User file loading:** Edited `.md` files directly under `user/` are injected into the AI's context at session start; unchanged default templates are skipped. **Keep this level lean** — only files that are useful in every session, such as profile, assistant behavior, missions, goals, active projects, and tech stack. For detailed reference material (style guides, API docs, project specifics), create subdirectories. Subdirectory files are **not** auto-loaded — the model can read them on demand when relevant.
 >
 > **Index pattern:** If you add subdirectories, create a `user/index.md` to help the model discover them. Since it lives at the top level, it gets auto-loaded and acts as a routing guide:
 >
@@ -145,9 +176,9 @@ shaka init --pi               # Set up for Pi only
 shaka init --all              # Set up for all detected providers
 shaka update                  # Upgrade to latest release (tag-based)
 shaka uninstall               # Remove hooks and framework links; keep user data
-shaka reload-hooks            # Re-discover hooks and regenerate provider configs
+shaka reload                  # Re-discover hooks and regenerate provider configs
 shaka doctor                  # Check installation health
-shaka mcp serve               # Start MCP server (for Claude Code tool integration)
+shaka mcp serve               # Start MCP server (for Claude Code/Codex tool integration)
 shaka commands list            # Show all commands and status
 shaka commands new <name>     # Create a new command
 shaka commands disable <name> # Disable a command
@@ -164,6 +195,7 @@ shaka memory stats            # Show learnings count, exposures, and category br
 shaka memory review           # Browse and manage learnings interactively
 shaka memory review --prune   # AI-assisted quality assessment of learnings
 shaka memory consolidate      # Deduplicate, resolve contradictions, and condense related learnings
+shaka memory compile          # Compile session knowledge into topic pages
 ```
 
 ### Init Flow
@@ -174,7 +206,7 @@ shaka memory consolidate      # Deduplicate, resolve contradictions, and condens
 2. Prompts for provider selection (or use `--claude`/`--opencode`/`--codex`/`--pi`/`--all`)
 3. Creates `user/`, `memory/`, `customizations/` directories
 4. Symlinks `system/` to the repo's `defaults/system/`
-5. Copies user file templates (identity.md, preferences.md, etc.)
+5. Copies user file templates (`user.md`, `assistant.md`, `missions.md`, `goals.md`, `projects.md`, `tech-stack.md`)
 6. Registers the `shaka` package globally via `bun link`
 7. Installs hooks for selected providers
 8. Tracks version in `.shaka-version`
@@ -190,7 +222,7 @@ shaka memory consolidate      # Deduplicate, resolve contradictions, and condens
 
 ## Base Reasoning Framework
 
-Shaka uses a structured reasoning framework inspired by [PAI's Algorithm](https://github.com/danielmiessler/TheAlgorithm), loaded at session start. The AI works through 7 phases — OBSERVE, THINK, PLAN, BUILD, EXECUTE, VERIFY, LEARN — and defines testable success criteria (ISC) before acting. This prevents the common failure of solving one problem while creating another.
+Shaka uses a structured reasoning framework inspired by [PAI's Algorithm](https://github.com/danielmiessler/TheAlgorithm), loaded at session start. The default framework asks the AI to work through 7 phases — OBSERVE, THINK, PLAN, BUILD, EXECUTE, VERIFY, LEARN — and define testable success criteria (ISC) before acting.
 
 To customize, copy `system/base-reasoning-framework.md` to `customizations/` and edit. For details, see [Reasoning Framework](docs/reasoning-framework.md).
 
@@ -202,59 +234,60 @@ Shaka uses a **progressive abstraction model** where each layer builds on the pr
 ┌─────────────────────────────────────────────────────────────────────────┐
 │  WORKFLOWS   │ Multi-step pipelines with isolated contexts              │
 │              │ Chains commands, prompts, and scripts                    │
-│              │ e.g., review-and-fix, deploy-pipeline                    │
+│              │ e.g., review-and-fix, plan-feature                       │
 ├──────────────┼──────────────────────────────────────────────────────────┤
 │  SKILLS      │ Domain expertise and context containers                  │
-│              │ Folder with SKILL.md + commands + context                │
-│              │ e.g., code-review/, deployment/                          │
+│              │ Folder with SKILL.md + optional support files            │
+│              │ e.g., tdd/, writing-rules/                                │
 ├──────────────┼──────────────────────────────────────────────────────────┤
-│  COMMANDS    │ Single-purpose prompt + tool invocation                   │
-│              │ Slash-invoked, atomic operations                         │
-│              │ e.g., /commit, /diff, /lint                              │
+│  COMMANDS    │ Single-purpose prompt templates                           │
+│              │ Provider-invoked prompt templates                        │
+│              │ e.g., /code-review                                        │
 ├──────────────┼──────────────────────────────────────────────────────────┤
-│  TOOLS       │ Deterministic TypeScript functions                       │
-│              │ Pure code, no LLM involvement                            │
+│  TOOLS       │ TypeScript operations exposed through MCP/native bridges  │
+│              │ May run local code or bridge to provider CLIs             │
 │              │ e.g., inference.ts                                        │
 └──────────────┴──────────────────────────────────────────────────────────┘
 ```
 
 ### Tools
 
-Deterministic TypeScript functions that execute code, not prompts. Tools do the heavy lifting _before_ the LLM is involved.
+TypeScript modules that expose callable operations to assistants. Some tools are deterministic code; others, such as `inference.ts`, bridge to AI provider CLIs.
 
 Currently, two tools ship with Shaka:
 
 - **`inference.ts`** — Provider-agnostic AI inference (wraps Claude CLI, opencode CLI, Codex CLI, or Pi CLI)
-- **`memory-search.ts`** — Search session summaries by keyword
+- **`memory-search.ts`** — Search session summaries and learnings by keyword
 
 Both tools are surfaced to every supported provider's model: Claude Code and Codex via Shaka's MCP server (`shaka mcp serve`), opencode via the generated plugin's `tool` field, and Pi via `pi.registerTool()` in the generated extension. The generated opencode and Pi bridges shell out to `shaka tool <name>` when those tools run, while MCP providers execute the same tool definitions through the MCP server. Tool definitions live in one place (`defaults/system/tools/`) regardless of which provider the model is running under.
 
-Shaka adopts [opencode's tool format](https://opencode.ai/docs/custom-tools/) for consistency across providers. Tools are TypeScript files using the `tool()` helper:
+Tools are TypeScript files that export a tool definition with `description`, `inputSchema`, and `execute`:
 
 ```typescript
 // Example: ~/.config/shaka/system/tools/my-tool.ts
-import { tool } from "@opencode-ai/plugin";
-
-export default tool({
+export default {
+  name: "my-tool",
   description: "Describe what the tool does",
-  args: {},
-  async execute(args, context) {
-    // Deterministic code — no LLM involvement
+  inputSchema: {
+    type: "object",
+    properties: {},
+  },
+  async execute(args) {
     return "result";
   },
-});
+};
 ```
 
 Tools are exposed to AI providers via:
 
-- **opencode**: Symlinked to `.opencode/tools/` (native)
 - **Claude Code**: Exposed via `shaka mcp serve` (MCP server)
 - **Codex**: Exposed via `shaka mcp serve` (MCP server)
+- **opencode**: Exposed as native tools in the generated Shaka plugin
 - **Pi**: Exposed via `pi.registerTool()` in the generated extension (native)
 
 ### Commands
 
-Atomic, slash-invoked operations. A command does **one thing**: invoke tools, add a prompt, and let the model respond. Markdown with YAML frontmatter.
+Atomic command prompt templates. A command provides metadata and a prompt body, then the provider lets the model respond with its normal tool access. Command files are markdown with YAML frontmatter.
 
 ```markdown
 ---
@@ -278,17 +311,17 @@ $ARGUMENTS
 
 | Field            | Required | Description                                                                |
 | ---------------- | -------- | -------------------------------------------------------------------------- |
-| `description`    | Yes      | Short description shown in the slash menu                                  |
+| `description`    | Yes      | Short description shown in the provider command UI                         |
 | `argument-hint`  | No       | Hint shown after command name (e.g., `[branch\|#pr]`)                      |
 | `subtask`        | No       | Run as background subagent (`true`) or inline (`false`, default)           |
 | `model`          | No       | Override the default model                                                 |
-| `user-invocable` | No       | Show in slash menu (`true`, default) or hide for internal use (`false`)    |
+| `user-invocable` | No       | Show in the provider command UI (`true`, default) or hide for internal use |
 | `cwd`            | No       | Project paths for scoped installation. `["*"]` = global (same as omitting) |
 | `providers`      | No       | Per-provider field overrides (e.g., different `model` for claude/opencode) |
 
-**Body substitutions:** `$ARGUMENTS` (all args), `$1`/`$2`/... (positional), `` !`cmd` `` (shell output).
+**Body substitutions:** Shaka handles `$ARGUMENTS` (all args) and `$1`/`$2`/... (positional). Provider-native shell blocks such as `` !`cmd` `` are preserved when a provider supports them.
 
-Commands are the primary user interface. Type `/code-review` and it runs.
+Commands are the main prompt-template interface. Providers surface them through their native command, skill, or prompt mechanisms.
 
 **Shipped commands:**
 
@@ -326,7 +359,7 @@ steps:
 
 | Type      | Description                                   | Example                         |
 | --------- | --------------------------------------------- | ------------------------------- |
-| `command` | Invoke a slash command (provider resolves it) | `command: /code-review`         |
+| `command` | Invoke a Shaka command through the provider   | `command: /code-review`         |
 | `prompt`  | Inline AI instruction with full tool access   | `prompt: Fix the failing tests` |
 | `run`     | Shell script (no AI, zero tokens)             | `run: bun test`                 |
 
@@ -373,7 +406,7 @@ steps:
 
 References are resolved transitively with cycle detection.
 
-**Git state management:** By default (`state: "git-branch"`), the runner creates a branch, commits after each step that produces changes, and halts on failure — leaving a clean Git timeline. Use `state: "none"` for analysis-only workflows.
+**Git state management:** By default (`state: "git-branch"`), the runner creates a temporary worktree on a branch, commits after each step that produces changes, and halts on failure. Use `state: "none"` for analysis-only workflows.
 
 **Error handling:** Steps fail on non-zero exit by default (fail-fast). Mark a step with `allow-failure: true` to continue regardless — useful for test steps whose output feeds the next AI step.
 
@@ -393,19 +426,23 @@ shaka run my-workflow "input" # Run a custom workflow with input
 
 ### Skills
 
-Domain containers for complex workflows. A skill is a **folder** with a `SKILL.md` and optional supporting files. Skills are markdown-based — they provide context and workflow guidance to the AI, not executable code.
+Domain containers for complex workflows. A skill is a **folder** with a `SKILL.md` and optional supporting files. Skills are markdown-first: they provide context and workflow guidance to the AI, and installed skills are scanned before they are linked into provider directories.
 
 **Shipped skills:**
 
-| Skill            | Purpose                                          |
-| ---------------- | ------------------------------------------------ |
-| tdd              | Test-driven development (default for all builds) |
-| be-creative      | Extended thinking + diverse option generation    |
-| council          | Multi-perspective debate (3-7 agents)            |
-| red-team         | Adversarial validation (32 agents)               |
-| science          | Scientific method workflows                      |
-| first-principles | Deconstruct → Challenge → Reconstruct            |
-| writing-rules    | Anti-slop prose constraints + `shaka scan`       |
+| Skill              | Purpose                                                   |
+| ------------------ | --------------------------------------------------------- |
+| autoresearch       | Hypothesis, benchmark, keep/discard optimization protocol |
+| autoresearch-setup | Benchmark harness setup for `shaka autoresearch start`   |
+| be-creative        | Extended thinking and diverse option generation           |
+| council            | Multi-perspective debate (3-7 agents)                     |
+| experiment         | Reproducible proof-of-concept investigations              |
+| first-principles   | Deconstruct, challenge, and reconstruct reasoning         |
+| red-team           | Adversarial validation (32 agents)                        |
+| science            | Scientific method workflows                               |
+| tdd                | Test-driven development (default for implementation work) |
+| validate-plan      | Multi-pass pressure test before implementation            |
+| writing-rules      | Anti-slop prose constraints plus `shaka scan`             |
 
 Skills are invoked by context ("review this PR") or explicitly ("use the code-review skill").
 
@@ -435,22 +472,29 @@ shaka skill install user/repo --yolo       # Skip security checks and prompt
 
 GitHub repos without a root `SKILL.md` are discovered via fallback paths: marketplace metadata (`.claude-plugin/marketplace.json`), Claude layout (`.claude/skills/<name>/SKILL.md`), and plugin-style `skills/<name>/SKILL.md`.
 
-Installed skills live in `skills/` and are automatically symlinked to provider config directories. A security scan flags any executable files (`.ts`, `.js`, `.sh`, etc.) before installation — skills should be markdown-only.
+Installed skills live in `skills/` and are symlinked to enabled provider skill directories. A security scan flags executable and unknown file types (`.ts`, `.js`, `.sh`, etc.), URLs, HTML comments, and invisible characters before installation.
 
 ### Agents
 
 Specialized personas defined as markdown prompt templates. Each agent has a defined role, tool access restrictions, and behavioral guidelines.
 
-**15 agents ship with Shaka:** Algorithm, Architect, Artist, ClaudeResearcher, CodeReviewer, CodexResearcher, Designer, DevOpsEngineer, Engineer, GeminiResearcher, GrokResearcher, Intern, Pentester, QATester, TechnicalWriter.
+**17 agent definitions ship with Shaka:** Algorithm, Architect, Artist, ClaudeResearcher, CodeReviewer, CodexResearcher, Designer, DevOpsEngineer, Engineer, GeminiResearcher, GrokResearcher, Intern, Pentester, QATester, TechnicalWriter, plus the internal `autoresearch-setup` and `inference` agents used by Shaka itself.
 
 ```markdown
 ---
 name: reviewer
 description: Code review specialist (read-only)
-tools:
-  read: true
-  write: false
-  bash: false
+capability: review
+permissions:
+  allow:
+    - "Read(*)"
+    - "Grep(*)"
+    - "Glob(*)"
+mode: subagent
+permission:
+  read: allow
+  grep: allow
+  glob: allow
 ---
 
 You are a code reviewer. You analyze but never modify code.
@@ -462,40 +506,35 @@ Event-driven automation. TypeScript scripts that run on specific events.
 
 **Shipped hooks:**
 
-| Hook                    | Event            | What it does                                                      |
-| ----------------------- | ---------------- | ----------------------------------------------------------------- |
-| `session-start.ts`      | SessionStart     | Loads reasoning framework, user context, recent session summaries |
-| `session-end.ts`        | SessionEnd       | Parses transcript and generates session summary for memory        |
-| `security-validator.ts` | PreToolUse       | Validates bash commands and file paths against security patterns  |
-| `format-reminder.ts`    | UserPromptSubmit | Reminds the AI to follow the reasoning framework format           |
+| Hook                    | Event           | What it does                                                      |
+| ----------------------- | --------------- | ----------------------------------------------------------------- |
+| `session-start.ts`      | `session.start` | Loads reasoning framework, user context, recent session summaries |
+| `session-end.ts`        | `session.end`   | Parses transcript and generates session summary for memory        |
+| `security-validator.ts` | `tool.before`   | Validates bash commands and file paths against security patterns  |
+| `format-reminder.ts`    | `prompt.submit` | Reminds the AI to follow the reasoning framework format           |
 
 **Supported events:**
 
-| Event              | Trigger                 |
-| ------------------ | ----------------------- |
-| `SessionStart`     | New conversation begins |
-| `SessionEnd`       | Conversation ends       |
-| `PreToolUse`       | Before a tool executes  |
-| `PostToolUse`      | After a tool executes   |
-| `UserPromptSubmit` | User sends a message    |
+| Event           | Trigger                 |
+| --------------- | ----------------------- |
+| `session.start` | New conversation begins |
+| `session.end`   | Conversation ends       |
+| `tool.before`   | Before a tool executes  |
+| `tool.after`    | After a tool executes   |
+| `prompt.submit` | User sends a message    |
 
-**Planned events:**
-
-| Event           | Trigger                | Notes                                   |
-| --------------- | ---------------------- | --------------------------------------- |
-| `Stop`          | Session is terminated  | Graceful shutdown, final logging        |
-| `SubagentStart` | A sub-agent is spawned | Claude Code native; opencode needs shim |
-| `SubagentStop`  | A sub-agent completes  | Claude Code native; opencode needs shim |
+These are Shaka's canonical hook events. Provider adapters map them to native provider events; for example, Codex uses its native `Stop` event internally for `session.end` handling.
 
 ### Memory
 
 Persistent context that survives sessions. The memory system captures what happened in each session so the AI can reference past work.
 
-- **Session summarization** — The `session-end` hook parses transcripts (Claude Code JSONL, opencode JSON, or Codex JSONL) and generates structured summaries using AI inference
-- **Summary storage** — Summaries are stored as markdown in `memory/summaries/` with a JSON index for fast lookup
+- **Session summarization** — The `session-end` hook parses transcripts (Claude Code JSONL, opencode export JSON, Codex JSONL, or Pi JSONL) and generates structured summaries using AI inference
+- **Summary storage** — Summaries are stored as markdown with YAML frontmatter in `memory/sessions/`
 - **Session context** — The `session-start` hook loads recent summaries into context so the AI knows what you worked on recently
 - **Rolling summaries** — Daily, weekly, and monthly rollups compress session history into persistent per-project digests, loaded into context at session start
 - **Search** — `shaka memory search <query>` searches summaries, active learnings, and archived learnings; also available as an MCP tool for in-session search
+- **Knowledge compilation** — `shaka memory compile` extracts reusable project knowledge from session summaries into topic pages and a loadable index
 - **Review** — `shaka memory review` provides an interactive TUI for browsing, filtering, and deleting learnings. `--prune` adds AI-assisted quality scoring to flag low-value entries
 - **Consolidation** — `shaka memory consolidate` runs three passes: deduplication, contradiction resolution, and condensation. Condensation merges related high-exposure learnings into compound entries, freeing context budget. Source entries are archived (searchable, recoverable)
 - **Automatic maintenance** — After each session, the system checks time (24h) and volume (10+ new learnings) gates. When triggered, it runs consolidation, auto-promotes cross-project learnings to global scope, and conditionally prunes lowest-quality entries under budget pressure (capped at 3 per run, with exposure and age safety floors). Configurable via `memory.maintenance.enabled`
@@ -542,21 +581,21 @@ See [docs/autoresearch-walkthrough.md](docs/autoresearch-walkthrough.md) for an 
 
 Shaka integrates with four AI coding assistants:
 
-| Provider    | Tools                                 | Hooks                                                    | Context               |
-| ----------- | ------------------------------------- | -------------------------------------------------------- | --------------------- |
-| Claude Code | MCP server (`shaka mcp serve`)        | Subprocess in `~/.claude/`                               | CLAUDE.md             |
-| opencode    | Native (`.opencode/tools/`)           | In-process plugin                                        | .opencode/            |
-| Codex       | MCP server (`shaka mcp serve`)        | Subprocess in `~/.codex/`                                | AGENTS.md             |
-| Pi          | Native bridge via `pi.registerTool()` | Generated extension at `~/.pi/agent/extensions/shaka.ts` | AGENTS.md / CLAUDE.md |
+| Provider    | Tools                                 | Hooks                                                    | Commands                                  | Skills + Agents                                             |
+| ----------- | ------------------------------------- | -------------------------------------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| Claude Code | MCP server (`shaka mcp serve`)        | Subprocess hooks in `~/.claude/settings.json`           | `~/.claude/skills/<command>/SKILL.md`     | `~/.claude/skills/`, `~/.claude/agents/`                    |
+| opencode    | Native tools in generated plugin      | In-process plugin at `~/.config/opencode/plugins/`      | `~/.config/opencode/commands/`            | `~/.config/opencode/skills/`, `~/.config/opencode/agents/`  |
+| Codex       | MCP server (`shaka mcp serve`)        | Wrapper script via `~/.codex/hooks.json`                | `~/.agents/skills/<command>/SKILL.md`     | `~/.agents/skills/`, `~/.codex/agents/*.toml`               |
+| Pi          | Native bridge via `pi.registerTool()` | Generated extension at `~/.pi/agent/extensions/shaka.ts` | `~/.pi/agent/prompts/`                    | `~/.pi/agent/skills/` with `shaka-` / `shaka-agent-` prefixes |
 
 You write hooks once — provider-specific adapters handle the translation. For details on hook abstraction, event mapping, and tool integration, see [Providers](docs/providers.md).
 
 ## Security
 
-The security validator hook (`security-validator.ts`) runs on every tool use, checking:
+The security validator hook (`security-validator.ts`) runs on matched `tool.before` events, checking:
 
 - **Bash commands** against patterns defined in `system/security/patterns.yaml`
-- **File paths** for read/write operations (blocks access to sensitive directories)
+- **File paths** for matched read/write operations (blocks access to sensitive directories)
 - **Catastrophic operations** are blocked outright (e.g., `rm -rf /`)
 - **Dangerous operations** trigger confirmation prompts
 
@@ -564,12 +603,28 @@ Security events are logged to `memory/security/`.
 
 ```yaml
 # system/security/patterns.yaml
-catastrophic:
-  - pattern: "rm -rf /"
-    description: "Recursive delete from root"
-dangerous:
-  - pattern: "git push --force"
-    description: "Force push (rewrites history)"
+version: "1.0"
+
+bash:
+  blocked:
+    - pattern: "rm -rf /"
+      reason: "Filesystem destruction"
+  confirm:
+    - pattern: "git push --force"
+      reason: "Force push can lose commits"
+  alert:
+    - pattern: "curl.*\\|.*sh"
+      reason: "Piping curl to shell"
+
+paths:
+  zeroAccess:
+    - "~/.ssh/id_*"
+  readOnly:
+    - "/etc/**"
+  confirmWrite:
+    - "**/.env"
+  noDelete:
+    - "**/.git/**"
 ```
 
 **Planned:** Config-driven allow/deny directory lists, per-agent capability grants.
@@ -581,7 +636,6 @@ These are ideas for future development, not yet implemented:
 - **Interactive TUI** — `shaka` as a standalone terminal interface
 - **Session management** — Persistent sessions across CLI invocations (`shaka start`, `shaka resume`, `shaka sessions`)
 - **Workflow early exit** — `until` conditions for loops (stop on no changes, sentinel output, or verification command pass)
-- **Git worktrees** — `shaka run <workflow> --worktree` for isolated execution while you keep working
 - **Feature polyfills** — Subagent events and background subagents for opencode
 
 ## Development
