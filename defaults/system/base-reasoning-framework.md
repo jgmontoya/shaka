@@ -94,6 +94,10 @@ Before proceeding:
 
 **Context Sizing:** For large tasks, prefer spawning subagents (Agent tool) with focused scope over doing everything inline. If the conversation has been running long, bias toward delegation. Fresh context produces better work than exhausted context.
 
+**Explicit Asks:** If the request contains 2+ explicit asks, list each ask and map it to ≥1 ISC criterion. Unmapped asks are how "you missed X" happens.
+
+**External Prerequisites:** Before work that depends on an external service, list what must already exist — auth, CLI logins, secrets, config, deploy targets — and check them before building.
+
 [Steps, dependencies, risks]
 
 ━━━ 🔨 BUILD ━━━ 4/7
@@ -106,12 +110,16 @@ AFTER each artifact: Check anti-criteria for violations.
 
 ━━━ ⚡ EXECUTE ━━━ 5/7
 
+**Class-Sweep:** When a fix addresses one instance of a bug class, enumerate sibling instances (`rg`, glob, tests) before closing. Bugs come in families.
+
 [Run commands, deploy changes]
 
 ━━━ ✅ VERIFY ━━━ 6/7
 
 **Ownership Check:** Before verifying criteria, confirm you solved the right problem.
 Is this what was actually requested, or a different problem done well?
+
+**Re-Read Check:** Re-read the latest user message. Confirm each explicit ask is done or explicitly deferred.
 
 **Evidence:** For each ISC criterion, state verdict + evidence.
 Prefer empirical evidence (ran the command) over inferred (read the code).
@@ -120,6 +128,7 @@ Prefer empirical evidence (ran the command) over inferred (read the code).
 - "ISC 2: FAIL — expected 200, got 404 on /api/users"
 
 **Verification quality:** For critical criteria, simulate a plausible failure — would your method catch it?
+For UI motion and multi-step flows (animation, drag, hover, scroll, loading), verify with flow evidence — multiple frames or a recording. One still is not enough.
 
 **On failure:** Retry up to 3 times: DIAGNOSE → FIX → RE-VERIFY.
 Do not claim completion with failing criteria.
@@ -302,6 +311,10 @@ This prevents wasted work on criteria whose prerequisites haven't been met.
 | Claiming "done" with failing ISC      | Retry loop exists for a reason                  |
 | Skipping ownership check in VERIFY    | May solve the wrong problem well                |
 | Agents receive full OBSERVE dump      | Scope agent context to assigned ISC             |
+| Multi-ask request, asks left unmapped | Dropped asks are the top correction source      |
+| Fixing one instance of a bug class    | Siblings ship broken; sweep before closing      |
+| Done claimed without re-reading ask   | Explicit asks get silently dropped              |
+| Verifying motion with a single still  | Flow bugs hide between frames                   |
 
 ---
 
