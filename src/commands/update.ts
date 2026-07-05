@@ -27,7 +27,7 @@ import { resolveFromModule } from "../platform/paths";
 import { getEnabledProviderNames } from "../providers/registry";
 import { printOpencodeSummarizationHint } from "./hints";
 
-interface UpdateInfo {
+export interface UpdateInfo {
   localVersion: string;
   latestTag: string | null;
   latestVersion: string | null;
@@ -110,6 +110,38 @@ export function buildReinitArgs(config: ShakaConfig | null): string[] | null {
   return ["--defaults", ...providers.map((name) => `--${name}`)];
 }
 
+/**
+ * Render what an update would do, for `--dry-run`. Pure — reads config, never
+ * mutates it, so the preview must not rely on ensureConfigComplete backfill
+ * (buildReinitArgs handles pre-backfill configs).
+ */
+export function buildUpdatePlan(info: UpdateInfo, config: ShakaConfig | null): string {
+  const lines = ["Dry run — no changes made.", ""];
+
+  lines.push(`Would update: v${info.localVersion} → v${info.latestVersion}`);
+  if (info.isMajor) {
+    lines.push("Major version upgrade — a real run asks for confirmation (skip with --force).");
+  }
+  lines.push("", `  1. git merge --ff-only ${info.latestTag}`, "  2. bun install");
+
+  const args = buildReinitArgs(config);
+  if (args) {
+    lines.push(`  3. shaka init ${args.join(" ")}`);
+  } else {
+    lines.push(
+      "  3. ⚠️  No providers enabled in config.json — re-initialization would be refused.",
+      "     Run `shaka init` to select providers, or `shaka doctor --fix` to auto-detect.",
+    );
+  }
+
+  lines.push(
+    "",
+    "system/ is a symlink into the repo, so its content updates with the merge.",
+    "user/, memory/, customizations/, skills/, and config.json are preserved.",
+  );
+  return lines.join("\n");
+}
+
 async function checkoutAndInit(repoRoot: string, tag: string): Promise<boolean> {
   console.log(`Updating to ${tag}...`);
   const mergeResult = await run(["git", "merge", "--ff-only", tag], repoRoot);
@@ -156,6 +188,7 @@ export function createUpdateCommand(): Command {
   return new Command("update")
     .description("Update Shaka to the latest stable release")
     .option("--force", "Skip major version confirmation")
+    .option("--dry-run", "Show what an update would do without changing anything")
     .action(async (options) => {
       const repoRoot = getRepoRoot();
 
@@ -169,6 +202,11 @@ export function createUpdateCommand(): Command {
 
       if (compareSemver(info.localVersion, info.latestVersion) >= 0) {
         console.log(`Already up to date (v${info.localVersion}).`);
+        return;
+      }
+
+      if (options.dryRun) {
+        console.log(buildUpdatePlan(info, await loadConfig()));
         return;
       }
 
