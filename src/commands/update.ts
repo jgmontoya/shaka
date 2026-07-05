@@ -10,7 +10,12 @@
 
 import { createInterface } from "node:readline";
 import { Command } from "commander";
-import { ensureConfigComplete, loadConfig, resolveShakaHome } from "../domain/config";
+import {
+  type ShakaConfig,
+  ensureConfigComplete,
+  loadConfig,
+  resolveShakaHome,
+} from "../domain/config";
 import {
   compareSemver,
   findLatestTag,
@@ -19,6 +24,7 @@ import {
   parseSemver,
 } from "../domain/version";
 import { resolveFromModule } from "../platform/paths";
+import { getEnabledProviderNames } from "../providers/registry";
 import { printOpencodeSummarizationHint } from "./hints";
 
 interface UpdateInfo {
@@ -92,6 +98,18 @@ async function confirmMajorUpgrade(info: UpdateInfo): Promise<boolean> {
   return ok;
 }
 
+/**
+ * Init args replayed after update, derived from the provider registry so a
+ * newly registered provider can never be silently dropped from the replay.
+ * Returns null when no providers are enabled (stale or pre-tracking config).
+ * `--defaults` skips name prompts — names are already in config.json.
+ */
+export function buildReinitArgs(config: ShakaConfig | null): string[] | null {
+  const providers = config ? getEnabledProviderNames(config) : [];
+  if (providers.length === 0) return null;
+  return ["--defaults", ...providers.map((name) => `--${name}`)];
+}
+
 async function checkoutAndInit(repoRoot: string, tag: string): Promise<boolean> {
   console.log(`Updating to ${tag}...`);
   const mergeResult = await run(["git", "merge", "--ff-only", tag], repoRoot);
@@ -117,13 +135,10 @@ async function checkoutAndInit(repoRoot: string, tag: string): Promise<boolean> 
 
   // Read config to determine which providers the user originally selected
   const config = await loadConfig();
-  const args = ["--defaults"]; // Skip name prompts — names are already in config.json
-
-  if (config?.providers.claude.enabled) args.push("--claude");
-  if (config?.providers.opencode.enabled) args.push("--opencode");
+  const args = buildReinitArgs(config);
 
   // No providers enabled — config exists but is stale or from before provider tracking
-  if (!config?.providers.claude.enabled && !config?.providers.opencode.enabled) {
+  if (!args) {
     console.log("⚠️  No providers enabled in config.json.");
     console.log(
       "   Run `shaka init` to select providers, or `shaka doctor --fix` to auto-detect.\n",

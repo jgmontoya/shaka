@@ -3,6 +3,7 @@
  * Central place to get provider modules and configurers.
  */
 
+import type { ShakaConfig } from "../domain/config";
 import type { DetectedProviders } from "../services/provider-detection";
 import { claudeProvider } from "./claude/provider";
 import { codexProvider } from "./codex/provider";
@@ -30,6 +31,11 @@ export function getAllProviders(): ProviderConfigurer[] {
 /** Return all registered provider names without constructing configurers. */
 export function getProviderNames(): ProviderName[] {
   return getProviderModules().map((provider) => provider.metadata.name);
+}
+
+/** Return the registered provider names enabled in config, in priority order. */
+export function getEnabledProviderNames(config: ShakaConfig): ProviderName[] {
+  return getProviderNames().filter((name) => config.providers[name]?.enabled);
 }
 
 export function getProviderModule(name: ProviderName): ProviderModule {

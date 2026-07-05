@@ -16,8 +16,8 @@ import {
   resolveShakaHome,
 } from "../domain/config";
 import { installCommandsForProviders } from "../providers/command-orchestrator";
-import { createProvider } from "../providers/registry";
-import type { ProviderConfigurer, ProviderName } from "../providers/types";
+import { createProvider, getEnabledProviderNames } from "../providers/registry";
+import type { ProviderConfigurer } from "../providers/types";
 
 async function reloadProviders(shakaHome: string): Promise<void> {
   // Backfill missing config fields (e.g., permissions added in v0.4.0)
@@ -29,9 +29,7 @@ async function reloadProviders(shakaHome: string): Promise<void> {
     process.exit(1);
   }
 
-  const providerNames = (Object.keys(config.providers) as ProviderName[]).filter(
-    (name) => config.providers[name as keyof typeof config.providers]?.enabled,
-  );
+  const providerNames = getEnabledProviderNames(config);
 
   if (providerNames.length === 0) {
     console.error("ERROR: No providers enabled in config. Run `shaka init` first.");
