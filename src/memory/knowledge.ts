@@ -119,8 +119,9 @@ function normalizeTag(tag: string): string {
  *
  * 1. Normalize all tags (lowercase, trim, hyphens for spaces)
  * 2. Match against existing topic page slugs
- * 3. Unmatched fragments grouped by shared tags; group name = most common tag
- * 4. Multiple matches → assign to topic with most tag overlap
+ * 3. Multiple matches → the fragment's first matching tag wins
+ *    (topic pages carry no tag sets, so there is no overlap to score)
+ * 4. Unmatched fragments grouped by shared tags; group name = most common tag
  * 5. Fragments with zero tags are skipped
  */
 export function groupFragmentsByTopic(

@@ -232,14 +232,15 @@ A fact.
       expect(searchGroup).toHaveLength(2);
     });
 
-    test("fragment with multiple matching existing topics goes to best match", () => {
-      const fragments = [makeFragment("Auth Scaling", ["auth-system", "scaling", "architecture"])];
-      // Two existing topics match — "auth-system" matches the first tag
-      const existingSlugs = ["auth-system", "architecture"];
+    test("fragment with multiple matching existing topics goes to its first matching tag", () => {
+      // "scaling" is last alphabetically and last in the slug list — only the
+      // fragment's own tag order can select it
+      const fragments = [makeFragment("Auth Scaling", ["scaling", "auth-system", "architecture"])];
+      const existingSlugs = ["architecture", "auth-system", "scaling"];
       const groups = groupFragmentsByTopic(fragments, existingSlugs);
 
-      // Should be assigned to "auth-system" (first match)
-      expect(groups.has("auth-system")).toBe(true);
+      expect(groups.size).toBe(1);
+      expect(groups.get("scaling")).toHaveLength(1);
     });
 
     test("fragments with no tags are skipped", () => {
