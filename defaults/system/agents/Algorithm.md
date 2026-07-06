@@ -20,7 +20,7 @@ permissions:
     - "Grep(*)"
     - "Glob(*)"
     - "WebFetch(domain:*)"
-    - "mcp__*"
+    - "mcp__shaka__*"
     - "TodoWrite(*)"
     - "Task(*)"
     - "Skill(*)"

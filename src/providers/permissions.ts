@@ -33,7 +33,9 @@ export const CLAUDE_PERMISSION_DEFAULTS: Readonly<ClaudePermissions> = {
     "ExitPlanMode",
     "Task",
     "Skill",
-    "mcp__*",
+    // Claude Code rejects bare "mcp__*" in allow rules — an allow pattern
+    // must name the server, with globs only in the tool position.
+    "mcp__shaka__*",
   ],
   deny: [],
   ask: [
@@ -82,14 +84,22 @@ export function hasExistingOpencodePermissions(config: Record<string, unknown>):
 }
 
 /**
+ * Shaka versions up to 0.12.0 shipped this in the allow defaults. Claude Code
+ * skips it as invalid (allow rules must name the MCP server), so merges
+ * remove it from installed settings instead of re-planting it forever.
+ */
+const INVALID_MCP_WILDCARD = "mcp__*";
+
+/**
  * Merge Shaka defaults into existing Claude Code permissions.
- * - allow: union (deduplicated)
+ * - allow: union (deduplicated), dropping the invalid legacy mcp wildcard
  * - ask: union (deduplicated)
  * - deny: preserve existing only (never add, never remove)
  */
 export function mergeClaudePermissions(existing: Partial<ClaudePermissions>): ClaudePermissions {
+  const existingAllow = (existing.allow ?? []).filter((rule) => rule !== INVALID_MCP_WILDCARD);
   return {
-    allow: dedupe([...(existing.allow ?? []), ...CLAUDE_PERMISSION_DEFAULTS.allow]),
+    allow: dedupe([...existingAllow, ...CLAUDE_PERMISSION_DEFAULTS.allow]),
     ask: dedupe([...(existing.ask ?? []), ...CLAUDE_PERMISSION_DEFAULTS.ask]),
     deny: existing.deny ?? [],
   };

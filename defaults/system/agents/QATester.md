@@ -14,7 +14,7 @@ permissions:
     - "Edit(*)"
     - "Glob(*)"
     - "Grep(*)"
-    - "mcp__*"
+    - "mcp__shaka__*"
     - "TodoWrite(*)"
     - "Skill(*)"
 

@@ -20,7 +20,7 @@ permissions:
     - "Glob(*)"
     - "WebFetch(domain:*)"
     - "WebSearch"
-    - "mcp__*"
+    - "mcp__shaka__*"
     - "TodoWrite(*)"
 
 # OpenCode

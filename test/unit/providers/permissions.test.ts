@@ -17,8 +17,12 @@ describe("permissions", () => {
       expect(CLAUDE_PERMISSION_DEFAULTS.allow).toContain("Bash");
     });
 
-    test("includes mcp wildcard in allow list", () => {
-      expect(CLAUDE_PERMISSION_DEFAULTS.allow).toContain("mcp__*");
+    test("allows Shaka's own MCP tools", () => {
+      expect(CLAUDE_PERMISSION_DEFAULTS.allow).toContain("mcp__shaka__*");
+    });
+
+    test("ships no bare mcp wildcard — invalid in Claude allow rules", () => {
+      expect(CLAUDE_PERMISSION_DEFAULTS.allow).not.toContain("mcp__*");
     });
 
     test("has empty deny list", () => {
@@ -94,6 +98,18 @@ describe("permissions", () => {
       expect(result.ask).toContain("Bash(custom-dangerous:*)");
       expect(result.ask).toContain("Bash(rm -rf /)");
       expect(result.ask.filter((x) => x === "Bash(rm -rf /)")).toHaveLength(1);
+    });
+
+    test("removes the previously shipped bare mcp wildcard from existing allow", () => {
+      const existing: ClaudePermissions = {
+        allow: ["mcp__*", "mcp__glitchtip__*"],
+        deny: [],
+        ask: [],
+      };
+      const result = mergeClaudePermissions(existing);
+      expect(result.allow).not.toContain("mcp__*");
+      expect(result.allow).toContain("mcp__glitchtip__*");
+      expect(result.allow).toContain("mcp__shaka__*");
     });
 
     test("preserves existing deny rules", () => {

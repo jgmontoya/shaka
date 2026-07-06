@@ -399,7 +399,7 @@ console.log("custom");
       const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
       expect(settings.permissions).toBeDefined();
       expect(settings.permissions.allow).toContain("Bash");
-      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.allow).toContain("mcp__shaka__*");
       expect(settings.permissions.ask).toContain("Bash(rm -rf /)");
       expect(settings.permissions.deny).toEqual([]);
     });
@@ -426,7 +426,7 @@ console.log("custom");
       expect(settings.permissions.ask).toContain("Bash(custom:*)");
       // Defaults merged in
       expect(settings.permissions.allow).toContain("Bash");
-      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.allow).toContain("mcp__shaka__*");
       expect(settings.permissions.ask).toContain("Bash(rm -rf /)");
     });
 
@@ -446,7 +446,7 @@ console.log("custom");
       await configurer.install({ shakaHome: testShakaHome, permissionMode: "apply" });
 
       const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
-      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.allow).toContain("mcp__shaka__*");
       expect(settings.permissions.deny).toEqual([]);
     });
 
@@ -491,7 +491,7 @@ console.log("custom");
       const settings = await Bun.file(`${testClaudeHome}/settings.json`).json();
       // Merging twice produces the same result
       expect(settings.permissions.allow).toContain("Bash");
-      expect(settings.permissions.allow).toContain("mcp__*");
+      expect(settings.permissions.allow).toContain("mcp__shaka__*");
       // No duplicates
       const bashCount = settings.permissions.allow.filter((p: string) => p === "Bash").length;
       expect(bashCount).toBe(1);

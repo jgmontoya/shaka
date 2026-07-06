@@ -113,11 +113,19 @@ else
   exit 1
 fi
 
-if jq -e '.permissions.allow | index("mcp__*")' "$SETTINGS" >/dev/null 2>&1; then
-  pass "mcp__* wildcard in allow list"
+if jq -e '.permissions.allow | index("mcp__shaka__*")' "$SETTINGS" >/dev/null 2>&1; then
+  pass "mcp__shaka__* in allow list"
 else
-  fail "mcp__* not in allow list"
+  fail "mcp__shaka__* not in allow list"
   exit 1
+fi
+
+# Bare "mcp__*" is invalid in Claude allow rules; install must never plant it.
+if jq -e '.permissions.allow | index("mcp__*")' "$SETTINGS" >/dev/null 2>&1; then
+  fail "invalid bare mcp__* present in allow list"
+  exit 1
+else
+  pass "no bare mcp__* in allow list"
 fi
 
 if jq -e '.permissions.ask | length > 0' "$SETTINGS" >/dev/null 2>&1; then
