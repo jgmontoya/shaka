@@ -41,11 +41,13 @@ async function reloadProviders(shakaHome: string): Promise<void> {
   const permissionMode = isPermissionsManaged(config) ? undefined : "skip";
 
   const installedProviders: ProviderConfigurer[] = [];
+  const failedProviders: string[] = [];
   for (const providerName of providerNames) {
     const provider = createProvider(providerName);
     const result = await provider.install({ shakaHome, permissionMode });
     if (!result.ok) {
       console.error(`  ✗ Failed to reload ${provider.label}: ${result.error.message}`);
+      failedProviders.push(providerName);
     } else {
       console.log(`  ✓ Reloaded ${provider.label} configuration`);
       installedProviders.push(provider);
@@ -54,6 +56,14 @@ async function reloadProviders(shakaHome: string): Promise<void> {
 
   if (installedProviders.length > 0) {
     await installCommandsForProviders(shakaHome, installedProviders);
+  }
+
+  // Fail loudly on partial reloads — a half-wired provider is worse than an
+  // aborted run that says exactly what to fix.
+  if (failedProviders.length > 0) {
+    console.error(`\n❌ Reload incomplete — failed for: ${failedProviders.join(", ")}.`);
+    console.error("   Fix the error above, then re-run `shaka reload`.");
+    process.exit(1);
   }
 
   console.log("\nDone. Restart your provider session to pick up changes.");

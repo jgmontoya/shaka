@@ -50,63 +50,73 @@ interface ParsedHook {
  *
  * TRIGGER: Which events to listen for (e.g., ["tool.before"])
  * MATCHER: For tool events, which tools to filter (e.g., ["Bash", "Edit", "Write", "Read"])
+ *
+ * A file without a TRIGGER export is not a hook and yields no events.
+ * A file that fails to import throws — swallowing that error once let an
+ * install wire zero hooks across every provider and report success.
  */
 export async function parseHookTrigger(filePath: string): Promise<ParsedHook> {
+  // Add cache-busting to ensure fresh import (important for tests and hot-reload)
+  // Use file:// URL so import() works on Windows (bare paths like C:\... fail)
+  const fileUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
+
+  let module: Record<string, unknown>;
   try {
-    // Add cache-busting to ensure fresh import (important for tests and hot-reload)
-    // Use file:// URL so import() works on Windows (bare paths like C:\... fail)
-    const fileUrl = `${pathToFileURL(filePath).href}?t=${Date.now()}`;
-    const module = await import(fileUrl);
-    const trigger = module.TRIGGER;
-    const matcher = module.MATCHER;
+    module = await import(fileUrl);
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(`Hook file failed to load: ${filePath}\n  ${cause}`);
+  }
 
-    if (!Array.isArray(trigger)) {
-      return { events: [] };
-    }
+  const trigger = module.TRIGGER;
+  const matcher = module.MATCHER;
 
-    const events = trigger.filter(
-      (t): t is HookEvent => typeof t === "string" && HOOK_EVENTS.includes(t as HookEvent),
-    );
-
-    // Parse matchers if present (for tool.before/tool.after filtering)
-    const matchers = Array.isArray(matcher)
-      ? matcher.filter((m): m is string => typeof m === "string")
-      : undefined;
-
-    return { events, matchers };
-  } catch {
+  if (!Array.isArray(trigger)) {
     return { events: [] };
   }
+
+  const events = trigger.filter(
+    (t): t is HookEvent => typeof t === "string" && HOOK_EVENTS.includes(t as HookEvent),
+  );
+
+  // Parse matchers if present (for tool.before/tool.after filtering)
+  const matchers = Array.isArray(matcher)
+    ? matcher.filter((m): m is string => typeof m === "string")
+    : undefined;
+
+  return { events, matchers };
 }
 
 /**
  * Discover all hooks in a directory.
  * Returns hooks that have a valid TRIGGER export.
  * Hooks with multiple triggers create multiple entries.
+ * A missing directory yields no hooks; a hook file that fails to load throws.
  */
 export async function discoverHooks(hooksDir: string): Promise<DiscoveredHook[]> {
-  const hooks: DiscoveredHook[] = [];
-
+  let entries: string[];
   try {
-    const entries = await readdir(hooksDir);
-
-    for (const entry of entries) {
-      if (!entry.endsWith(".ts")) continue;
-
-      const filePath = join(hooksDir, entry);
-      const { events, matchers } = await parseHookTrigger(filePath);
-
-      for (const event of events) {
-        hooks.push({
-          filename: entry,
-          event,
-          path: filePath,
-          matchers,
-        });
-      }
-    }
+    entries = await readdir(hooksDir);
   } catch {
     // Directory doesn't exist yet - that's ok during init
+    return [];
+  }
+
+  const hooks: DiscoveredHook[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".ts")) continue;
+
+    const filePath = join(hooksDir, entry);
+    const { events, matchers } = await parseHookTrigger(filePath);
+
+    for (const event of events) {
+      hooks.push({
+        filename: entry,
+        event,
+        path: filePath,
+        matchers,
+      });
+    }
   }
 
   return hooks;
@@ -116,9 +126,19 @@ export async function discoverHooks(hooksDir: string): Promise<DiscoveredHook[]>
  * Discover hooks from both system/hooks/ and customizations/hooks/ directories.
  * Customization hooks override system hooks with the same filename.
  * Additional hooks in customizations/ (no system counterpart) are appended.
+ *
+ * Throws when system hook files exist but none parse as hooks: installing an
+ * empty hook set would strip every provider's wiring, so refuse instead.
  */
 export async function discoverAllHooks(shakaHome: string): Promise<DiscoveredHook[]> {
-  const systemHooks = await discoverHooks(join(shakaHome, "system", "hooks"));
+  const systemDir = join(shakaHome, "system", "hooks");
+  const systemHooks = await discoverHooks(systemDir);
+  if (systemHooks.length === 0 && (await hasHookFiles(systemDir))) {
+    throw new Error(
+      `No hooks discovered in ${systemDir} despite hook files being present — refusing to install an empty hook set`,
+    );
+  }
+
   const customHooks = await discoverHooks(join(shakaHome, "customizations", "hooks"));
 
   // Customization filenames that override system counterparts
@@ -126,6 +146,15 @@ export async function discoverAllHooks(shakaHome: string): Promise<DiscoveredHoo
   const filtered = systemHooks.filter((h) => !overridden.has(h.filename));
 
   return [...filtered, ...customHooks];
+}
+
+async function hasHookFiles(hooksDir: string): Promise<boolean> {
+  try {
+    const entries = await readdir(hooksDir);
+    return entries.some((entry) => entry.endsWith(".ts"));
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -189,11 +189,12 @@ function logProviderStatus(providers: InitResult["providers"]): void {
 async function installProviders(
   providers: InitResult["providers"],
   shakaHome: string,
-): Promise<void> {
+): Promise<string[]> {
   const config = await loadConfig(shakaHome);
   const permissionMode = isPermissionsManaged(config) ? undefined : "skip";
 
   const installedProviders: ProviderConfigurer[] = [];
+  const failedProviders: string[] = [];
 
   for (const name of getProviderNames()) {
     if (providers[name].installed) {
@@ -201,6 +202,7 @@ async function installProviders(
       const result = await provider.install({ shakaHome, permissionMode });
       if (!result.ok) {
         console.error(`  ✗ Failed to install ${name} configuration: ${result.error.message}`);
+        failedProviders.push(name);
       } else {
         console.log(`  ✓ Installed ${name} configuration`);
         installedProviders.push(provider);
@@ -224,6 +226,8 @@ async function installProviders(
       console.log(`  ✓ Registered Shaka MCP server with ${provider.label}`);
     }
   }
+
+  return failedProviders;
 }
 
 function logCreatedItems(result: InitResult): void {
@@ -304,8 +308,17 @@ export function createInitCommand(): Command {
       }
 
       logProviderStatus(result.value.providers);
-      await installProviders(result.value.providers, shakaHome);
+      const failedProviders = await installProviders(result.value.providers, shakaHome);
       logCreatedItems(result.value);
+
+      // Fail loudly on partial installs — a half-wired provider is worse
+      // than an aborted run that says exactly what to fix.
+      if (failedProviders.length > 0) {
+        console.error(`\n❌ Init incomplete — install failed for: ${failedProviders.join(", ")}.`);
+        console.error("   Fix the error above, then re-run `shaka init` or `shaka reload`.");
+        process.exit(1);
+      }
+
       await logVersionInfo(result.value);
       await printOpencodeSummarizationHint(shakaHome);
     });

@@ -88,6 +88,31 @@ You are a text-only inference assistant.
       expect(settings.hooks.SessionStart.length).toBeGreaterThan(0);
     });
 
+    // Regression guard for the 2026-07-05 incident: a hook that failed to
+    // import was silently discovered as "no hooks", and install stripped the
+    // existing wiring from every provider. A broken hook must fail the
+    // install loudly and leave existing settings byte-for-byte untouched.
+    test("leaves existing settings untouched when a hook fails to import", async () => {
+      const configurer = new ClaudeProviderConfigurer({ claudeHome: testClaudeHome });
+      const healthyInstall = await configurer.install({ shakaHome: testShakaHome });
+      expect(healthyInstall.ok).toBe(true);
+      const settingsBefore = await Bun.file(`${testClaudeHome}/settings.json`).text();
+
+      await Bun.write(
+        `${testShakaHome}/system/hooks/broken.ts`,
+        `import "this-module-does-not-exist";
+export const TRIGGER = ["prompt.submit"] as const;`,
+      );
+      const result = await configurer.install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("broken.ts");
+      }
+      const settingsAfter = await Bun.file(`${testClaudeHome}/settings.json`).text();
+      expect(settingsAfter).toBe(settingsBefore);
+    });
+
     test("preserves existing settings", async () => {
       await Bun.write(
         `${testClaudeHome}/settings.json`,
@@ -1036,9 +1061,23 @@ export const MATCHER = ["Bash", "Edit"] as const;`,
       expect(result.events).toEqual([]);
     });
 
-    test("returns empty events for non-existent file", async () => {
-      const result = await parseHookTrigger(join(hooksDir(), "nonexistent.ts"));
-      expect(result.events).toEqual([]);
+    test("throws for a non-existent file", async () => {
+      expect(parseHookTrigger(join(hooksDir(), "nonexistent.ts"))).rejects.toThrow(
+        "nonexistent.ts",
+      );
+    });
+
+    test("throws when the hook file fails to import, naming file and cause", async () => {
+      await Bun.write(
+        join(hooksDir(), "broken.ts"),
+        `import "this-module-does-not-exist";
+export const TRIGGER = ["session.start"] as const;`,
+      );
+
+      expect(parseHookTrigger(join(hooksDir(), "broken.ts"))).rejects.toThrow(/broken\.ts/);
+      expect(parseHookTrigger(join(hooksDir(), "broken.ts"))).rejects.toThrow(
+        /this-module-does-not-exist/,
+      );
     });
   });
 
@@ -1071,6 +1110,16 @@ console.log("format");
     test("returns empty array for non-existent directory", async () => {
       const hooks = await discoverHooks("/nonexistent/path");
       expect(hooks).toEqual([]);
+    });
+
+    test("propagates a broken hook file instead of silently skipping it", async () => {
+      await Bun.write(
+        `${testShakaHome}/system/hooks/broken.ts`,
+        `import "this-module-does-not-exist";
+export const TRIGGER = ["prompt.submit"] as const;`,
+      );
+
+      expect(discoverHooks(`${testShakaHome}/system/hooks`)).rejects.toThrow(/broken\.ts/);
     });
 
     test("creates multiple entries for hook with multiple triggers", async () => {
@@ -1154,6 +1203,13 @@ console.log("security");
       const hooks = await discoverAllHooks(testShakaHome);
       // Should still find system hooks without error
       expect(hooks).toHaveLength(1);
+    });
+
+    test("refuses an empty hook set when hook files exist", async () => {
+      await rm(`${testShakaHome}/system/hooks/session-start.ts`);
+      await Bun.write(`${testShakaHome}/system/hooks/no-trigger.ts`, "console.log('helper');");
+
+      expect(discoverAllHooks(testShakaHome)).rejects.toThrow(/no hooks/i);
     });
 
     test("works when system/hooks/ does not exist", async () => {
