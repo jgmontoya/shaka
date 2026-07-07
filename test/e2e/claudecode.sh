@@ -490,6 +490,13 @@ else
   warn "Knowledge directory not created (session-end worker may not have triggered compilation)"
 fi
 
+# ── Workflow until ────────────────────────────────────────────────────
+
+# shellcheck source=lib/workflow-until.sh
+source "$(dirname "$0")/lib/workflow-until.sh"
+run_workflow_until_e2e
+run_workflow_until_judge_e2e claude
+
 # ── Autoresearch ──────────────────────────────────────────────────────
 
 # shellcheck source=lib/autoresearch.sh

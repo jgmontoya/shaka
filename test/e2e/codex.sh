@@ -348,6 +348,12 @@ else
   warn "config.toml not found (codex features enable may not have run)"
 fi
 
+# ── Workflow until: deterministic (no LLM) ────────────────────────────
+
+# shellcheck source=lib/workflow-until.sh
+source "$(dirname "$0")/lib/workflow-until.sh"
+run_workflow_until_e2e
+
 # ── LLM Integration (requires OPENAI_API_KEY + working codex binary) ──
 
 section "Session start hook"
@@ -544,6 +550,11 @@ else
   source "$(dirname "$0")/lib/autoresearch.sh"
   run_autoresearch_e2e codex
   run_autoresearch_oneshot_e2e codex
+
+  # Prompt-type until verdict protocol against the real codex CLI.
+  # Relies on SHAKA_CODEX_BYPASS_SANDBOX=1 exported above (Docker is
+  # already the sandbox).
+  run_workflow_until_judge_e2e codex
 fi
 
 # ── Uninstall ─────────────────────────────────────────────────────────

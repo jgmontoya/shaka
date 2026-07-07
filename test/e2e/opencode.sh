@@ -257,6 +257,13 @@ else
   exit 1
 fi
 
+# ── Workflow until ────────────────────────────────────────────────────
+
+# shellcheck source=lib/workflow-until.sh
+source "$(dirname "$0")/lib/workflow-until.sh"
+run_workflow_until_e2e
+run_workflow_until_judge_e2e opencode
+
 # ── Autoresearch ──────────────────────────────────────────────────────
 
 # shellcheck source=lib/autoresearch.sh

@@ -1,13 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { realpathSync } from "node:fs";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StepResult, Workflow } from "../../../src/domain/workflow";
 import {
   generateRunId,
+  parseUntilVerdict,
   resolveTemplates,
   runWorkflow,
 } from "../../../src/services/workflow-runner";
+import { clearDetectionCache } from "../../../src/services/provider-detection";
 
 describe("generateRunId", () => {
   test("produces YYYYMMDD-HHmmss-mmm format", () => {
@@ -91,6 +94,21 @@ describe("resolveTemplates", () => {
   });
 });
 
+describe("parseUntilVerdict", () => {
+  test("treats final SATISFIED line as satisfied", () => {
+    expect(parseUntilVerdict("SATISFIED")).toBe(true);
+    expect(parseUntilVerdict("satisfied")).toBe(true);
+    expect(parseUntilVerdict("Looks good.\nSATISFIED\n")).toBe(true);
+  });
+
+  test("treats any missing or ambiguous verdict as continue", () => {
+    expect(parseUntilVerdict("CONTINUE")).toBe(false);
+    expect(parseUntilVerdict("SATISFIED\nMore prose")).toBe(false);
+    expect(parseUntilVerdict("")).toBe(false);
+    expect(parseUntilVerdict("not SATISFIED")).toBe(false);
+  });
+});
+
 describe("runWorkflow", () => {
   const testDir = join(tmpdir(), `shaka-test-runner-${process.pid}`);
   const artifactHome = join(tmpdir(), `shaka-test-artifacts-${process.pid}`);
@@ -106,6 +124,30 @@ describe("runWorkflow", () => {
     await rm(testDir, { recursive: true, force: true });
     await rm(artifactHome, { recursive: true, force: true });
   });
+
+  async function withClaudeShim(script: string, run: () => Promise<void>): Promise<void> {
+    const binDir = join(testDir, "bin");
+    const oldPath = process.env.PATH;
+
+    try {
+      await mkdir(binDir, { recursive: true });
+      const claude = join(binDir, "claude");
+      await Bun.write(claude, script);
+      await chmod(claude, 0o755);
+
+      process.env.PATH = binDir;
+      clearDetectionCache();
+
+      await run();
+    } finally {
+      if (oldPath === undefined) {
+        delete process.env.PATH;
+      } else {
+        process.env.PATH = oldPath;
+      }
+      clearDetectionCache();
+    }
+  }
 
   const simpleWorkflow: Workflow = {
     name: "test-wf",
@@ -249,6 +291,38 @@ describe("runWorkflow", () => {
     expect(metadata.steps[1]?.output).toContain("got:");
     expect(metadata.steps[1]?.output).toContain("FIRST");
   });
+
+  test.skipIf(process.platform === "win32")(
+    "prompt steps run provider CLIs in the workflow cwd",
+    async () => {
+      const workDir = join(testDir, "work");
+      await mkdir(workDir, { recursive: true });
+
+      await withClaudeShim(
+        "#!/bin/sh\nwhile IFS= read -r _line; do :; done\n/bin/pwd -P\n",
+        async () => {
+          const workflow: Workflow = {
+            name: "prompt-cwd",
+            description: "Prompt cwd",
+            state: "none",
+            loop: 1,
+            steps: [{ type: "prompt", name: "where", prompt: "where are you?" }],
+            sourcePath: "/fake/path.yaml",
+          };
+
+          const { metadata } = await runWorkflow({
+            workflow,
+            input: "",
+            cwd: workDir,
+            shakaHome: artifactHome,
+          });
+
+          expect(metadata.status).toBe("completed");
+          expect(metadata.steps[0]?.output.trim()).toBe(realpathSync(workDir));
+        },
+      );
+    },
+  );
 
   async function initGitRepo(dir: string): Promise<void> {
     await Bun.spawn(["git", "init", dir], { stdout: "pipe", stderr: "pipe" }).exited;
@@ -432,6 +506,282 @@ describe("runWorkflow", () => {
     expect(metadata.steps[1]?.iteration).toBe(2);
     expect(metadata.steps[2]?.iteration).toBe(3);
   });
+
+  test("run-type until stops workflow loop when condition succeeds", async () => {
+    const workflow: Workflow = {
+      name: "until-run",
+      description: "Until run",
+      state: "none",
+      loop: 5,
+      until: { type: "run", run: "test -f done.txt" },
+      steps: [
+        {
+          type: "run",
+          name: "maybe-done",
+          run: 'if [ "{loop.iteration}" = "2" ]; then echo done > done.txt; fi',
+        },
+      ],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata, artifactDir } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(2);
+    expect(metadata.satisfiedAt).toBe(2);
+    expect(metadata.steps).toHaveLength(2);
+    expect(await Bun.file(join(artifactDir, "iter-1", "until.out")).exists()).toBe(true);
+    expect(await Bun.file(join(artifactDir, "iter-2", "until.out")).exists()).toBe(true);
+  });
+
+  test("until cap exhaustion completes with null satisfiedAt", async () => {
+    const workflow: Workflow = {
+      name: "until-cap",
+      description: "Until cap",
+      state: "none",
+      loop: 3,
+      until: { type: "run", run: "exit 1" },
+      steps: [{ type: "run", name: "work", run: "echo work" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(3);
+    expect(metadata.satisfiedAt).toBeNull();
+    expect(metadata.steps).toHaveLength(3);
+  });
+
+  test("until command failure is treated as not satisfied", async () => {
+    const workflow: Workflow = {
+      name: "until-command-failure",
+      description: "Until command failure",
+      state: "none",
+      loop: 2,
+      until: { type: "run", run: "definitely-not-a-shaka-test-command" },
+      steps: [{ type: "run", name: "work", run: "echo work" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(2);
+    expect(metadata.satisfiedAt).toBeNull();
+  });
+
+  test("until condition resolves current iteration step templates", async () => {
+    const workflow: Workflow = {
+      name: "until-template",
+      description: "Until template",
+      state: "none",
+      loop: 3,
+      until: { type: "run", run: 'test "{steps.produce.output}" = "PASS"' },
+      steps: [{ type: "run", name: "produce", run: "printf PASS" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(1);
+    expect(metadata.satisfiedAt).toBe(1);
+  });
+
+  test("step failure skips until evaluation and fails the run", async () => {
+    const workflow: Workflow = {
+      name: "until-skip-on-failure",
+      description: "Until skip on failure",
+      state: "none",
+      loop: 2,
+      until: { type: "run", run: "echo evaluated > until-ran.txt" },
+      steps: [{ type: "run", name: "fail", run: "exit 1" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata, artifactDir } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("failed");
+    expect(metadata.completedIterations).toBe(0);
+    expect(metadata.satisfiedAt).toBeNull();
+    expect(await Bun.file(join(testDir, "until-ran.txt")).exists()).toBe(false);
+    expect(await Bun.file(join(artifactDir, "iter-1", "until.out")).exists()).toBe(false);
+  });
+
+  test("workflow loop 1 with until evaluates once and records satisfaction", async () => {
+    const workflow: Workflow = {
+      name: "until-loop-one",
+      description: "Until loop one",
+      state: "none",
+      loop: 1,
+      until: { type: "run", run: "test -f done.txt" },
+      steps: [{ type: "run", name: "done", run: "echo done > done.txt" }],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata, artifactDir } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(1);
+    expect(metadata.satisfiedAt).toBe(1);
+    expect(await Bun.file(join(artifactDir, "until.out")).exists()).toBe(true);
+  });
+
+  test("until progress callbacks report start and result", async () => {
+    const workflow: Workflow = {
+      name: "until-callbacks",
+      description: "Until callbacks",
+      state: "none",
+      loop: 2,
+      until: { type: "run", run: "test -f done.txt" },
+      steps: [{ type: "run", name: "done", run: "echo done > done.txt" }],
+      sourcePath: "/fake/path.yaml",
+    };
+    const events: string[] = [];
+
+    await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+      onUntilStart: (iteration) => {
+        events.push(`start:${iteration}`);
+      },
+      onUntilResult: (satisfied, iteration, durationMs) => {
+        expect(durationMs).toBeGreaterThanOrEqual(0);
+        events.push(`result:${iteration}:${satisfied}`);
+      },
+    });
+
+    expect(events).toEqual(["start:1", "result:1:true"]);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "prompt-type until stops workflow loop on SATISFIED verdict",
+    async () => {
+      await withClaudeShim(
+        "#!/bin/sh\nwhile IFS= read -r _line; do :; done\nprintf 'SATISFIED\\n'\n",
+        async () => {
+          const workflow: Workflow = {
+            name: "until-prompt",
+            description: "Until prompt",
+            state: "none",
+            loop: 5,
+            until: { type: "prompt", prompt: "Is it done?" },
+            steps: [{ type: "prompt", name: "work", prompt: "Do work" }],
+            sourcePath: "/fake/path.yaml",
+          };
+
+          const { metadata } = await runWorkflow({
+            workflow,
+            input: "",
+            cwd: testDir,
+            shakaHome: artifactHome,
+          });
+
+          expect(metadata.status).toBe("completed");
+          expect(metadata.completedIterations).toBe(1);
+          expect(metadata.satisfiedAt).toBe(1);
+        },
+      );
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "prompt-type until continues to cap without a verdict line",
+    async () => {
+      await withClaudeShim(
+        "#!/bin/sh\nwhile IFS= read -r _line; do :; done\nprintf 'Looks good to me\\n'\n",
+        async () => {
+          const workflow: Workflow = {
+            name: "until-prompt-no-verdict",
+            description: "Until prompt no verdict",
+            state: "none",
+            loop: 2,
+            until: { type: "prompt", prompt: "Is it done?" },
+            steps: [{ type: "prompt", name: "work", prompt: "Do work" }],
+            sourcePath: "/fake/path.yaml",
+          };
+
+          const { metadata } = await runWorkflow({
+            workflow,
+            input: "",
+            cwd: testDir,
+            shakaHome: artifactHome,
+          });
+
+          expect(metadata.status).toBe("completed");
+          expect(metadata.completedIterations).toBe(2);
+          expect(metadata.satisfiedAt).toBeNull();
+        },
+      );
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "prompt-type until parses verdict from stdout when stderr has warnings",
+    async () => {
+      await withClaudeShim(
+        "#!/bin/sh\nwhile IFS= read -r _line; do :; done\nprintf 'SATISFIED\\n'\nprintf 'warning\\n' >&2\n",
+        async () => {
+          const workflow: Workflow = {
+            name: "until-prompt-stderr",
+            description: "Until prompt stderr",
+            state: "none",
+            loop: 3,
+            until: { type: "prompt", prompt: "Is it done?" },
+            steps: [{ type: "prompt", name: "work", prompt: "Do work" }],
+            sourcePath: "/fake/path.yaml",
+          };
+
+          const { metadata, artifactDir } = await runWorkflow({
+            workflow,
+            input: "",
+            cwd: testDir,
+            shakaHome: artifactHome,
+          });
+
+          expect(metadata.status).toBe("completed");
+          expect(metadata.completedIterations).toBe(1);
+          expect(metadata.satisfiedAt).toBe(1);
+          const untilOutput = await Bun.file(join(artifactDir, "iter-1", "until.out")).text();
+          expect(untilOutput).toContain("[stderr]");
+          expect(untilOutput).toContain("warning");
+        },
+      );
+    },
+  );
 
   test("loop: 3 with allow-failure runs all iterations", async () => {
     const workflow: Workflow = {
@@ -671,6 +1021,47 @@ describe("runWorkflow", () => {
     expect(metadata.steps[0]?.iteration).toBe(1);
     expect(metadata.steps[1]?.iteration).toBe(2);
     expect(metadata.steps[2]?.iteration).toBe(3);
+  });
+
+  test("group until stops group loop and outer workflow continues", async () => {
+    const workflow: Workflow = {
+      name: "group-until",
+      description: "Group until",
+      state: "none",
+      loop: 1,
+      steps: [
+        {
+          type: "group",
+          name: "cycle",
+          loop: 5,
+          until: { type: "run", run: "test -f group-done.txt" },
+          steps: [
+            {
+              type: "run",
+              name: "inner",
+              run: 'if [ "{loop.iteration}" = "2" ]; then echo done > group-done.txt; fi',
+            },
+          ],
+        },
+        { type: "run", name: "after", run: "echo after" },
+      ],
+      sourcePath: "/fake/path.yaml",
+    };
+
+    const { metadata, artifactDir } = await runWorkflow({
+      workflow,
+      input: "",
+      cwd: testDir,
+      shakaHome: artifactHome,
+    });
+
+    expect(metadata.status).toBe("completed");
+    expect(metadata.completedIterations).toBe(1);
+    expect(metadata.satisfiedAt).toBeNull();
+    expect(metadata.steps.map((step) => step.name)).toEqual(["inner", "inner", "after"]);
+    expect(await Bun.file(join(artifactDir, "cycle", "iter-1", "until.out")).exists()).toBe(true);
+    expect(await Bun.file(join(artifactDir, "cycle", "iter-2", "until.out")).exists()).toBe(true);
+    expect(await Bun.file(join(artifactDir, "cycle", "iter-3", "inner.out")).exists()).toBe(false);
   });
 
   test("group step isolates stepMap from outer context", async () => {

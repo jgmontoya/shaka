@@ -17,7 +17,7 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { normalizeCwd } from "../domain/paths";
-import type { GroupStep, Workflow, WorkflowStep } from "../domain/workflow";
+import type { GroupStep, UntilStep, Workflow, WorkflowStep } from "../domain/workflow";
 
 /** Valid workflow name: lowercase alphanumeric with hyphens, no leading/trailing hyphens, max 64 chars. */
 export const NAME_PATTERN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -26,6 +26,7 @@ const RESERVED_NAMES = new Set(["shaka"]);
 
 const VALID_STATES = new Set(["git-branch", "none"]);
 const LEAF_TYPE_KEYS = ["command", "prompt", "run"] as const;
+const UNTIL_TYPE_KEYS = ["prompt", "run"] as const;
 
 export interface WorkflowError {
   name: string;
@@ -160,6 +161,7 @@ function resolveRef(
     name: ref.name,
     steps: target.steps,
     loop: target.loop,
+    until: target.until,
     allowFailure: ref.allowFailure,
   };
 }
@@ -202,23 +204,11 @@ async function parseWorkflowFile(
   const nameError = validateName(name);
   if (nameError) return { name, sourcePath, error: nameError };
 
-  let raw: string;
-  try {
-    raw = await Bun.file(sourcePath).text();
-  } catch {
-    return { name, sourcePath, error: "Failed to read workflow file" };
+  const frontmatterResult = await readWorkflowFrontmatter(sourcePath);
+  if (typeof frontmatterResult === "string") {
+    return { name, sourcePath, error: frontmatterResult };
   }
-
-  let frontmatter: Record<string, unknown>;
-  try {
-    const parsed = parseYaml(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return { name, sourcePath, error: "Invalid YAML — expected a mapping" };
-    }
-    frontmatter = parsed as Record<string, unknown>;
-  } catch {
-    return { name, sourcePath, error: "Invalid YAML syntax" };
-  }
+  const frontmatter = frontmatterResult;
 
   const description = frontmatter.description;
   if (typeof description !== "string" || !description.trim()) {
@@ -249,6 +239,11 @@ async function parseWorkflowFile(
     return { name, sourcePath, error: stepsResult };
   }
 
+  const untilResult = parseWorkflowUntil(frontmatter, loop, stepsResult);
+  if (typeof untilResult === "string") {
+    return { name, sourcePath, error: untilResult };
+  }
+
   const cwd = normalizeCwd(frontmatter.cwd);
 
   return {
@@ -257,9 +252,31 @@ async function parseWorkflowFile(
     state: state as "git-branch" | "none",
     steps: stepsResult as WorkflowStep[],
     loop,
+    until: untilResult,
     cwd,
     sourcePath,
   };
+}
+
+async function readWorkflowFrontmatter(
+  sourcePath: string,
+): Promise<Record<string, unknown> | string> {
+  let raw: string;
+  try {
+    raw = await Bun.file(sourcePath).text();
+  } catch {
+    return "Failed to read workflow file";
+  }
+
+  try {
+    const parsed = parseYaml(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return "Invalid YAML — expected a mapping";
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return "Invalid YAML syntax";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -305,6 +322,77 @@ function parseWorkflowRef(
   return { type: "workflow-ref", name, workflowName, allowFailure };
 }
 
+function parseWorkflowUntil(
+  frontmatter: Record<string, unknown>,
+  loop: number,
+  steps: readonly ParsedStep[],
+): UntilStep | string | undefined {
+  if (!("until" in frontmatter)) return undefined;
+  if (loop < 2) return 'Workflow "until" requires loop >= 2';
+
+  const untilResult = parseUntilStep(frontmatter.until, "Workflow");
+  if (typeof untilResult === "string") return untilResult;
+
+  const nameError = validateNoUntilStepName(steps, "Workflow");
+  if (nameError) return nameError;
+
+  return untilResult;
+}
+
+function parseLeafUntil(
+  step: Record<string, unknown>,
+  name: string,
+  loop: number,
+  hasLoop: boolean,
+): UntilStep | string | undefined {
+  if (!("until" in step)) return undefined;
+  if (!hasLoop || loop < 2) return `Step "${name}": "until" requires loop >= 2`;
+  if (name === "until") {
+    return `Step "${name}": cannot be named "until" when "until" is present`;
+  }
+  return parseUntilStep(step.until, `Step "${name}"`);
+}
+
+/** Parse an until condition. */
+function parseUntilStep(raw: unknown, owner: string): UntilStep | string {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return `${owner}: "until" must be an object with exactly one of: prompt, run`;
+  }
+
+  const step = raw as Record<string, unknown>;
+  const typeKeys = UNTIL_TYPE_KEYS.filter((k) => k in step);
+  const extraKeys = Object.keys(step).filter(
+    (key) => !UNTIL_TYPE_KEYS.some((untilKey) => untilKey === key),
+  );
+  if (typeKeys.length !== 1 || extraKeys.length > 0) {
+    const details = [
+      typeKeys.length > 1 ? `found: ${typeKeys.join(", ")}` : null,
+      extraKeys.length > 0 ? `extra: ${extraKeys.join(", ")}` : null,
+    ].filter((detail): detail is string => detail != null);
+    const suffix = details.length > 0 ? ` (${details.join("; ")})` : "";
+    return `${owner}: "until" must have exactly one of: prompt, run${suffix}`;
+  }
+
+  const typeKey = typeKeys[0];
+  if (!typeKey) {
+    return `${owner}: "until" must have exactly one of: prompt, run`;
+  }
+  const value = step[typeKey];
+  if (typeof value !== "string" || !value.trim()) {
+    return `${owner}: "until.${typeKey}" must be a non-empty string`;
+  }
+
+  return typeKey === "prompt" ? { type: "prompt", prompt: value } : { type: "run", run: value };
+}
+
+/** Prevent condition artifacts from colliding with a direct step named "until". */
+function validateNoUntilStepName(steps: readonly ParsedStep[], owner: string): string | null {
+  if (steps.some((step) => step.name === "until")) {
+    return `${owner}: direct child step cannot be named "until" when "until" is present`;
+  }
+  return null;
+}
+
 /** Parse an inline group step: { name, steps: [...], loop?: N } */
 function parseInlineGroup(
   step: Record<string, unknown>,
@@ -325,11 +413,23 @@ function parseInlineGroup(
   const rawLoop = step.loop ?? 1;
   const loopErr = validateLoop(rawLoop);
   if (loopErr) return `Step "${name}": ${loopErr}`;
+  let until: UntilStep | undefined;
+  if ("until" in step) {
+    if ((rawLoop as number) < 2) {
+      return `Step "${name}": "until" requires loop >= 2`;
+    }
+    const untilResult = parseUntilStep(step.until, `Step "${name}"`);
+    if (typeof untilResult === "string") return untilResult;
+    const nameError = validateNoUntilStepName(subStepsResult, `Step "${name}"`);
+    if (nameError) return nameError;
+    until = untilResult;
+  }
   return {
     type: "group",
     name,
     steps: subStepsResult as WorkflowStep[],
     loop: rawLoop as number,
+    until,
     allowFailure,
   };
 }
@@ -353,14 +453,21 @@ function parseLeafStep(
   }
 
   const leaf = buildLeafStep(typeKey, name, typeValue, allowFailure);
+  const hasLoop = "loop" in step && step.loop != null;
+  let loop = 1;
 
-  // Leaf with loop > 1 → normalize to single-step GroupStep
-  if ("loop" in step && step.loop != null) {
+  if (hasLoop) {
     const loopErr = validateLoop(step.loop);
     if (loopErr) return `Step "${name}": ${loopErr}`;
-    if ((step.loop as number) > 1) {
-      return { type: "group", name, steps: [leaf], loop: step.loop as number, allowFailure };
-    }
+    loop = step.loop as number;
+  }
+
+  const until = parseLeafUntil(step, name, loop, hasLoop);
+  if (typeof until === "string") return until;
+
+  // Leaf with loop > 1 → normalize to single-step GroupStep
+  if (loop > 1) {
+    return { type: "group", name, steps: [leaf], loop, until, allowFailure };
   }
 
   return leaf;
@@ -385,7 +492,12 @@ function validateSingleStep(
     return `Step "${name}": must have exactly one of: workflow, steps, command, prompt, run`;
   }
 
-  if ("workflow" in step) return parseWorkflowRef(step, name, allowFailure);
+  if ("workflow" in step) {
+    if ("until" in step) {
+      return `Step "${name}": workflow reference steps cannot define "until"`;
+    }
+    return parseWorkflowRef(step, name, allowFailure);
+  }
   if ("steps" in step) return parseInlineGroup(step, name, allowFailure);
   return parseLeafStep(step, name, allowFailure);
 }

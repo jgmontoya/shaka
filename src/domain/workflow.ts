@@ -14,9 +14,14 @@ export interface Workflow {
   readonly state: "git-branch" | "none";
   readonly steps: readonly WorkflowStep[];
   readonly loop: number;
+  readonly until?: UntilStep;
   readonly cwd?: readonly string[];
   readonly sourcePath: string;
 }
+
+export type UntilStep =
+  | { readonly type: "prompt"; readonly prompt: string }
+  | { readonly type: "run"; readonly run: string };
 
 export interface CommandStep {
   readonly type: "command";
@@ -44,6 +49,7 @@ export interface GroupStep {
   readonly name: string;
   readonly steps: readonly WorkflowStep[];
   readonly loop: number;
+  readonly until?: UntilStep;
   readonly allowFailure?: boolean;
 }
 
@@ -70,6 +76,7 @@ export interface RunMetadata {
   readonly steps: StepResult[];
   readonly totalIterations: number;
   readonly completedIterations: number;
+  readonly satisfiedAt: number | null;
   readonly completedAt: string;
   readonly status: "completed" | "failed";
 }

@@ -58,4 +58,48 @@ steps:
     const cmd = createRunCommand();
     expect(cmd.name()).toBe("run");
   });
+
+  test("prints until progress and satisfied summary", async () => {
+    const workDir = join(testHome, "work");
+    await mkdir(workDir, { recursive: true });
+    await Bun.write(
+      join(testHome, "system", "workflows", "done.yaml"),
+      `description: Done workflow
+state: none
+loop: 2
+until:
+  run: test -f done.txt
+steps:
+  - name: done
+    run: echo done > done.txt`,
+    );
+
+    const oldHome = process.env.SHAKA_HOME;
+    const oldCwd = process.cwd();
+    const oldLog = console.log;
+    const lines: string[] = [];
+
+    try {
+      process.env.SHAKA_HOME = testHome;
+      process.chdir(workDir);
+      console.log = (...args: unknown[]) => {
+        lines.push(args.map(String).join(" "));
+      };
+
+      const { createRunCommand } = await import("../../../src/commands/run");
+      await createRunCommand().parseAsync(["done"], { from: "user" });
+    } finally {
+      console.log = oldLog;
+      process.chdir(oldCwd);
+      if (oldHome === undefined) {
+        delete process.env.SHAKA_HOME;
+      } else {
+        process.env.SHAKA_HOME = oldHome;
+      }
+    }
+
+    expect(lines.join("\n")).toContain("[iter 1/2] Checking until condition...");
+    expect(lines.join("\n")).toContain("until satisfied");
+    expect(lines.join("\n")).toContain("Status: completed (satisfied after 1/2 iterations)");
+  });
 });

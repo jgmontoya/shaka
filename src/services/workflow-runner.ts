@@ -12,6 +12,7 @@ import type {
   GroupStep,
   RunMetadata,
   StepResult,
+  UntilStep,
   Workflow,
   WorkflowStep,
 } from "../domain/workflow";
@@ -39,6 +40,10 @@ export interface RunOptions {
   ) => void;
   /** Called when a step finishes executing. */
   readonly onStepComplete?: (stepName: string, exitCode: number, durationMs: number) => void;
+  /** Called immediately before an until condition is evaluated. */
+  readonly onUntilStart?: (iteration: number) => void;
+  /** Called after an until condition is evaluated. */
+  readonly onUntilResult?: (satisfied: boolean, iteration: number, durationMs: number) => void;
 }
 
 export interface RunResult {
@@ -69,6 +74,20 @@ export interface LoopContext {
 }
 
 const DEFAULT_LOOP: LoopContext = { iteration: 1, total: 1 };
+
+const UNTIL_VERDICT_INSTRUCTION =
+  "\n\nWhen you have decided, end your reply with exactly one line containing only the word " +
+  "SATISFIED (the condition is met — stop looping) or CONTINUE (not met — keep iterating).";
+
+/** Last non-empty line must be exactly SATISFIED, case-insensitive. */
+export function parseUntilVerdict(stdout: string): boolean {
+  const lines = stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const lastLine = lines.at(-1);
+  return lastLine != null && /^satisfied$/i.test(lastLine);
+}
 
 /** Resolve template variables in a string. */
 export function resolveTemplates(
@@ -104,17 +123,18 @@ export function resolveTemplates(
 
 /** Execute a single leaf workflow step (not a group). */
 async function executeLeafStep(
-  step: Exclude<WorkflowStep, GroupStep>,
+  type: Exclude<WorkflowStep, GroupStep>["type"],
   resolvedValue: string,
   cwd: string,
-): Promise<{ exitCode: number; stdout: string }> {
-  switch (step.type) {
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  switch (type) {
     case "command":
     case "prompt": {
-      const result = await runAgentStep({ prompt: resolvedValue });
+      const result = await runAgentStep({ prompt: resolvedValue, cwd });
       return {
         exitCode: result.exitCode,
-        stdout: result.stderr ? `${result.stdout}\n[stderr]\n${result.stderr}` : result.stdout,
+        stdout: result.stdout,
+        stderr: result.stderr,
       };
     }
     case "run": {
@@ -129,9 +149,13 @@ async function executeLeafStep(
         new Response(proc.stderr).text(),
         proc.exited,
       ]);
-      return { exitCode, stdout: stderr ? `${stdout}\n[stderr]\n${stderr}` : stdout };
+      return { exitCode, stdout, stderr };
     }
   }
+}
+
+function mergedOutput(stdout: string, stderr: string): string {
+  return stderr ? `${stdout}\n[stderr]\n${stderr}` : stdout;
 }
 
 /** Get the resolved value string from a leaf step (the command/prompt/run content). */
@@ -213,6 +237,7 @@ async function failEarly(
     steps: [],
     totalIterations,
     completedIterations: 0,
+    satisfiedAt: null,
     completedAt: new Date().toISOString(),
     status: "failed",
   };
@@ -241,6 +266,8 @@ interface StepContext {
     loopTotal: number,
   ) => void;
   readonly onStepComplete?: (stepName: string, exitCode: number, durationMs: number) => void;
+  readonly onUntilStart?: (iteration: number) => void;
+  readonly onUntilResult?: (satisfied: boolean, iteration: number, durationMs: number) => void;
   // Mutable: loop advances each iteration; previousResult updates after each step.
   loop: LoopContext;
   previousResult: StepResult | null;
@@ -286,8 +313,9 @@ async function runLeafStep(
   ctx.onStepStart?.(step.name, stepIndex, ctx.totalSteps, ctx.loop.iteration, ctx.loop.total);
 
   const startMs = Date.now();
-  const { exitCode, stdout } = await executeLeafStep(step, resolvedValue, ctx.cwd);
+  const { exitCode, stdout, stderr } = await executeLeafStep(step.type, resolvedValue, ctx.cwd);
   const durationMs = Date.now() - startMs;
+  const output = mergedOutput(stdout, stderr);
 
   ctx.onStepComplete?.(step.name, exitCode, durationMs);
 
@@ -295,7 +323,7 @@ async function runLeafStep(
     name: step.name,
     type: step.type,
     exitCode,
-    output: stdout,
+    output,
     durationMs,
     iteration: ctx.loop.iteration,
   };
@@ -305,7 +333,7 @@ async function runLeafStep(
   ctx.previousResult = result;
 
   const outPath = artifactPath(ctx.artifactDir, step.name, ctx.loop);
-  await Bun.write(outPath, stdout);
+  await Bun.write(outPath, output);
 
   if (ctx.useGit) {
     try {
@@ -327,6 +355,61 @@ async function runLeafStep(
   return "continue";
 }
 
+async function evaluateUntil(until: UntilStep, ctx: StepContext): Promise<boolean> {
+  ctx.onUntilStart?.(ctx.loop.iteration);
+  const startMs = Date.now();
+
+  try {
+    const rawValue = until.type === "prompt" ? until.prompt : until.run;
+    const resolvedValue = resolveTemplates(
+      rawValue,
+      ctx.input,
+      ctx.stepMap,
+      ctx.previousResult,
+      ctx.loop,
+    );
+    const executableValue =
+      until.type === "prompt" ? `${resolvedValue}${UNTIL_VERDICT_INSTRUCTION}` : resolvedValue;
+    const { exitCode, stdout, stderr } = await executeLeafStep(
+      until.type,
+      executableValue,
+      ctx.cwd,
+    );
+    const output = mergedOutput(stdout, stderr);
+    await Bun.write(artifactPath(ctx.artifactDir, "until", ctx.loop), output);
+
+    const satisfied =
+      until.type === "run" ? exitCode === 0 : exitCode === 0 && parseUntilVerdict(stdout);
+    ctx.onUntilResult?.(satisfied, ctx.loop.iteration, Date.now() - startMs);
+    return satisfied;
+  } catch (err) {
+    console.error(`Until evaluation failed: ${err instanceof Error ? err.message : String(err)}`);
+    ctx.onUntilResult?.(false, ctx.loop.iteration, Date.now() - startMs);
+    return false;
+  }
+}
+
+async function runGroupIteration(
+  group: GroupStep,
+  ctx: StepContext,
+  groupArtifactDir: string,
+  iteration: number,
+): Promise<"continue" | "halt" | "satisfied"> {
+  ctx.loop = { iteration, total: group.loop };
+
+  if (group.loop > 1) {
+    await mkdir(join(groupArtifactDir, `iter-${iteration}`), { recursive: true });
+  }
+
+  ctx.stepMap.clear();
+  for (const [i, step] of group.steps.entries()) {
+    if ((await runStep(step, ctx, i)) === "halt") return "halt";
+  }
+
+  if (group.until && (await evaluateUntil(group.until, ctx))) return "satisfied";
+  return "continue";
+}
+
 /** Execute a group step — runs inner steps with isolated stepMap and its own loop context. */
 async function runGroup(group: GroupStep, ctx: StepContext): Promise<"continue" | "halt"> {
   const outerLoop = ctx.loop;
@@ -343,20 +426,10 @@ async function runGroup(group: GroupStep, ctx: StepContext): Promise<"continue" 
 
   let halted = false;
   for (let iteration = 1; iteration <= group.loop; iteration++) {
-    ctx.loop = { iteration, total: group.loop };
-
-    if (group.loop > 1) {
-      await mkdir(join(groupArtifactDir, `iter-${iteration}`), { recursive: true });
-    }
-
-    ctx.stepMap.clear();
-    for (const [i, step] of group.steps.entries()) {
-      if ((await runStep(step, ctx, i)) === "halt") {
-        halted = true;
-        break;
-      }
-    }
-    if (halted) break;
+    const result = await runGroupIteration(group, ctx, groupArtifactDir, iteration);
+    if (result === "continue") continue;
+    halted = result === "halt";
+    break;
   }
 
   // Project the group result into the outer context
@@ -377,6 +450,7 @@ async function runGroup(group: GroupStep, ctx: StepContext): Promise<"continue" 
 interface ExecutionResult {
   readonly failed: boolean;
   readonly completedIterations: number;
+  readonly satisfiedAt: number | null;
 }
 
 /** Run all steps in a single iteration. Returns true if a step halted. */
@@ -406,18 +480,24 @@ async function cleanupWorktree(worktreePath: string, cwd: string): Promise<void>
 /** Run all steps across all iterations, guaranteeing worktree cleanup on any exit path. */
 async function executeSteps(
   steps: readonly WorkflowStep[],
+  until: UntilStep | undefined,
   ctx: StepContext,
   worktreePath: string | undefined,
   cwd: string, // original working dir (not the worktree) — used for git worktree removal
 ): Promise<ExecutionResult> {
   let completedIterations = 0;
   let failed = false;
+  let satisfiedAt: number | null = null;
   try {
     for (let iteration = 1; iteration <= ctx.loop.total; iteration++) {
       ctx.loop = { ...ctx.loop, iteration };
       failed = await runIteration(steps, ctx);
       if (failed) break;
       completedIterations = iteration;
+      if (until && (await evaluateUntil(until, ctx))) {
+        satisfiedAt = iteration;
+        break;
+      }
     }
   } catch (err) {
     failed = true;
@@ -425,7 +505,7 @@ async function executeSteps(
   } finally {
     if (worktreePath) await cleanupWorktree(worktreePath, cwd);
   }
-  return { failed, completedIterations };
+  return { failed, completedIterations, satisfiedAt };
 }
 
 /** Execute a workflow. */
@@ -466,11 +546,14 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
     stepMap: new Map(),
     onStepStart: options.onStepStart,
     onStepComplete: options.onStepComplete,
+    onUntilStart: options.onUntilStart,
+    onUntilResult: options.onUntilResult,
     previousResult: null,
   };
 
-  const { failed, completedIterations } = await executeSteps(
+  const { failed, completedIterations, satisfiedAt } = await executeSteps(
     workflow.steps,
+    workflow.until,
     ctx,
     worktreePath,
     cwd,
@@ -484,6 +567,7 @@ export async function runWorkflow(options: RunOptions): Promise<RunResult> {
     steps: ctx.stepResults,
     totalIterations,
     completedIterations,
+    satisfiedAt,
     completedAt: new Date().toISOString(),
     status: failed ? "failed" : "completed",
   };

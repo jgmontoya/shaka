@@ -144,6 +144,15 @@ else
   fi
 fi
 
+# ── Workflow until ────────────────────────────────────────────────────
+# Deterministic check only: this script scopes Pi state to an auth-less
+# test dir (PI_CODING_AGENT_DIR), so the LLM judge variant would always
+# warn without testing anything.
+
+# shellcheck source=lib/workflow-until.sh
+source "$(dirname "$0")/lib/workflow-until.sh"
+run_workflow_until_e2e
+
 # ── Uninstall preserves user files ────────────────────────────────────
 
 section "Uninstall preserves user files"
