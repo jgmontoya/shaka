@@ -261,7 +261,10 @@ describe("UninstallService", () => {
       await Bun.write(join(testHome, "memory", "learnings.md"), "- durable learning");
       await Bun.write(join(testHome, "memory", "rollups", "project-a", "daily.md"), "# Rollup");
       await Bun.write(join(testHome, "memory", "sessions", "session.md"), "# Session summary");
-      await Bun.write(join(testHome, "memory", "knowledge", "project-a", "index.md"), "# Knowledge");
+      await Bun.write(
+        join(testHome, "memory", "knowledge", "project-a", "index.md"),
+        "# Knowledge",
+      );
 
       const service = createService();
       const uninstallResult = await service.uninstall({ deleteUserData: false });
@@ -293,8 +296,9 @@ describe("UninstallService", () => {
       expect(await Bun.file(join(testHome, "memory", "learnings.md")).text()).toBe(
         "- durable learning",
       );
-      expect(await Bun.file(join(testHome, "memory", "rollups", "project-a", "daily.md")).text())
-        .toBe("# Rollup");
+      expect(
+        await Bun.file(join(testHome, "memory", "rollups", "project-a", "daily.md")).text(),
+      ).toBe("# Rollup");
       expect(await Bun.file(join(testHome, "memory", "sessions", "session.md")).text()).toBe(
         "# Session summary",
       );

@@ -357,7 +357,8 @@ describe("runLoop", () => {
     const treeFiles = (await new Response(lsTreeProc.stdout).text()).split("\n");
     expect(treeFiles).not.toContain("autoresearch.jsonl");
     expect(treeFiles).toContain("slow.ts");
-  });
+    // ~8 git subprocesses; observed 1.3s → >5s swings on loaded Windows CI runners.
+  }, 20000);
 
   test("benchmark exits non-zero → crash; revert, no commit", async () => {
     cwd = await setupExperimentRepo({ direction: "minimize" });

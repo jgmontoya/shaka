@@ -364,7 +364,8 @@ function parseUntilStep(raw: unknown, owner: string): UntilStep | string {
   const extraKeys = Object.keys(step).filter(
     (key) => !UNTIL_TYPE_KEYS.some((untilKey) => untilKey === key),
   );
-  if (typeKeys.length !== 1 || extraKeys.length > 0) {
+  const typeKey = typeKeys.length === 1 && extraKeys.length === 0 ? typeKeys[0] : undefined;
+  if (typeKey === undefined) {
     const details = [
       typeKeys.length > 1 ? `found: ${typeKeys.join(", ")}` : null,
       extraKeys.length > 0 ? `extra: ${extraKeys.join(", ")}` : null,
@@ -373,10 +374,6 @@ function parseUntilStep(raw: unknown, owner: string): UntilStep | string {
     return `${owner}: "until" must have exactly one of: prompt, run${suffix}`;
   }
 
-  const typeKey = typeKeys[0];
-  if (!typeKey) {
-    return `${owner}: "until" must have exactly one of: prompt, run`;
-  }
   const value = step[typeKey];
   if (typeof value !== "string" || !value.trim()) {
     return `${owner}: "until.${typeKey}" must be a non-empty string`;

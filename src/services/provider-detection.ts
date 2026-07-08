@@ -7,6 +7,7 @@
  * - defaults/ templates (via import from 'shaka')
  */
 
+import { whichOnCurrentPath } from "../platform/paths";
 import { getProviderModule, getProviderModules } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
 
@@ -22,7 +23,7 @@ let cachedDetection: DetectedProviders | null = null;
  * Check if a specific provider CLI is installed.
  */
 export function isProviderInstalled(provider: ProviderName): boolean {
-  return Bun.which(getProviderModule(provider).metadata.executable) !== null;
+  return whichOnCurrentPath(getProviderModule(provider).metadata.executable) !== null;
 }
 
 /**
@@ -37,7 +38,7 @@ export function detectInstalledProviders(): DetectedProviders {
   const result = {} as DetectedProviders;
   for (const provider of getProviderModules()) {
     const name = provider.metadata.name;
-    result[name] = Bun.which(provider.metadata.executable) !== null;
+    result[name] = whichOnCurrentPath(provider.metadata.executable) !== null;
   }
   cachedDetection = result;
   return cachedDetection;

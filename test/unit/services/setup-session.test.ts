@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { basename } from "node:path";
 import type { ProcessInvocation, ProcessResult } from "../../../src/platform/process-runner";
 import { DEFAULT_SETUP_TIMEOUT_MS } from "../../../src/providers/setup-defaults";
 import type { ProviderName } from "../../../src/providers/types";
@@ -121,7 +122,9 @@ test("runSetupOneshot composes prompt with skill body, objective, and the no-use
   expect(prompt).toContain("SKILL BODY CONTENT");
   expect(prompt).toContain("make it fast");
   expect(prompt).toContain("do NOT have a user to ask");
-  expect(captured[0]?.command).toBe("claude");
+  // The agent runner resolves the CLI to an absolute path when installed —
+  // the dispatch contract is the executable name, not its location.
+  expect(basename(captured[0]?.command ?? "")).toBe("claude");
   expect(captured[0]?.args).toEqual(["-p"]);
   expect(captured[0]?.cwd).toBe("/tmp/wt");
   expect(captured[0]?.timeout).toBe(DEFAULT_SETUP_TIMEOUT_MS);
@@ -144,7 +147,7 @@ test("runSetupOneshot dispatches directly to the selected provider setup capabil
   const result = await runSetupOneshot("/tmp/wt", "obj", "codex", "skill", { runProcess });
 
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.command).toBe("codex");
+  expect(basename(captured[0]?.command ?? "")).toBe("codex");
   expect(captured[0]?.args?.slice(0, 2)).toEqual(["exec", "--full-auto"]);
   expect(result.provider).toBe("codex");
 });
@@ -160,7 +163,7 @@ test("runSetupOneshot routes opencode setup through its setup agent and explicit
   });
 
   expect(captured).toHaveLength(1);
-  expect(captured[0]?.command).toBe("opencode");
+  expect(basename(captured[0]?.command ?? "")).toBe("opencode");
   const args = captured[0]?.args ?? [];
   expect(args.slice(0, 6)).toEqual([
     "run",

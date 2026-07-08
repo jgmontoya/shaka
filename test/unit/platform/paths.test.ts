@@ -8,9 +8,28 @@ import {
   removeLink,
   resolveFromModule,
   shellQuotePosix,
+  whichOnCurrentPath,
 } from "../../../src/platform/paths";
 
 describe("platform/paths", () => {
+  describe("whichOnCurrentPath", () => {
+    test.skipIf(process.platform === "win32")("uses runtime PATH changes", () => {
+      const originalPath = process.env.PATH;
+
+      try {
+        process.env.PATH = "";
+
+        expect(whichOnCurrentPath("sh")).toBeNull();
+      } finally {
+        if (originalPath === undefined) {
+          delete process.env.PATH;
+        } else {
+          process.env.PATH = originalPath;
+        }
+      }
+    });
+  });
+
   describe("resolveFromModule", () => {
     test("resolves relative path from module URL", () => {
       const result = resolveFromModule(import.meta.url, "./fixtures");

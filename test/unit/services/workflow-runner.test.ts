@@ -4,13 +4,13 @@ import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { StepResult, Workflow } from "../../../src/domain/workflow";
+import { clearDetectionCache } from "../../../src/services/provider-detection";
 import {
   generateRunId,
   parseUntilVerdict,
   resolveTemplates,
   runWorkflow,
 } from "../../../src/services/workflow-runner";
-import { clearDetectionCache } from "../../../src/services/provider-detection";
 
 describe("generateRunId", () => {
   test("produces YYYYMMDD-HHmmss-mmm format", () => {
@@ -507,37 +507,41 @@ describe("runWorkflow", () => {
     expect(metadata.steps[2]?.iteration).toBe(3);
   });
 
-  test("run-type until stops workflow loop when condition succeeds", async () => {
-    const workflow: Workflow = {
-      name: "until-run",
-      description: "Until run",
-      state: "none",
-      loop: 5,
-      until: { type: "run", run: "test -f done.txt" },
-      steps: [
-        {
-          type: "run",
-          name: "maybe-done",
-          run: 'if [ "{loop.iteration}" = "2" ]; then echo done > done.txt; fi',
-        },
-      ],
-      sourcePath: "/fake/path.yaml",
-    };
+  // POSIX shell in the run steps ($(...), wc) — cmd.exe can't execute them.
+  test.skipIf(process.platform === "win32")(
+    "run-type until stops workflow loop when condition succeeds",
+    async () => {
+      const workflow: Workflow = {
+        name: "until-run",
+        description: "Until run",
+        state: "none",
+        loop: 5,
+        until: { type: "run", run: "test -f done.txt" },
+        steps: [
+          {
+            type: "run",
+            name: "maybe-done",
+            run: 'if [ "{loop.iteration}" = "2" ]; then echo done > done.txt; fi',
+          },
+        ],
+        sourcePath: "/fake/path.yaml",
+      };
 
-    const { metadata, artifactDir } = await runWorkflow({
-      workflow,
-      input: "",
-      cwd: testDir,
-      shakaHome: artifactHome,
-    });
+      const { metadata, artifactDir } = await runWorkflow({
+        workflow,
+        input: "",
+        cwd: testDir,
+        shakaHome: artifactHome,
+      });
 
-    expect(metadata.status).toBe("completed");
-    expect(metadata.completedIterations).toBe(2);
-    expect(metadata.satisfiedAt).toBe(2);
-    expect(metadata.steps).toHaveLength(2);
-    expect(await Bun.file(join(artifactDir, "iter-1", "until.out")).exists()).toBe(true);
-    expect(await Bun.file(join(artifactDir, "iter-2", "until.out")).exists()).toBe(true);
-  });
+      expect(metadata.status).toBe("completed");
+      expect(metadata.completedIterations).toBe(2);
+      expect(metadata.satisfiedAt).toBe(2);
+      expect(metadata.steps).toHaveLength(2);
+      expect(await Bun.file(join(artifactDir, "iter-1", "until.out")).exists()).toBe(true);
+      expect(await Bun.file(join(artifactDir, "iter-2", "until.out")).exists()).toBe(true);
+    },
+  );
 
   test("until cap exhaustion completes with null satisfiedAt", async () => {
     const workflow: Workflow = {
@@ -1023,46 +1027,52 @@ describe("runWorkflow", () => {
     expect(metadata.steps[2]?.iteration).toBe(3);
   });
 
-  test("group until stops group loop and outer workflow continues", async () => {
-    const workflow: Workflow = {
-      name: "group-until",
-      description: "Group until",
-      state: "none",
-      loop: 1,
-      steps: [
-        {
-          type: "group",
-          name: "cycle",
-          loop: 5,
-          until: { type: "run", run: "test -f group-done.txt" },
-          steps: [
-            {
-              type: "run",
-              name: "inner",
-              run: 'if [ "{loop.iteration}" = "2" ]; then echo done > group-done.txt; fi',
-            },
-          ],
-        },
-        { type: "run", name: "after", run: "echo after" },
-      ],
-      sourcePath: "/fake/path.yaml",
-    };
+  // POSIX shell in the run steps ([ -f ] conditionals) — cmd.exe can't execute them.
+  test.skipIf(process.platform === "win32")(
+    "group until stops group loop and outer workflow continues",
+    async () => {
+      const workflow: Workflow = {
+        name: "group-until",
+        description: "Group until",
+        state: "none",
+        loop: 1,
+        steps: [
+          {
+            type: "group",
+            name: "cycle",
+            loop: 5,
+            until: { type: "run", run: "test -f group-done.txt" },
+            steps: [
+              {
+                type: "run",
+                name: "inner",
+                run: 'if [ "{loop.iteration}" = "2" ]; then echo done > group-done.txt; fi',
+              },
+            ],
+          },
+          { type: "run", name: "after", run: "echo after" },
+        ],
+        sourcePath: "/fake/path.yaml",
+      };
 
-    const { metadata, artifactDir } = await runWorkflow({
-      workflow,
-      input: "",
-      cwd: testDir,
-      shakaHome: artifactHome,
-    });
+      const { metadata, artifactDir } = await runWorkflow({
+        workflow,
+        input: "",
+        cwd: testDir,
+        shakaHome: artifactHome,
+      });
 
-    expect(metadata.status).toBe("completed");
-    expect(metadata.completedIterations).toBe(1);
-    expect(metadata.satisfiedAt).toBeNull();
-    expect(metadata.steps.map((step) => step.name)).toEqual(["inner", "inner", "after"]);
-    expect(await Bun.file(join(artifactDir, "cycle", "iter-1", "until.out")).exists()).toBe(true);
-    expect(await Bun.file(join(artifactDir, "cycle", "iter-2", "until.out")).exists()).toBe(true);
-    expect(await Bun.file(join(artifactDir, "cycle", "iter-3", "inner.out")).exists()).toBe(false);
-  });
+      expect(metadata.status).toBe("completed");
+      expect(metadata.completedIterations).toBe(1);
+      expect(metadata.satisfiedAt).toBeNull();
+      expect(metadata.steps.map((step) => step.name)).toEqual(["inner", "inner", "after"]);
+      expect(await Bun.file(join(artifactDir, "cycle", "iter-1", "until.out")).exists()).toBe(true);
+      expect(await Bun.file(join(artifactDir, "cycle", "iter-2", "until.out")).exists()).toBe(true);
+      expect(await Bun.file(join(artifactDir, "cycle", "iter-3", "inner.out")).exists()).toBe(
+        false,
+      );
+    },
+  );
 
   test("group step isolates stepMap from outer context", async () => {
     const workflow: Workflow = {
