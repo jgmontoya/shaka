@@ -344,7 +344,12 @@ Multi-step pipelines that chain commands, prompts, and shell scripts. Each step 
 
 ```yaml
 # review-and-fix.yaml
-description: Review code changes and fix issues found
+description: Review code changes and fix issues found — loops until the review is clean
+loop: 3
+until:
+  prompt: |
+    Read the code review in reviews/review.md. Condition: the review
+    reports no issues requiring code changes.
 steps:
   - name: review
     command: /code-review
@@ -352,7 +357,6 @@ steps:
     prompt: |
       Read the code review in reviews/review.md.
       Fix valid issues, skip incorrect suggestions.
-      Delete reviews/ when done.
 ```
 
 **Step types:**
@@ -376,6 +380,26 @@ steps:
 | `{loop.total}`            | Configured loop count                                      |
 
 **Looping:** Add `loop: N` to repeat all steps N times. Useful for iterative refinement patterns like test-fix cycles. Each iteration's artifacts are stored in `iter-N/` subdirectories. Use `--loop N` on the CLI to override.
+
+**Dynamic stopping (`until`):** Pair `loop: N` with an `until` condition to stop as soon as the work is good enough — the cap becomes a budget instead of a fixed count. The condition is evaluated after each iteration:
+
+```yaml
+loop: 5 # hard cap, required with until
+until:
+  run: bun test # exit code 0 = done, stop looping
+steps:
+  - name: fix
+    prompt: "Fix the failing tests. Errors: {previous.output}"
+```
+
+Two condition types:
+
+- `run:` — a shell check; exit code 0 stops the loop. Free and deterministic — prefer it whenever a scriptable check exists.
+- `prompt:` — an LLM judge. Write only the question ("Condition: all review comments are addressed"); Shaka appends a verdict instruction and strictly parses the reply's last line — `SATISFIED` stops, anything else continues. Costs one agent call per iteration.
+
+The condition sees the same template variables as steps, and its output lands in `iter-N/until.out` beside the step artifacts. Reaching the cap without satisfaction is still a completed run: `run.json` records `satisfiedAt` (the iteration that stopped early, or `null`), and the CLI prints `(satisfied after N/M iterations)` on early stops. Groups can carry their own `until` alongside their `loop`. A condition that fails to evaluate (crash, missing binary, no verdict line) counts as "not satisfied" — the loop continues, bounded by the cap.
+
+> **Codex note:** `codex exec` refuses to run outside a git repository, so prompt-type conditions (and `prompt` steps generally) in `state: none` workflows need the working directory to be a git repo.
 
 **Group steps:** Inline groups compose multiple steps under a single name with optional looping:
 
