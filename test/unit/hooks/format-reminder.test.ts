@@ -100,47 +100,59 @@ describe("format-reminder hook", () => {
     await rm(fakeShakaHome, { recursive: true, force: true });
   });
 
-  test("renders the reminder for the classified depth with the configured name", async () => {
-    const result = await runHook(promptInput("tweak the padding"), fakeShakaHome, {
-      classification: JSON.stringify({ depth: "ITERATION", capabilities: [], thinking: [] }),
-    });
+  // Classification tests need the sh-script claude shim — POSIX-only.
+  test.skipIf(process.platform === "win32")(
+    "renders the reminder for the classified depth with the configured name",
+    async () => {
+      const result = await runHook(promptInput("tweak the padding"), fakeShakaHome, {
+        classification: JSON.stringify({ depth: "ITERATION", capabilities: [], thinking: [] }),
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DEPTH: ITERATION");
-    expect(result.stdout).toContain("TestBot");
-  });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("DEPTH: ITERATION");
+      expect(result.stdout).toContain("TestBot");
+    },
+  );
 
-  test("renders selected capabilities and thinking tools", async () => {
-    const result = await runHook(promptInput("review this design"), fakeShakaHome, {
-      classification: JSON.stringify({
-        depth: "FULL",
-        capabilities: ["analyst"],
-        thinking: ["council"],
-      }),
-    });
+  test.skipIf(process.platform === "win32")(
+    "renders selected capabilities and thinking tools",
+    async () => {
+      const result = await runHook(promptInput("review this design"), fakeShakaHome, {
+        classification: JSON.stringify({
+          depth: "FULL",
+          capabilities: ["analyst"],
+          thinking: ["council"],
+        }),
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("DEPTH: FULL");
-    expect(result.stdout).toContain("Analyst → Algorithm (subagent_type=Algorithm)");
-    expect(result.stdout).toContain("council — Surfaces stronger decisions");
-  });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("DEPTH: FULL");
+      expect(result.stdout).toContain("Analyst → Algorithm (subagent_type=Algorithm)");
+      expect(result.stdout).toContain("council — Surfaces stronger decisions");
+    },
+  );
 
-  test("drops capability and tool keys that don't exist", async () => {
-    const result = await runHook(promptInput("do something"), fakeShakaHome, {
-      classification: JSON.stringify({
-        depth: "FULL",
-        capabilities: ["nonexistent-capability", "analyst"],
-        thinking: ["bogus-tool"],
-      }),
-    });
+  test.skipIf(process.platform === "win32")(
+    "drops capability and tool keys that don't exist",
+    async () => {
+      const result = await runHook(promptInput("do something"), fakeShakaHome, {
+        classification: JSON.stringify({
+          depth: "FULL",
+          capabilities: ["nonexistent-capability", "analyst"],
+          thinking: ["bogus-tool"],
+        }),
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Analyst");
-    expect(result.stdout).not.toContain("nonexistent-capability");
-    expect(result.stdout).not.toContain("bogus-tool");
-  });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Analyst");
+      expect(result.stdout).not.toContain("nonexistent-capability");
+      expect(result.stdout).not.toContain("bogus-tool");
+    },
+  );
 
-  test("falls back to FULL on an invalid depth", async () => {
+  // On Windows this would pass without the shim ever running (fail-safe is
+  // also FULL) — skip rather than assert the intent untested.
+  test.skipIf(process.platform === "win32")("falls back to FULL on an invalid depth", async () => {
     const result = await runHook(promptInput("hello"), fakeShakaHome, {
       classification: JSON.stringify({ depth: "BANANAS", capabilities: [], thinking: [] }),
     });
@@ -222,13 +234,17 @@ describe("format-reminder skill override", () => {
     await rm(overrideHome, { recursive: true, force: true });
   });
 
-  test("an installed skill overrides the system skill with the same key", async () => {
-    const result = await runHook(promptInput("decide something"), overrideHome, {
-      classification: JSON.stringify({ depth: "FULL", capabilities: [], thinking: ["council"] }),
-    });
+  // Needs the sh-script claude shim — POSIX-only.
+  test.skipIf(process.platform === "win32")(
+    "an installed skill overrides the system skill with the same key",
+    async () => {
+      const result = await runHook(promptInput("decide something"), overrideHome, {
+        classification: JSON.stringify({ depth: "FULL", capabilities: [], thinking: ["council"] }),
+      });
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain("Council Override — overridden description");
-    expect(result.stdout).not.toContain("Surfaces stronger decisions");
-  });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain("Council Override — overridden description");
+      expect(result.stdout).not.toContain("Surfaces stronger decisions");
+    },
+  );
 });

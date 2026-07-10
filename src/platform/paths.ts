@@ -10,6 +10,16 @@ import { readlink, rm, rmdir } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 /**
+ * Resolve an executable using the process's current PATH.
+ *
+ * Bun.which may use the startup environment when PATH is implicit, so pass
+ * the current value explicitly when callers have changed process.env.PATH.
+ */
+export function whichOnCurrentPath(executable: string): string | null {
+  return Bun.which(executable, { PATH: process.env.PATH ?? "" });
+}
+
+/**
  * Resolve a relative path from a module's location.
  * Use instead of `new URL(relative, import.meta.url).pathname`.
  *

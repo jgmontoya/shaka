@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-07-08
+
+### Added
+
+- **Dynamic `until` loops for workflows** - pair `loop: N` with an `until` condition on a workflow, a group, or a looped leaf step to stop iterating as soon as the work is good enough. The loop cap becomes a budget instead of a fixed count.
+  - `until: { run: ... }` runs a shell check — exit code 0 stops the loop. `until: { prompt: ... }` asks an LLM judge — you write only the question; Shaka appends a strict SATISFIED/CONTINUE verdict protocol and parses the reply's last line, so noisy output can never stop a loop by accident.
+  - `run.json` records `satisfiedAt` (the iteration that stopped early, or `null` when the cap was reached), the CLI shows each condition check live and prints `(satisfied after N/M iterations)`, and evaluation output is stored in `iter-N/until.out` beside step artifacts.
+  - The shipped `review-and-fix` workflow now loops (cap 3) until the review comes back clean.
+- **`shaka update --dry-run`** - preview exactly what an update would do — the version change and which providers get reinitialized — without touching anything.
+- **`steal-adapt-reject` skill** - codifies "what should we borrow from X?" into a report-only steal/adapt/reject decision table with verified premises and named rejections, so borrowed ideas are grounded and rejected ones stay rejected.
+- **Reasoning framework safeguards** - the assistant's PLAN phase now audits explicit asks and external prerequisites, EXECUTE gained a class-sweep step (fix the bug family, not just the instance), and VERIFY gained a re-read check backed by motion evidence.
+
+### Fixed
+
+- **`shaka update` no longer drops providers** - post-update reinitialization now replays every enabled provider; Codex and Pi were previously omitted, leaving them unwired after an update.
+- **Hook install failures are loud** - a hook file that fails to load now aborts init/update/reload with a clear error and a non-zero exit instead of silently installing an empty hook set and stripping provider wiring.
+- **Invalid Claude Code permission rule** - Shaka now installs `mcp__shaka__*` instead of the invalid `mcp__*` allow rule and migrates existing settings, clearing the warning Claude Code's `/doctor` reported.
+- **Workflow agent steps run in the step directory** - `prompt` and `command` steps previously ran the provider CLI in the invoking directory; in `state: git-branch` workflows they escaped the isolated worktree entirely.
+
 ## [0.12.0] - 2026-05-25
 
 ### Added

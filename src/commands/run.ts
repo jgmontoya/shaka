@@ -55,9 +55,11 @@ async function resolveWorkflow(shakaHome: string, name: string): Promise<Workflo
 function printSummary({ metadata, artifactDir }: RunResult): void {
   console.log("");
   const iterInfo =
-    metadata.totalIterations > 1
-      ? ` (${metadata.completedIterations}/${metadata.totalIterations} iterations)`
-      : "";
+    metadata.satisfiedAt != null
+      ? ` (satisfied after ${metadata.satisfiedAt}/${metadata.totalIterations} iterations)`
+      : metadata.totalIterations > 1
+        ? ` (${metadata.completedIterations}/${metadata.totalIterations} iterations)`
+        : "";
   console.log(`Status: ${metadata.status}${iterInfo}`);
   if (metadata.branch) console.log(`Branch: ${metadata.branch}`);
   console.log(`Artifacts: ${artifactDir}`);
@@ -113,6 +115,15 @@ export function createRunCommand(): Command {
         onStepComplete: (name, exitCode, durationMs) => {
           const icon = exitCode === 0 ? "✓" : "✗";
           console.log(`  ${icon} ${name} completed (${durationMs}ms)`);
+        },
+        onUntilStart: (iteration) => {
+          const iterPrefix = workflow.loop > 1 ? `[iter ${iteration}/${workflow.loop}] ` : "";
+          console.log(`${iterPrefix}Checking until condition...`);
+        },
+        onUntilResult: (satisfied, _iteration, durationMs) => {
+          const icon = satisfied ? "✓" : "↻";
+          const verdict = satisfied ? "satisfied" : "continue";
+          console.log(`  ${icon} until ${verdict} (${durationMs}ms)`);
         },
       });
       printSummary(result);

@@ -156,33 +156,36 @@ describe("process-runner", () => {
     },
   );
 
-  test.skipIf(process.platform === "win32")("honors timeout 0 as an immediate timeout", async () => {
-    const root = join(
-      tmpdir(),
-      `shaka-process-runner-zero-timeout-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    );
-    const script = join(root, "hang");
-    try {
-      await mkdir(root, { recursive: true });
-      await Bun.write(
-        script,
-        [
-          "#!/bin/sh",
-          "exec bun -e 'process.on(\"SIGTERM\", () => {}); setInterval(() => {}, 1000);'",
-          "",
-        ].join("\n"),
+  test.skipIf(process.platform === "win32")(
+    "honors timeout 0 as an immediate timeout",
+    async () => {
+      const root = join(
+        tmpdir(),
+        `shaka-process-runner-zero-timeout-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       );
-      await chmod(script, 0o755);
+      const script = join(root, "hang");
+      try {
+        await mkdir(root, { recursive: true });
+        await Bun.write(
+          script,
+          [
+            "#!/bin/sh",
+            "exec bun -e 'process.on(\"SIGTERM\", () => {}); setInterval(() => {}, 1000);'",
+            "",
+          ].join("\n"),
+        );
+        await chmod(script, 0o755);
 
-      const result = await runProcess({ command: script, timeout: 0, killGraceMs: 25 });
+        const result = await runProcess({ command: script, timeout: 0, killGraceMs: 25 });
 
-      expect(result.exitCode).toBe(1);
-      expect(result.timedOut).toBe(true);
-      expect(result.stderr).toContain("Timeout after 0ms");
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        expect(result.exitCode).toBe(1);
+        expect(result.timedOut).toBe(true);
+        expect(result.stderr).toContain("Timeout after 0ms");
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   test.skipIf(process.platform === "win32")(
     "returns after kill grace when descendants keep stdio open",

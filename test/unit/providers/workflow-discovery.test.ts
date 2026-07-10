@@ -315,6 +315,141 @@ steps:
     expect(workflows[0]?.loop).toBe(3);
   });
 
+  test("parses top-level until condition", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "looped.yaml"),
+      `description: Looped workflow
+loop: 3
+until:
+  run: bun test
+steps:
+  - name: fix
+    run: echo fix`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows).toHaveLength(1);
+    expect(workflows[0]?.until).toEqual({ type: "run", run: "bun test" });
+  });
+
+  test("rejects top-level until without an explicit loop cap", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-until.yaml"),
+      `description: Bad until
+until:
+  run: bun test
+steps:
+  - name: fix
+    run: echo fix`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("loop >= 2");
+  });
+
+  test("rejects malformed until definitions", async () => {
+    const cases = [
+      [
+        "until-command",
+        `description: Command until
+loop: 2
+until:
+  command: /code-review
+steps:
+  - name: fix
+    run: echo fix`,
+      ],
+      [
+        "until-both",
+        `description: Both until keys
+loop: 2
+until:
+  prompt: Is it done?
+  run: bun test
+steps:
+  - name: fix
+    run: echo fix`,
+      ],
+      [
+        "until-empty-object",
+        `description: Empty until
+loop: 2
+until: {}
+steps:
+  - name: fix
+    run: echo fix`,
+      ],
+      [
+        "until-empty-value",
+        `description: Empty until value
+loop: 2
+until:
+  run: ""
+steps:
+  - name: fix
+    run: echo fix`,
+      ],
+      [
+        "until-non-object",
+        `description: Scalar until
+loop: 2
+until: bun test
+steps:
+  - name: fix
+    run: echo fix`,
+      ],
+    ] as const;
+
+    for (const [name, yaml] of cases) {
+      await Bun.write(join(testHome, "system", "workflows", `${name}.yaml`), yaml);
+    }
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(cases.length);
+    for (const [name] of cases) {
+      const error = errors.find((entry) => entry.name === name)?.error;
+      expect(error).toContain("until");
+    }
+  });
+
+  test("rejects direct child step named until when top-level until is present", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-until-name.yaml"),
+      `description: Bad until name
+loop: 2
+until:
+  run: bun test
+steps:
+  - name: until
+    run: echo collides`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain('cannot be named "until"');
+  });
+
+  test("allows step named until when no until condition is present", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "allowed-until-name.yaml"),
+      `description: Allowed until name
+steps:
+  - name: until
+    run: echo allowed`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    expect(workflows[0]?.steps[0]?.name).toBe("until");
+  });
+
   test("rejects loop: 0", async () => {
     await Bun.write(
       join(testHome, "system", "workflows", "bad.yaml"),
@@ -435,6 +570,32 @@ steps:
     expect(steps[2]?.type).toBe("run");
   });
 
+  test("parses inline group until condition", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "group-until.yaml"),
+      `description: Group with until
+steps:
+  - name: review-fix
+    loop: 3
+    until:
+      prompt: Is the review clean?
+    steps:
+      - name: review
+        run: echo review
+      - name: fix
+        run: echo fix`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    const group = workflows[0]?.steps[0];
+    expect(group?.type).toBe("group");
+    if (group?.type === "group") {
+      expect(group.until).toEqual({ type: "prompt", prompt: "Is the review clean?" });
+    }
+  });
+
   test("inline group defaults loop to 1", async () => {
     await Bun.write(
       join(testHome, "system", "workflows", "group-no-loop.yaml"),
@@ -456,6 +617,45 @@ steps:
     if (group.type === "group") {
       expect(group.loop).toBe(1);
     }
+  });
+
+  test("rejects inline group until without loop cap", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-group-until.yaml"),
+      `description: Bad group until
+steps:
+  - name: review-fix
+    until:
+      run: bun test
+    steps:
+      - name: fix
+        run: echo fix`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("loop >= 2");
+  });
+
+  test("rejects direct child step named until when inline group until is present", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-group-until-name.yaml"),
+      `description: Bad group until name
+steps:
+  - name: review-fix
+    loop: 2
+    until:
+      run: bun test
+    steps:
+      - name: until
+        run: echo collides`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain('cannot be named "until"');
   });
 
   test("rejects inline group with empty steps", async () => {
@@ -503,6 +703,29 @@ steps:
     }
   });
 
+  test("leaf step with loop carries until to normalized group", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "retry-until.yaml"),
+      `description: Retry until
+steps:
+  - name: test
+    run: bun test
+    loop: 3
+    until:
+      run: bun test`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    const step = workflows[0]?.steps[0];
+    expect(step?.type).toBe("group");
+    if (step?.type === "group") {
+      expect(step.until).toEqual({ type: "run", run: "bun test" });
+      expect(step.steps[0]?.type).toBe("run");
+    }
+  });
+
   test("leaf step with loop: 1 stays as leaf", async () => {
     await Bun.write(
       join(testHome, "system", "workflows", "no-retry.yaml"),
@@ -516,6 +739,41 @@ steps:
     const { workflows } = await discoverWorkflows(testHome);
 
     expect(workflows[0]!.steps[0]!.type).toBe("run");
+  });
+
+  test("rejects leaf step until without loop cap", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-leaf-until.yaml"),
+      `description: Bad leaf until
+steps:
+  - name: fix
+    run: echo fix
+    until:
+      run: bun test`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("loop >= 2");
+  });
+
+  test("rejects leaf step named until when leaf until is present", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "bad-leaf-until-name.yaml"),
+      `description: Bad leaf until name
+steps:
+  - name: until
+    run: echo fix
+    loop: 2
+    until:
+      run: bun test`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain('cannot be named "until"');
   });
 
   test("rejects step with both workflow and run keys", async () => {
@@ -613,6 +871,38 @@ steps:
     expect(pipeline.steps[2]?.type).toBe("run");
   });
 
+  test("workflow reference preserves target until condition", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "review-and-fix.yaml"),
+      `description: Review and fix
+loop: 3
+until:
+  run: bun test
+steps:
+  - name: review
+    run: echo review
+  - name: fix
+    run: echo fix`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "full-pipeline.yaml"),
+      `description: Full pipeline
+steps:
+  - name: review-cycle
+    workflow: review-and-fix`,
+    );
+
+    const { workflows, errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(0);
+    const pipeline = workflows.find((w) => w.name === "full-pipeline")!;
+    const group = pipeline.steps[0];
+    expect(group?.type).toBe("group");
+    if (group?.type === "group") {
+      expect(group.until).toEqual({ type: "run", run: "bun test" });
+    }
+  });
+
   test("rejects empty workflow reference value", async () => {
     await Bun.write(
       join(testHome, "system", "workflows", "bad-ref.yaml"),
@@ -626,6 +916,31 @@ steps:
 
     expect(errors).toHaveLength(1);
     expect(errors[0]?.error).toContain("non-empty string");
+  });
+
+  test("rejects until on workflow reference step", async () => {
+    await Bun.write(
+      join(testHome, "system", "workflows", "child.yaml"),
+      `description: Child
+steps:
+  - name: step1
+    run: echo child`,
+    );
+    await Bun.write(
+      join(testHome, "system", "workflows", "parent.yaml"),
+      `description: Parent
+steps:
+  - name: child-cycle
+    workflow: child
+    until:
+      run: bun test`,
+    );
+
+    const { errors } = await discoverWorkflows(testHome);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.error).toContain("workflow reference");
+    expect(errors[0]?.error).toContain("until");
   });
 
   test("rejects invalid loop on inline group", async () => {

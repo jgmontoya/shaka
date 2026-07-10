@@ -1,6 +1,12 @@
-description: Review code changes and fix issues found
-# Override with --loop N for deeper refinement cycles.
-loop: 1
+description: Review code changes and fix issues found — loops until the review is clean
+# Override with --loop N for a different refinement budget.
+loop: 3
+until:
+  prompt: |
+    Read the code review in reviews/review.md. Condition: the review reports no
+    issues requiring code changes (an empty or absent Issues section; suggestions,
+    praise, and comments about the reviews/ directory itself don't count — the
+    review file is a workflow artifact, not part of the change under review).
 steps:
   - name: review
     command: /code-review
@@ -17,5 +23,3 @@ steps:
       Think critically and objectively. Our goal is to write good, correct software. Follow clean code and clean architecture best practices as well as idiomatic language standards and conventions. Be careful not to introduce complexity unless it provides clear value.
 
       We aim to write code that is a pleasure to read. We care about how code reads, how code looks, and how code makes you feel when you read it. We value simplicity. We deliberately set a high bar for every code change.
-
-      After making fixes, delete the reviews/ directory — the review has been addressed and the file is no longer needed.
