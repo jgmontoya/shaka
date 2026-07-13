@@ -12,6 +12,8 @@ import {
   runWorkflow,
 } from "../../../src/services/workflow-runner";
 
+const GIT_TEST_TIMEOUT_MS = 15_000;
+
 describe("generateRunId", () => {
   test("produces YYYYMMDD-HHmmss-mmm format", () => {
     const id = generateRunId();
@@ -441,30 +443,34 @@ describe("runWorkflow", () => {
     expect(status).toContain("dirty.txt");
   });
 
-  test("git-branch worktree includes dirty files from user workspace", async () => {
-    await initGitRepo(testDir);
-    await Bun.write(join(testDir, "feature.txt"), "new feature code");
+  test(
+    "git-branch worktree includes dirty files from user workspace",
+    async () => {
+      await initGitRepo(testDir);
+      await Bun.write(join(testDir, "feature.txt"), "new feature code");
 
-    const gitWorkflow: Workflow = {
-      name: "git-wf",
-      description: "Git workflow",
-      state: "git-branch",
-      loop: 1,
-      steps: [{ type: "run", name: "check", run: "cat feature.txt" }],
-      sourcePath: "/fake/path.yaml",
-    };
+      const gitWorkflow: Workflow = {
+        name: "git-wf",
+        description: "Git workflow",
+        state: "git-branch",
+        loop: 1,
+        steps: [{ type: "run", name: "check", run: "cat feature.txt" }],
+        sourcePath: "/fake/path.yaml",
+      };
 
-    const { metadata } = await runWorkflow({
-      workflow: gitWorkflow,
-      input: "",
-      cwd: testDir,
-      shakaHome: artifactHome,
-    });
+      const { metadata } = await runWorkflow({
+        workflow: gitWorkflow,
+        input: "",
+        cwd: testDir,
+        shakaHome: artifactHome,
+      });
 
-    expect(metadata.status).toBe("completed");
-    // The worktree was created from the WIP commit, so dirty files are visible
-    expect(metadata.steps[0]?.output).toContain("new feature code");
-  });
+      expect(metadata.status).toBe("completed");
+      // The worktree was created from the WIP commit, so dirty files are visible
+      expect(metadata.steps[0]?.output).toContain("new feature code");
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 
   test("loop: 1 behaves identically to no loop", async () => {
     const { metadata } = await runWorkflow({

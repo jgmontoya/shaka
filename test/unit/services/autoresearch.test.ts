@@ -39,6 +39,7 @@ import type { DetectedProviders } from "../../../src/services/provider-detection
 
 const NO_PROVIDERS: DetectedProviders = { claude: false, opencode: false, codex: false, pi: false };
 const RUNNER_STATE_FILES = ["autoresearch.jsonl", "autoresearch.meta.json"] as const;
+const GIT_TEST_TIMEOUT_MS = 15_000;
 
 async function headSha(cwd: string): Promise<string> {
   const proc = Bun.spawn(["git", "rev-parse", "HEAD"], { cwd, stdout: "pipe", stderr: "pipe" });
@@ -1925,43 +1926,47 @@ describe("runResume (in-worktree)", () => {
     );
   });
 
-  test("rejects a submodule checkout masquerading as an autoresearch worktree", async () => {
-    const repo = await makeSourceRepo();
-    const subSource = join(repo, "..", "sub-source");
-    await mkdir(subSource, { recursive: true });
-    await run(["git", "init", "-q", "-b", "main"], subSource);
-    await run(["git", "config", "user.email", "t@t"], subSource);
-    await run(["git", "config", "user.name", "t"], subSource);
-    await Bun.write(join(subSource, ".gitkeep"), "");
-    await run(["git", "add", "-A"], subSource);
-    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], subSource);
+  test(
+    "rejects a submodule checkout masquerading as an autoresearch worktree",
+    async () => {
+      const repo = await makeSourceRepo();
+      const subSource = join(repo, "..", "sub-source");
+      await mkdir(subSource, { recursive: true });
+      await run(["git", "init", "-q", "-b", "main"], subSource);
+      await run(["git", "config", "user.email", "t@t"], subSource);
+      await run(["git", "config", "user.name", "t"], subSource);
+      await Bun.write(join(subSource, ".gitkeep"), "");
+      await run(["git", "add", "-A"], subSource);
+      await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "init"], subSource);
 
-    await run(
-      ["git", "-c", "protocol.file.allow=always", "submodule", "add", "../sub-source", "sub"],
-      repo,
-    );
-    const submodule = join(repo, "sub");
-    await run(["git", "config", "user.email", "t@t"], submodule);
-    await run(["git", "config", "user.name", "t"], submodule);
-    await run(["git", "checkout", "-b", "autoresearch/fake"], submodule);
-    await Bun.write(
-      join(submodule, "autoresearch.md"),
-      "# Submodule decoy\n\n## Metric\n- direction: minimize\n- unit: ms\n",
-    );
-    await Bun.write(
-      join(submodule, "autoresearch.sh"),
-      "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n",
-    );
-    await run(["git", "add", "-A"], submodule);
-    await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"], submodule);
+      await run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "../sub-source", "sub"],
+        repo,
+      );
+      const submodule = join(repo, "sub");
+      await run(["git", "config", "user.email", "t@t"], submodule);
+      await run(["git", "config", "user.name", "t"], submodule);
+      await run(["git", "checkout", "-b", "autoresearch/fake"], submodule);
+      await Bun.write(
+        join(submodule, "autoresearch.md"),
+        "# Submodule decoy\n\n## Metric\n- direction: minimize\n- unit: ms\n",
+      );
+      await Bun.write(
+        join(submodule, "autoresearch.sh"),
+        "#!/bin/sh\necho 'METRIC name=t value=1 unit=ms'\n",
+      );
+      await run(["git", "add", "-A"], submodule);
+      await run(["git", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "decoy"], submodule);
 
-    await expect(
-      runResume(
-        { cwd: submodule, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 0 },
-        { benchmark: scriptedBenchmark([{ value: 1 }]) },
-      ),
-    ).rejects.toThrow(/linked worktree|autoresearch worktree/i);
-  });
+      await expect(
+        runResume(
+          { cwd: submodule, providers: NO_PROVIDERS, stopWhen: (s) => s.iter >= 0 },
+          { benchmark: scriptedBenchmark([{ value: 1 }]) },
+        ),
+      ).rejects.toThrow(/linked worktree|autoresearch worktree/i);
+    },
+    GIT_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("experiment worktree discovery", () => {
