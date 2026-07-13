@@ -25,10 +25,21 @@ export interface RunShakaResult {
 
 export function makeRunShaka(testHome: string) {
   return function runShaka(args: string[], stdin = ""): RunShakaResult {
+    const testUserHome = join(testHome, ".user-home");
     const result = spawnSync("bun", [ENTRY, ...args], {
       input: stdin,
       encoding: "utf8",
-      env: { ...process.env, SHAKA_HOME: testHome, NO_COLOR: "1" },
+      env: {
+        ...process.env,
+        HOME: testUserHome,
+        USERPROFILE: testUserHome,
+        XDG_CONFIG_HOME: join(testUserHome, ".config"),
+        CLAUDE_CONFIG_DIR: join(testUserHome, ".claude"),
+        CODEX_HOME: join(testUserHome, ".codex"),
+        PI_CODING_AGENT_DIR: join(testUserHome, ".pi", "agent"),
+        SHAKA_HOME: testHome,
+        NO_COLOR: "1",
+      },
       timeout: 30_000,
     });
     // Surface transport failures (timeouts, ENOENT, signal kills) to the

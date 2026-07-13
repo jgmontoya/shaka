@@ -6,14 +6,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { logProviderStatus } from "../../../src/commands/uninstall";
 import type { UninstallResult } from "../../../src/services/uninstall-service";
 import { makeRunShaka } from "../../helpers/run-shaka";
 
 const TEST_HOME = join(tmpdir(), `shaka-uninstall-cli-${process.pid}`);
+const AMBIENT_HOME = join(tmpdir(), `shaka-uninstall-cli-ambient-${process.pid}`);
 const runShaka = makeRunShaka(TEST_HOME);
 
 function captureConsole(fn: () => void): string {
@@ -32,14 +33,65 @@ function captureConsole(fn: () => void): string {
 
 beforeEach(async () => {
   await rm(TEST_HOME, { recursive: true, force: true });
+  await rm(AMBIENT_HOME, { recursive: true, force: true });
   await mkdir(TEST_HOME, { recursive: true });
 });
 
 afterEach(async () => {
   await rm(TEST_HOME, { recursive: true, force: true });
+  await rm(AMBIENT_HOME, { recursive: true, force: true });
 });
 
 describe("shaka uninstall — CLI flag contract", () => {
+  test.skipIf(process.platform === "win32")(
+    "CLI subprocesses cannot remove hooks from the ambient Claude home",
+    async () => {
+      const ambientClaudeHome = join(AMBIENT_HOME, ".claude");
+      const settingsPath = join(ambientClaudeHome, "settings.json");
+      const settings = {
+        hooks: {
+          SessionStart: [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "bun /ambient/shaka/system/hooks/session-start.ts",
+                },
+              ],
+            },
+          ],
+        },
+      };
+      await mkdir(ambientClaudeHome, { recursive: true });
+      await Bun.write(settingsPath, JSON.stringify(settings));
+
+      const binDir = join(AMBIENT_HOME, "bin");
+      const claudeShim = join(binDir, "claude");
+      await mkdir(binDir, { recursive: true });
+      await Bun.write(claudeShim, "#!/bin/sh\nexit 0\n");
+      await chmod(claudeShim, 0o755);
+
+      const originalEnv = { ...process.env };
+      try {
+        process.env.HOME = AMBIENT_HOME;
+        process.env.USERPROFILE = AMBIENT_HOME;
+        process.env.XDG_CONFIG_HOME = join(AMBIENT_HOME, ".config");
+        process.env.PI_CODING_AGENT_DIR = join(AMBIENT_HOME, ".pi", "agent");
+        process.env.PATH = `${binDir}${delimiter}${dirname(process.execPath)}`;
+
+        const result = runShaka(["uninstall"], "\n");
+
+        expect(result.status).toBe(0);
+        expect(await Bun.file(settingsPath).json()).toEqual(settings);
+      } finally {
+        for (const key of Object.keys(process.env)) {
+          if (!(key in originalEnv)) delete process.env[key];
+        }
+        Object.assign(process.env, originalEnv);
+      }
+    },
+  );
+
   test("unscoped uninstall prompt treats config.json as personal data", () => {
     const result = runShaka(["uninstall"], "\n");
     expect(result.status).toBe(0);
