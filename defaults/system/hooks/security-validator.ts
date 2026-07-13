@@ -32,7 +32,7 @@ export const TRIGGER = ["tool.before"] as const;
 /** Tool matchers - which tools this hook validates */
 export const MATCHER = ["Bash", "Edit", "Write", "Read"] as const;
 
-export const HOOK_VERSION = "0.2.0";
+export const HOOK_VERSION = "0.3.0";
 
 // Types
 interface HookInput {
@@ -49,6 +49,25 @@ interface SecurityEvent {
   target: string;
   reason?: string;
 }
+
+interface FileOperation {
+  path: string;
+  operation: "write" | "delete";
+}
+
+type PatchDirectiveKind = "add" | "delete" | "update" | "move";
+
+interface PatchDirective {
+  kind: PatchDirectiveKind;
+  path: string;
+}
+
+const PATCH_DIRECTIVES: ReadonlyArray<readonly [string, PatchDirectiveKind]> = [
+  ["*** Add File: ", "add"],
+  ["*** Delete File: ", "delete"],
+  ["*** Update File: ", "update"],
+  ["*** Move to: ", "move"],
+];
 
 // Config loading with caching
 let patternsCache: PatternsConfig | null = null;
@@ -137,6 +156,85 @@ function handleFileOperation(
   handleValidationResult(input, tool, filePath, result, shakaHome);
 }
 
+function parseApplyPatchOperations(command: string): FileOperation[] {
+  const operations: FileOperation[] = [];
+  let currentUpdate: { index: number; path: string } | null = null;
+
+  for (const line of applyPatchBody(command)) {
+    const directive = parsePatchDirective(line);
+    if (!directive) continue;
+
+    switch (directive.kind) {
+      case "add":
+        operations.push({ path: directive.path, operation: "write" });
+        currentUpdate = null;
+        break;
+      case "delete":
+        operations.push({ path: directive.path, operation: "delete" });
+        currentUpdate = null;
+        break;
+      case "update":
+        currentUpdate = { index: operations.length, path: directive.path };
+        operations.push({ path: directive.path, operation: "write" });
+        break;
+      case "move":
+        if (!currentUpdate) break;
+        operations[currentUpdate.index] = { path: currentUpdate.path, operation: "delete" };
+        operations.push({ path: directive.path, operation: "write" });
+        currentUpdate = null;
+        break;
+    }
+  }
+
+  return operations;
+}
+
+function applyPatchBody(command: string): string[] {
+  const lines = command.split(/\r?\n/);
+  const start = lines.indexOf("*** Begin Patch");
+  if (start === -1) return [];
+  const end = lines.indexOf("*** End Patch", start + 1);
+  return lines.slice(start + 1, end === -1 ? undefined : end);
+}
+
+function parsePatchDirective(line: string): PatchDirective | null {
+  const directive = PATCH_DIRECTIVES.find(([prefix]) => line.startsWith(prefix));
+  if (!directive) return null;
+  const [prefix, kind] = directive;
+  const path = line.slice(prefix.length).trim();
+  return path ? { kind, path } : null;
+}
+
+function handleApplyPatch(input: HookInput, shakaHome: string, patterns: PatternsConfig): void {
+  const command =
+    typeof input.tool_input === "string"
+      ? input.tool_input
+      : ((input.tool_input?.command as string) ?? "");
+  const operations = parseApplyPatchOperations(command);
+
+  if (operations.length === 0) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
+
+  const validations = operations.map((operation) => ({
+    ...operation,
+    result: validatePath(operation.path, operation.operation, patterns),
+  }));
+  const selected =
+    validations.find(({ result }) => result.action === "block") ??
+    validations.find(({ result }) => result.action === "confirm") ??
+    validations.find(({ result }) => result.action === "alert") ??
+    validations[0];
+
+  if (!selected) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
+
+  handleValidationResult(input, "apply_patch", selected.path, selected.result, shakaHome);
+}
+
 function handleValidationResult(
   input: HookInput,
   tool: string,
@@ -166,7 +264,7 @@ function handleValidationResult(
       console.log(
         JSON.stringify({
           decision: "ask",
-          message: `[SHAKA SECURITY] ${result.reason}\n\nTarget: ${target.slice(0, 200)}\n\nProceed?`,
+          message: `[SHAKA SECURITY] ${result.reason}\n\nTarget: ${target.slice(0, 200)}`,
         }),
       );
       break;
@@ -218,6 +316,9 @@ async function main(): Promise<void> {
       break;
     case "Read":
       handleFileOperation(input, "Read", "read", shakaHome, patterns);
+      break;
+    case "apply_patch":
+      handleApplyPatch(input, shakaHome, patterns);
       break;
     default:
       console.log(JSON.stringify({ continue: true }));

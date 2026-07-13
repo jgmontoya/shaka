@@ -45,6 +45,14 @@ function bashInput(command: string): string {
   });
 }
 
+function applyPatchInput(command: string): string {
+  return JSON.stringify({
+    session_id: "test-session",
+    tool_name: "apply_patch",
+    tool_input: { command },
+  });
+}
+
 async function loggedEventFiles(shakaHome: string, eventType: string): Promise<string[]> {
   return Array.fromAsync(
     new Bun.Glob(`**/security-${eventType}-*.json`).scan({
@@ -157,6 +165,69 @@ describe("security-validator hook", () => {
 
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(result.stdout).decision).toBe("ask");
+  });
+
+  test("asks before apply_patch writes to a protected dotfile", async () => {
+    const result = await runHook(
+      applyPatchInput(
+        [
+          "*** Begin Patch",
+          "*** Update File: /some/project/.env",
+          "@@",
+          "-OLD=value",
+          "+NEW=value",
+          "*** End Patch",
+        ].join("\n"),
+      ),
+      fakeShakaHome,
+    );
+
+    expect(result.exitCode).toBe(0);
+    const output = JSON.parse(result.stdout);
+    expect(output.decision).toBe("ask");
+    expect(output.message).toContain("/some/project/.env");
+  });
+
+  test("hard-blocks the strongest violation across all apply_patch files", async () => {
+    const result = await runHook(
+      applyPatchInput(
+        [
+          "*** Begin Patch",
+          "*** Update File: /some/project/.env",
+          "@@",
+          "-OLD=value",
+          "+NEW=value",
+          "*** Delete File: /some/project/.git/config",
+          "*** End Patch",
+        ].join("\n"),
+      ),
+      fakeShakaHome,
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Cannot delete protected path");
+    expect(result.stderr).toContain("/some/project/.git/config");
+  });
+
+  test("validates both sides of an apply_patch move", async () => {
+    const result = await runHook(
+      applyPatchInput(
+        [
+          "*** Begin Patch",
+          "*** Update File: /some/project/.git/config",
+          "*** Move to: /some/project/config",
+          "@@",
+          "-old",
+          "+new",
+          "*** End Patch",
+        ].join("\n"),
+      ),
+      fakeShakaHome,
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("Cannot delete protected path");
+    expect(result.stderr).toContain("/some/project/.git/config");
   });
 
   test("fails open on empty stdin", async () => {

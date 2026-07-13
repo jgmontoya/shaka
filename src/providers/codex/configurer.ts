@@ -9,7 +9,7 @@
  * Each hook declares its trigger event via: TRIGGER: EventName
  */
 
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { type Result, err, ok } from "../../domain/result";
@@ -42,6 +42,112 @@ import {
   renderCodexHooksJson,
   renderCodexWrapper,
 } from "./runtime-templates";
+
+interface CodexHookHandler {
+  command?: unknown;
+}
+
+interface CodexHookEntry {
+  hooks: CodexHookHandler[];
+  matcher?: unknown;
+}
+
+interface CodexHooksConfig {
+  hooks: Record<string, CodexHookEntry[]>;
+  [key: string]: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isShakaHookCommand(command: unknown): boolean {
+  return (
+    typeof command === "string" &&
+    (command.includes("shaka-hook-wrapper") || command.includes("shaka-session-debounce"))
+  );
+}
+
+function parseHookEntries(event: string, value: unknown): CodexHookEntry[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Codex hooks.json event ${JSON.stringify(event)} must contain an array`);
+  }
+
+  return value.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      !Array.isArray(entry.hooks) ||
+      !entry.hooks.every((hook) => isRecord(hook))
+    ) {
+      throw new Error(`Codex hooks.json event ${JSON.stringify(event)} contains an invalid entry`);
+    }
+    return { ...entry, hooks: entry.hooks } as CodexHookEntry;
+  });
+}
+
+function withoutShakaHooks(hooks: Record<string, unknown>): Record<string, CodexHookEntry[]> {
+  const cleaned: Record<string, CodexHookEntry[]> = {};
+
+  for (const [event, value] of Object.entries(hooks)) {
+    const entries = parseHookEntries(event, value)
+      .map((entry) => ({
+        ...entry,
+        hooks: entry.hooks.filter((hook) => !isShakaHookCommand(hook.command)),
+      }))
+      .filter((entry) => entry.hooks.length > 0);
+
+    if (entries.length > 0) cleaned[event] = entries;
+  }
+
+  return cleaned;
+}
+
+async function loadHooksConfig(hooksPath: string): Promise<CodexHooksConfig> {
+  const file = Bun.file(hooksPath);
+  if (!(await file.exists())) return { hooks: {} };
+
+  let parsed: unknown;
+  try {
+    parsed = await file.json();
+  } catch (error) {
+    const cause = error instanceof Error ? error.message : String(error);
+    throw new Error(`Cannot update invalid Codex hooks.json: ${cause}`);
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error("Cannot update invalid Codex hooks.json: expected an object");
+  }
+  if (parsed.hooks !== undefined && !isRecord(parsed.hooks)) {
+    throw new Error("Cannot update invalid Codex hooks.json: hooks must be an object");
+  }
+
+  return {
+    ...parsed,
+    hooks: withoutShakaHooks((parsed.hooks as Record<string, unknown> | undefined) ?? {}),
+  };
+}
+
+function mergeHooksConfig(
+  existing: CodexHooksConfig,
+  generated: { hooks: Record<string, CodexHookEntry[]> },
+): CodexHooksConfig {
+  const hooks = { ...existing.hooks };
+  for (const [event, entries] of Object.entries(generated.hooks)) {
+    hooks[event] = [...(hooks[event] ?? []), ...entries];
+  }
+  return { ...existing, hooks };
+}
+
+async function writeAtomically(path: string, content: string): Promise<void> {
+  const tempPath = `${path}.shaka-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.tmp`;
+  try {
+    await Bun.write(tempPath, content);
+    await rename(tempPath, path);
+  } catch (error) {
+    await unlink(tempPath).catch(() => {});
+    throw error;
+  }
+}
 
 export class CodexProviderConfigurer implements ProviderConfigurer {
   readonly name = "codex" as const;
@@ -78,25 +184,33 @@ export class CodexProviderConfigurer implements ProviderConfigurer {
       const discoveredHooks = await discoverAllHooks(config.shakaHome);
       const sessionEndHooks = discoveredHooks.filter((h) => h.event === "session.end");
 
-      // 3. Generate hook wrapper script (includes marker deletion for UserPromptSubmit)
+      const hooksPath = join(this.codexHome, "hooks.json");
       const wrapperPath = join(this.codexHome, "shaka-hook-wrapper.ts");
-      await Bun.write(
+      const debouncePath =
+        sessionEndHooks.length > 0 ? join(this.codexHome, "shaka-session-debounce.ts") : null;
+      const hooksJson = mergeHooksConfig(
+        await loadHooksConfig(hooksPath),
+        renderCodexHooksJson(discoveredHooks, wrapperPath, debouncePath),
+      );
+
+      // 3. Generate hook wrapper script (includes marker deletion for UserPromptSubmit)
+      await writeAtomically(
         wrapperPath,
         renderCodexWrapper(config.shakaHome, sessionEndHooks.length > 0),
       );
 
       // 4. Generate debounce scripts if session.end hooks exist
-      let debouncePath: string | null = null;
-      if (sessionEndHooks.length > 0) {
-        debouncePath = join(this.codexHome, "shaka-session-debounce.ts");
+      if (debouncePath) {
         const workerPath = join(this.codexHome, "shaka-debounce-worker.ts");
-        await Bun.write(debouncePath, renderCodexDebounce(config.shakaHome, workerPath));
-        await Bun.write(workerPath, renderCodexDebounceWorker(config.shakaHome, sessionEndHooks));
+        await writeAtomically(debouncePath, renderCodexDebounce(config.shakaHome, workerPath));
+        await writeAtomically(
+          workerPath,
+          renderCodexDebounceWorker(config.shakaHome, sessionEndHooks),
+        );
       }
 
       // 5. Write hooks.json
-      const hooksJson = renderCodexHooksJson(discoveredHooks, wrapperPath, debouncePath);
-      await Bun.write(join(this.codexHome, "hooks.json"), JSON.stringify(hooksJson, null, 2));
+      await writeAtomically(hooksPath, JSON.stringify(hooksJson, null, 2));
 
       // 6. Install agent symlinks (kept for backward compat)
       await installAssetSymlink(
@@ -195,47 +309,20 @@ export class CodexProviderConfigurer implements ProviderConfigurer {
 
   /**
    * Remove Shaka-managed hooks from hooks.json, preserving user-added hooks.
-   * Shaka hooks are identified by their command containing "shaka" in the path.
+   * Shaka hooks are identified by their generated wrapper or debounce command.
    * If only Shaka hooks existed, the file is deleted entirely.
    */
   private async removeShakaHooks(hooksPath: string): Promise<void> {
     const file = Bun.file(hooksPath);
     if (!(await file.exists())) return;
 
-    let config: { hooks: Record<string, unknown[]> };
-    try {
-      config = (await file.json()) as typeof config;
-    } catch {
-      await unlink(hooksPath);
-      return;
-    }
+    const config = await loadHooksConfig(hooksPath);
+    const hasOtherConfig = Object.keys(config).some((key) => key !== "hooks");
 
-    if (!config.hooks) {
-      await unlink(hooksPath);
-      return;
-    }
-
-    // Filter each event's hook list, keeping only non-shaka entries
-    const cleaned: Record<string, unknown[]> = {};
-    for (const [event, entries] of Object.entries(config.hooks)) {
-      const kept = (entries as Array<{ hooks?: Array<{ command?: string }> }>).filter((entry) => {
-        const commands = entry.hooks ?? [];
-        // Shaka hooks reference the wrapper or debounce scripts in ~/.codex/
-        return !commands.some(
-          (h) =>
-            h.command?.includes("shaka-hook-wrapper") ||
-            h.command?.includes("shaka-session-debounce"),
-        );
-      });
-      if (kept.length > 0) {
-        cleaned[event] = kept;
-      }
-    }
-
-    if (Object.keys(cleaned).length === 0) {
+    if (Object.keys(config.hooks).length === 0 && !hasOtherConfig) {
       await unlink(hooksPath);
     } else {
-      await Bun.write(hooksPath, JSON.stringify({ hooks: cleaned }, null, 2));
+      await writeAtomically(hooksPath, JSON.stringify(config, null, 2));
     }
   }
 

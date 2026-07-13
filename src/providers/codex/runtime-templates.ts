@@ -50,19 +50,23 @@ function buildEventEntries(
   const withMatchers = eventHooks.filter((h) => h.matchers && h.matchers.length > 0);
   const withoutMatchers = eventHooks.filter((h) => !h.matchers || h.matchers.length === 0);
 
-  const byMatcher = new Map<string, string[]>();
+  const byMatcher = new Map<string, Set<string>>();
   for (const hook of withMatchers) {
     for (const matcher of hook.matchers ?? []) {
-      const paths = byMatcher.get(matcher) ?? [];
-      paths.push(hook.path);
-      byMatcher.set(matcher, paths);
+      const codexMatcher =
+        codexEvent === "PreToolUse" || codexEvent === "PostToolUse"
+          ? normalizeCodexToolMatcher(matcher)
+          : matcher;
+      const paths = byMatcher.get(codexMatcher) ?? new Set<string>();
+      paths.add(hook.path);
+      byMatcher.set(codexMatcher, paths);
     }
   }
 
   for (const [matcher, hookPaths] of byMatcher) {
     entries.push({
       matcher,
-      hooks: hookPaths.map((p) => ({
+      hooks: [...hookPaths].map((p) => ({
         type: "command" as const,
         command: `bun ${shellQuotePosix(wrapperPath)} ${codexEvent} ${shellQuotePosix(p)}`,
       })),
@@ -83,6 +87,17 @@ function buildEventEntries(
   }
 
   return entries;
+}
+
+function normalizeCodexToolMatcher(matcher: string): string {
+  switch (matcher) {
+    case "Edit":
+    case "MultiEdit":
+    case "Write":
+      return "apply_patch";
+    default:
+      return matcher;
+  }
 }
 
 export function renderCodexWrapper(shakaHome: string, hasDebounce: boolean): string {
@@ -150,6 +165,31 @@ const [childStdout, childStderr, exitCode] = await Promise.all([
   child.exited,
 ]);
 
+function adaptPreToolUseOutput(output: string): string {
+  const trimmed = output.trim();
+  if (!trimmed) return "";
+
+  try {
+    const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (parsed.decision === "ask" && typeof parsed.message === "string") {
+      return JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "Shaka requires confirmation for this operation, but Codex PreToolUse cannot request it. " +
+            "Run the operation manually after review.\\n\\n" +
+            parsed.message,
+        },
+      });
+    }
+  } catch {
+    // Preserve non-JSON output so Codex can report the hook's actual response.
+  }
+
+  return trimmed;
+}
+
 // Forward stderr passthrough in all cases
 if (childStderr.trim()) {
   console.error(childStderr.trimEnd());
@@ -164,8 +204,13 @@ if (exitCode === 2) {
 }
 
 // Branch on event type for output handling
-if (eventName === "PreToolUse" || eventName === "PostToolUse") {
-  // Pass through stdout + exit code verbatim (for security-validator blocking)
+if (eventName === "PreToolUse") {
+  const output = adaptPreToolUseOutput(childStdout);
+  if (output) {
+    console.log(output);
+  }
+  process.exit(exitCode);
+} else if (eventName === "PostToolUse") {
   if (childStdout.trim()) {
     console.log(childStdout.trimEnd());
   }

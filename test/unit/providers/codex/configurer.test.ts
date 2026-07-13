@@ -155,6 +155,64 @@ describe("CodexProviderConfigurer", () => {
       expect(hooksJson.hooks.SessionStart.length).toBeGreaterThan(0);
     });
 
+    test("preserves non-Shaka hooks when reinstalling", async () => {
+      await Bun.write(
+        join(testShakaHome, "system", "hooks", "security-validator.ts"),
+        `export const TRIGGER = ["tool.before"] as const;\nexport const MATCHER = ["Bash"] as const;\n`,
+      );
+      await Bun.write(
+        join(testCodexHome, "hooks.json"),
+        JSON.stringify({
+          metadata: { owner: "user" },
+          hooks: {
+            PreToolUse: [
+              {
+                matcher: "Bash",
+                hooks: [
+                  { type: "command", command: "bun /opt/user-security-hook.ts" },
+                  {
+                    type: "command",
+                    command: "bun /old/shaka-hook-wrapper.ts PreToolUse /old/security-validator.ts",
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = await makeConfigurer().install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(true);
+      const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
+      expect(hooksJson.metadata).toEqual({ owner: "user" });
+      const commands = hooksJson.hooks.PreToolUse.flatMap(
+        (entry: { hooks: Array<{ command: string }> }) => entry.hooks.map((hook) => hook.command),
+      );
+      expect(commands).toContain("bun /opt/user-security-hook.ts");
+      expect(commands.some((command: string) => command.includes("/old/"))).toBe(false);
+      expect(
+        commands.some(
+          (command: string) =>
+            command.includes("shaka-hook-wrapper.ts") && command.includes("PreToolUse"),
+        ),
+      ).toBe(true);
+    });
+
+    test("refuses to overwrite an invalid hooks.json", async () => {
+      const hooksPath = join(testCodexHome, "hooks.json");
+      await Bun.write(hooksPath, "not valid json");
+
+      const result = await makeConfigurer().install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toContain("Cannot update invalid Codex hooks.json");
+      }
+      expect(await Bun.file(hooksPath).text()).toBe("not valid json");
+      expect(await Bun.file(join(testCodexHome, "shaka-hook-wrapper.ts")).exists()).toBe(false);
+    });
+
     test("hooks.json entries point to wrapper with correct event names", async () => {
       await Bun.write(
         join(testShakaHome, "system", "hooks", "session-start.ts"),
@@ -405,6 +463,21 @@ describe("CodexProviderConfigurer", () => {
       expect(entry.matcher).toBe("Bash");
     });
 
+    test("maps file-write aliases to one canonical apply_patch matcher", async () => {
+      await Bun.write(
+        join(testShakaHome, "system", "hooks", "security-validator.ts"),
+        `export const TRIGGER = ["tool.before"] as const;\nexport const MATCHER = ["Edit", "MultiEdit", "Write", "apply_patch"] as const;\n`,
+      );
+
+      const result = await makeConfigurer().install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(true);
+      const hooksJson = await Bun.file(join(testCodexHome, "hooks.json")).json();
+      expect(hooksJson.hooks.PreToolUse).toHaveLength(1);
+      expect(hooksJson.hooks.PreToolUse[0].matcher).toBe("apply_patch");
+      expect(hooksJson.hooks.PreToolUse[0].hooks).toHaveLength(1);
+    });
+
     test("installs agent symlinks", async () => {
       // Create an agent file
       await Bun.write(
@@ -455,7 +528,48 @@ describe("CodexProviderConfigurer", () => {
       expect(entry.matcher).toBeUndefined();
     });
 
-    test("wrapper script handles PreToolUse with verbatim passthrough", async () => {
+    test("wrapper converts unsupported PreToolUse confirmation into a Codex denial", async () => {
+      const configurer = makeConfigurer();
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const hookPath = join(requireTestRoot(), "confirmation-hook.ts");
+      await Bun.write(
+        hookPath,
+        `console.log(JSON.stringify({ decision: "ask", message: "Force push can lose commits" }));\n`,
+      );
+
+      const wrapperPath = join(testCodexHome, "shaka-hook-wrapper.ts");
+      const proc = Bun.spawn([process.execPath, wrapperPath, "PreToolUse", hookPath], {
+        stdin: Buffer.from(
+          JSON.stringify({
+            session_id: "test-session",
+            transcript_path: "/tmp/transcript.jsonl",
+            tool_name: "Bash",
+            tool_input: { command: "git push --force" },
+          }),
+        ),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe("");
+      expect(JSON.parse(stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason:
+            "Shaka requires confirmation for this operation, but Codex PreToolUse cannot request it. Run the operation manually after review.\n\nForce push can lose commits",
+        },
+      });
+    });
+
+    test("wrapper script passes through supported tool-hook output and exit code 2", async () => {
       const configurer = makeConfigurer();
       await configurer.install({ shakaHome: testShakaHome });
 
@@ -496,10 +610,10 @@ describe("CodexProviderConfigurer", () => {
       expect(hooksJson.hooks.UserPromptSubmit).toBeDefined();
       expect(hooksJson.hooks.PreToolUse).toBeDefined();
 
-      // PreToolUse should have two entries (one per matcher: Bash, Edit)
+      // Codex exposes edits as apply_patch, so Shaka maps its Edit alias.
       expect(hooksJson.hooks.PreToolUse.length).toBe(2);
       const matchers = hooksJson.hooks.PreToolUse.map((e: { matcher: string }) => e.matcher).sort();
-      expect(matchers).toEqual(["Bash", "Edit"]);
+      expect(matchers).toEqual(["Bash", "apply_patch"]);
     });
 
     test("install is idempotent (regenerates on every call)", async () => {
