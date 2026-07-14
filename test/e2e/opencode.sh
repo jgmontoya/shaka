@@ -257,6 +257,10 @@ else
   exit 1
 fi
 
+# shellcheck source=lib/memory.sh
+source "$(dirname "$0")/lib/memory.sh"
+run_memory_recall_e2e
+
 # ── Workflow until ────────────────────────────────────────────────────
 
 # shellcheck source=lib/workflow-until.sh

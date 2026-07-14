@@ -557,6 +557,12 @@ else
   run_workflow_until_judge_e2e codex
 fi
 
+# Run outside the optional LLM block. This contract is deterministic and must
+# still execute when Codex credentials are unavailable.
+# shellcheck source=lib/memory.sh
+source "$(dirname "$0")/lib/memory.sh"
+run_memory_recall_e2e
+
 # ── Uninstall ─────────────────────────────────────────────────────────
 
 section "Uninstall"

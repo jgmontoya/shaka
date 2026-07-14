@@ -16,7 +16,7 @@ import { parseFrontmatter } from "../domain/frontmatter";
 import { inference } from "../inference";
 import type { ProviderName } from "../providers/types";
 import type { SummaryIndex } from "./storage";
-import { isPathRelated } from "./utils";
+import { arePathsRelated } from "./utils";
 
 // --- Types ---
 
@@ -380,7 +380,7 @@ export async function findMatchingProjects(rollupsDir: string, cwd: string): Pro
     const projectCwd = await readProjectCwd(dirPath);
     if (!projectCwd) continue;
 
-    if (isPathRelated(projectCwd, cwd) || isPathRelated(cwd, projectCwd)) {
+    if (arePathsRelated(projectCwd, cwd)) {
       matches.push(dirPath);
     }
   }

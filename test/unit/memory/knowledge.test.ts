@@ -1,22 +1,23 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtemp, rm, mkdir, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
-  readExistingTopicTitles,
-  readManifest,
-  findUnprocessedSessions,
-  extractFragmentsFromSummary,
-  groupFragmentsByTopic,
+  appendToLog,
+  bootstrapKnowledge,
   buildCreatePrompt,
   buildMergePrompt,
-  rebuildIndex,
-  appendToLog,
-  writeManifest,
   compileKnowledge,
+  extractFragmentsFromSummary,
+  findUnprocessedSessions,
+  groupFragmentsByTopic,
   loadKnowledgeIndex,
-  bootstrapKnowledge,
+  readExistingTopicTitles,
+  resolveKnowledgeProjectDir,
+  readManifest,
+  rebuildIndex,
+  writeManifest,
 } from "../../../src/memory/knowledge";
 import type { KnowledgeFragment } from "../../../src/memory/summarize";
 
@@ -544,12 +545,13 @@ The auth layer uses JWT with rotating refresh tokens. Session state is stateless
       // Topic page should exist
       const knowledgeDir = join(memoryDir, "knowledge");
       // Read the actual directory listing to find the project knowledge dir
-      const knowledgeEntries = await Bun.file(join(knowledgeDir)).exists();
       // The knowledge dir should have been created under a project slug
       const projectDirs = await readdir(knowledgeDir).catch(() => []);
       expect(projectDirs.length).toBeGreaterThan(0);
+      const projectDir = projectDirs[0];
+      if (!projectDir) throw new Error("expected compiled project knowledge directory");
 
-      const projectKnowledgeDir = join(knowledgeDir, projectDirs[0]!);
+      const projectKnowledgeDir = join(knowledgeDir, projectDir);
       // Check that a topic page was written
       const topicFiles = (await readdir(projectKnowledgeDir)).filter(
         (f) => f.endsWith(".md") && f !== "_index.md" && f !== "log.md",
@@ -559,6 +561,10 @@ The auth layer uses JWT with rotating refresh tokens. Session state is stateless
       // Check manifest was updated
       const manifest = await readManifest(projectKnowledgeDir);
       expect(Object.keys(manifest.compiledSources)).toHaveLength(2);
+
+      // Project identity makes the knowledge base discoverable from nested CWDs.
+      const projectMetadata = await Bun.file(join(projectKnowledgeDir, ".project.json")).json();
+      expect(projectMetadata).toEqual({ cwd: "/projects/myapp" });
 
       // Check index was rebuilt
       const indexContent = await Bun.file(join(projectKnowledgeDir, "_index.md")).text();
@@ -705,6 +711,41 @@ FTS5-based search system.
       // Full topic content is NOT injected
       expect(section).not.toContain("The auth layer uses JWT");
       expect(section).not.toContain("FTS5-based search system");
+    });
+
+    test("resolves a project index from a nested working directory", async () => {
+      const memoryDir = join(tmpDir, "memory-kb-nested");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(
+        join(knowledgeDir, ".project.json"),
+        JSON.stringify({ cwd: "/projects/myapp" }),
+      );
+      await Bun.write(
+        join(knowledgeDir, "_index.md"),
+        "# Knowledge Index\n\nNested lookup works.\n",
+      );
+
+      const section = await loadKnowledgeIndex(memoryDir, "/projects/myapp/src/features");
+
+      expect(section).toContain("Nested lookup works.");
+    });
+
+    test("prefers an exact project over a related child project", async () => {
+      const memoryDir = join(tmpDir, "memory-kb-overlap");
+      const rootDir = join(memoryDir, "knowledge", "root-project");
+      const childDir = join(memoryDir, "knowledge", "child-project");
+      await mkdir(rootDir, { recursive: true });
+      await mkdir(childDir, { recursive: true });
+      await Bun.write(join(rootDir, ".project.json"), JSON.stringify({ cwd: "/projects/myapp" }));
+      await Bun.write(
+        join(childDir, ".project.json"),
+        JSON.stringify({ cwd: "/projects/myapp/packages/api" }),
+      );
+
+      const resolved = await resolveKnowledgeProjectDir(memoryDir, "/projects/myapp");
+
+      expect(resolved).toBe(rootDir);
     });
   });
 

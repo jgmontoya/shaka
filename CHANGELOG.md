@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+### Added
+
+- **Compiled knowledge search** - `shaka memory search` and the `memory-search` tool now return matching topic pages with the `knowledge` result type. Use `--type knowledge` to limit CLI results.
+- **Explicit cross-project memory search** - pass `--all` to the CLI or `all_projects: true` to the tool when a query should span every project.
+
+### Changed
+
+- **Memory recall is project-scoped by default** - session-start context and memory search exclude unrelated project history while keeping global learnings available. Parent and nested working directories share one project scope.
+- **Configured search limits apply everywhere** - CLI and tool searches now honor `memory.search_max_results` after combining session, learning, and knowledge results.
+
+### Fixed
+
+- **Concurrent learning updates are serialized** - session extraction, maintenance, consolidation, and review now share one lock for complete read-modify-write transactions. Live locks use heartbeats, stale locks recover after a fixed threshold, and reviewed entries use compare-and-delete semantics.
+
 ## [0.13.0] - 2026-07-08
 
 ### Added

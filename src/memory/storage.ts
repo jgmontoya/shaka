@@ -12,7 +12,7 @@ import { mkdir, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { stringify as stringifyYaml } from "yaml";
 import { type SessionSummary, parseSummaryOutput } from "./summarize";
-import { hashSessionId } from "./utils";
+import { arePathsRelated, hashSessionId } from "./utils";
 
 export interface SummaryIndex {
   readonly filePath: string;
@@ -95,8 +95,7 @@ export async function loadSummary(filePath: string): Promise<SessionSummary | nu
 /**
  * Select the most relevant recent summaries for context loading.
  *
- * Prefers summaries matching the current working directory.
- * Fills remaining slots with most recent from other directories.
+ * Includes only summaries matching the current working directory.
  * Returns up to `limit` summaries (default 3).
  */
 export function selectRecentSummaries(
@@ -106,17 +105,7 @@ export function selectRecentSummaries(
 ): SummaryIndex[] {
   if (summaries.length === 0) return [];
 
-  const cwdMatches = summaries.filter((s) => s.cwd === cwd);
-  const others = summaries.filter((s) => s.cwd !== cwd);
-
-  const selected = cwdMatches.slice(0, limit);
-
-  if (selected.length < limit) {
-    const remaining = limit - selected.length;
-    selected.push(...others.slice(0, remaining));
-  }
-
-  return selected;
+  return summaries.filter((summary) => arePathsRelated(summary.cwd, cwd)).slice(0, limit);
 }
 
 /**

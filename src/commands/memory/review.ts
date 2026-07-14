@@ -5,7 +5,7 @@
  * - Browse: filter, paginate, view details, delete entries
  * - Prune (--prune): AI flags low-quality entries, user confirms each
  *
- * Every delete persists immediately to disk via writeLearnings().
+ * Every delete persists immediately through the shared learnings transaction lock.
  */
 
 import { join } from "node:path";
@@ -17,9 +17,9 @@ import {
   filterLearnings,
   loadLearnings,
   parseQualityAssessmentOutput,
+  removeLearningIfUnchanged,
   renderLearnings,
   sortByExposures,
-  writeLearnings,
 } from "../../memory/learnings";
 import { promptUser } from "./index";
 
@@ -114,9 +114,10 @@ function showEntryDetail(entry: LearningEntry): void {
   console.log();
 }
 
-async function deleteEntry(review: ReviewState, entry: LearningEntry): Promise<void> {
-  review.entries = review.entries.filter((e) => e !== entry);
-  await writeLearnings(review.memoryDir, review.entries);
+async function deleteEntry(review: ReviewState, entry: LearningEntry): Promise<boolean> {
+  const result = await removeLearningIfUnchanged(review.memoryDir, entry);
+  review.entries = result.entries;
+  return result.removed;
 }
 
 function refreshView(review: ReviewState, view: ViewState): void {
@@ -135,9 +136,13 @@ async function deleteAndRefresh(
   view: ViewState,
   entry: LearningEntry,
 ): Promise<void> {
-  await deleteEntry(review, entry);
+  const deleted = await deleteEntry(review, entry);
   refreshView(review, view);
-  console.log(`  Deleted. (${review.entries.length} remaining)`);
+  console.log(
+    deleted
+      ? `  Deleted. (${review.entries.length} remaining)`
+      : "  Not deleted: the learning changed while it was being reviewed.",
+  );
   showPage(view.filtered, view.page);
 }
 
@@ -206,18 +211,26 @@ async function presentPruneVerdict(
     showEntryDetail(entry);
     const answer2 = await promptUser("  [k]eep  [d]elete? ");
     if (answer2.toLowerCase() === "d") {
-      await deleteEntry(review, entry);
-      console.log(`  Deleted. (${review.entries.length} remaining)\n`);
-      return "deleted";
+      const deleted = await deleteEntry(review, entry);
+      console.log(
+        deleted
+          ? `  Deleted. (${review.entries.length} remaining)\n`
+          : "  Not deleted: the learning changed while it was being reviewed.\n",
+      );
+      return deleted ? "deleted" : "kept";
     }
     console.log("  Kept.\n");
     return "kept";
   }
 
   if (cmd === "d") {
-    await deleteEntry(review, entry);
-    console.log(`  Deleted. (${review.entries.length} remaining)\n`);
-    return "deleted";
+    const deleted = await deleteEntry(review, entry);
+    console.log(
+      deleted
+        ? `  Deleted. (${review.entries.length} remaining)\n`
+        : "  Not deleted: the learning changed while it was being reviewed.\n",
+    );
+    return deleted ? "deleted" : "kept";
   }
 
   console.log("  Kept.\n");

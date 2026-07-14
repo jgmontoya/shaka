@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared status-line helpers for e2e scripts.
 #
-# Sourced from test/e2e/{claudecode,opencode,codex}.sh at the top of each
+# Sourced from test/e2e/{claudecode,opencode,codex,pi}.sh at the top of each
 # script, right after the Docker guard. Kept deliberately small — every
 # e2e section below is structured as a narrative of provider-specific
 # assertions, and those assertions are better left inline. Only the

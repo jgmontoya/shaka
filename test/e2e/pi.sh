@@ -144,6 +144,12 @@ else
   fi
 fi
 
+# Pi has no live session-end assertions in this suite, so run the deterministic
+# memory contract after installation and doctor have both been verified.
+# shellcheck source=lib/memory.sh
+source "$(dirname "$0")/lib/memory.sh"
+run_memory_recall_e2e
+
 # ── Workflow until ────────────────────────────────────────────────────
 # Deterministic check only: this script scopes Pi state to an auth-less
 # test dir (PI_CODING_AGENT_DIR), so the LLM judge variant would always

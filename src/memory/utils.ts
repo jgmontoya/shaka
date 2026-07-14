@@ -33,3 +33,8 @@ export function isPathRelated(a: string, b: string): boolean {
   const rel = relative(a, b);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
+
+/** Check if either path contains the other, treating nested CWDs as one project scope. */
+export function arePathsRelated(a: string, b: string): boolean {
+  return isPathRelated(a, b) || isPathRelated(b, a);
+}

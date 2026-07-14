@@ -16,12 +16,13 @@ import {
   promoteToGlobal,
   renderEntry,
   renderLearnings,
-  writeLearnings,
+  replaceLearningsIfUnchanged,
 } from "../../memory/learnings";
 import { promptUser } from "./index";
 
 export async function runConsolidation(memoryDir: string): Promise<void> {
-  let entries = await loadLearnings(memoryDir);
+  const originalEntries = await loadLearnings(memoryDir);
+  let entries = originalEntries;
   const originalCount = entries.length;
   const content = renderLearnings(entries);
 
@@ -53,11 +54,19 @@ export async function runConsolidation(memoryDir: string): Promise<void> {
   // Interactive: CWD-to-global promotion
   entries = await promptForPromotions(entries);
 
-  // Write active set first, then archive — ensures source entries don't
-  // appear in both active and archive if the process is interrupted.
-  await writeLearnings(memoryDir, entries);
+  const committed = await replaceLearningsIfUnchanged(
+    memoryDir,
+    originalEntries,
+    entries,
+    async () => {
+      if (result.archived.length > 0) await appendToArchive(memoryDir, result.archived);
+    },
+  );
+  if (!committed) {
+    console.log("Learnings changed during consolidation. No changes were written; run it again.");
+    return;
+  }
   if (result.archived.length > 0) {
-    await appendToArchive(memoryDir, result.archived);
     console.log(`Archived ${result.archived.length} source entries.`);
   }
   console.log(`\nDone. ${originalCount} -> ${entries.length} entries.`);

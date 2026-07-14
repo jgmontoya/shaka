@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { LearningEntry } from "../../../src/memory/learnings";
 import {
   buildRankingPrompt,
+  loadLearnings,
+  mutateLearnings,
   parseRankingOutput,
   renderLearnings,
   writeLearnings,
@@ -374,6 +376,57 @@ describe("runMaintenance", () => {
     // Backup should exist
     const backupFile = Bun.file(join(maintenanceTestDir, "learnings.backup.md"));
     expect(await backupFile.exists()).toBe(true);
+  });
+
+  test("serializes learning extraction behind an active maintenance run", async () => {
+    let releaseInference!: () => void;
+    const inferenceRelease = new Promise<void>((resolve) => {
+      releaseInference = resolve;
+    });
+    let inferenceStarted!: () => void;
+    const inferenceStart = new Promise<void>((resolve) => {
+      inferenceStarted = resolve;
+    });
+    mock.module("../../../src/inference", () => ({
+      inference: async () => {
+        inferenceStarted();
+        await inferenceRelease;
+        return { success: true, text: "NO CLUSTERS" };
+      },
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const entries = Array.from({ length: 5 }, (_, i) =>
+      makeEntry({
+        title: `Entry ${i}`,
+        exposures: [
+          { date: "2026-03-01", sessionHash: `hash${i}a00` },
+          { date: "2026-03-05", sessionHash: `hash${i}b00` },
+        ],
+      }),
+    );
+    await writeLearnings(maintenanceTestDir, entries);
+
+    const maintenance = runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+    await inferenceStart;
+
+    let extractionFinished = false;
+    const extraction = mutateLearnings(maintenanceTestDir, (current) => {
+      extractionFinished = true;
+      return [...current, makeEntry({ title: "Concurrent extraction" })];
+    });
+    await Bun.sleep(20);
+    expect(extractionFinished).toBe(false);
+
+    releaseInference();
+    await Promise.all([maintenance, extraction]);
+
+    expect((await loadLearnings(maintenanceTestDir)).map((entry) => entry.title)).toContain(
+      "Concurrent extraction",
+    );
   });
 
   test("updates state file after successful run", async () => {

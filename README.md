@@ -35,7 +35,7 @@ After installation, the quickest inspection commands are:
 shaka doctor                  # Check installation health
 shaka commands list           # See available commands
 shaka skill list              # See system and installed skills
-shaka memory search "query"   # Search summaries and learnings
+shaka memory search "query"   # Search this project's summaries, learnings, and knowledge
 shaka mcp serve               # Start the MCP server for supported providers
 ```
 
@@ -190,7 +190,8 @@ shaka skill list              # List system + installed skills
 shaka run <workflow> [input...] # Execute a multi-step workflow
 shaka scan <file>             # Scan prose for AI writing patterns (slop)
 shaka scan --dir <path>       # Scan all .md files in a directory
-shaka memory search <query>   # Search session summaries and learnings
+shaka memory search <query>   # Search this project's summaries, learnings, and knowledge
+shaka memory search <query> --all # Search memory across every project
 shaka memory stats            # Show learnings count, exposures, and category breakdown
 shaka memory review           # Browse and manage learnings interactively
 shaka memory review --prune   # AI-assisted quality assessment of learnings
@@ -257,7 +258,7 @@ TypeScript modules that expose callable operations to assistants. Some tools are
 Currently, two tools ship with Shaka:
 
 - **`inference.ts`** — Provider-agnostic AI inference (wraps Claude CLI, opencode CLI, Codex CLI, or Pi CLI)
-- **`memory-search.ts`** — Search session summaries and learnings by keyword
+- **`memory-search.ts`** - Search project sessions, learnings, and compiled knowledge by keyword
 
 Both tools are surfaced to every supported provider's model: Claude Code and Codex via Shaka's MCP server (`shaka mcp serve`), opencode via the generated plugin's `tool` field, and Pi via `pi.registerTool()` in the generated extension. The generated opencode and Pi bridges shell out to `shaka tool <name>` when those tools run, while MCP providers execute the same tool definitions through the MCP server. Tool definitions live in one place (`defaults/system/tools/`) regardless of which provider the model is running under.
 
@@ -555,9 +556,9 @@ Persistent context that survives sessions. The memory system captures what happe
 
 - **Session summarization** — The `session-end` hook parses transcripts (Claude Code JSONL, opencode export JSON, Codex JSONL, or Pi JSONL) and generates structured summaries using AI inference
 - **Summary storage** — Summaries are stored as markdown with YAML frontmatter in `memory/sessions/`
-- **Session context** — The `session-start` hook loads recent summaries into context so the AI knows what you worked on recently
+- **Session context** - The `session-start` hook loads recent summaries from the current project scope
 - **Rolling summaries** — Daily, weekly, and monthly rollups compress session history into persistent per-project digests, loaded into context at session start
-- **Search** — `shaka memory search <query>` searches summaries, active learnings, and archived learnings; also available as an MCP tool for in-session search
+- **Search** - `shaka memory search <query>` searches the current project's summaries, active and archived learnings, and compiled knowledge. Global learnings remain visible. Pass `--all` for an explicit cross-project search. The same scope rules apply to the MCP tool, which accepts `all_projects: true`.
 - **Knowledge compilation** — `shaka memory compile` extracts reusable project knowledge from session summaries into topic pages and a loadable index
 - **Review** — `shaka memory review` provides an interactive TUI for browsing, filtering, and deleting learnings. `--prune` adds AI-assisted quality scoring to flag low-value entries
 - **Consolidation** — `shaka memory consolidate` runs three passes: deduplication, contradiction resolution, and condensation. Condensation merges related high-exposure learnings into compound entries, freeing context budget. Source entries are archived (searchable, recoverable)

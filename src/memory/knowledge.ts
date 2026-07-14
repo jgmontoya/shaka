@@ -8,12 +8,13 @@
  * See also: knowledge-base.md for the full design spec.
  */
 
+import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rmdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { projectSlug } from "./rollups";
 import { type KnowledgeFragment, parseExtractedKnowledge } from "./summarize";
-import { hashContent, isPathRelated } from "./utils";
+import { arePathsRelated, hashContent, isPathRelated } from "./utils";
 
 // --- Types ---
 
@@ -26,6 +27,70 @@ export interface SessionEntry {
   readonly filename: string;
   readonly contentHash: string;
   readonly content: string;
+}
+
+const PROJECT_METADATA_FILE = ".project.json";
+
+async function readKnowledgeProjectCwd(knowledgeDir: string): Promise<string | null> {
+  try {
+    const value = await Bun.file(join(knowledgeDir, PROJECT_METADATA_FILE)).json();
+    return typeof value?.cwd === "string" ? value.cwd : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeKnowledgeProjectCwd(knowledgeDir: string, cwd: string): Promise<void> {
+  const target = join(knowledgeDir, PROJECT_METADATA_FILE);
+  const temporary = join(knowledgeDir, `${PROJECT_METADATA_FILE}.tmp.${randomUUID()}`);
+  await Bun.write(temporary, JSON.stringify({ cwd }));
+  await rename(temporary, target);
+}
+
+async function ensureKnowledgeProjectCwd(knowledgeDir: string, cwd: string): Promise<void> {
+  if (await readKnowledgeProjectCwd(knowledgeDir)) return;
+  await writeKnowledgeProjectCwd(knowledgeDir, cwd);
+}
+
+/** Find knowledge directories whose recorded project CWD contains or is contained by `cwd`. */
+export async function findMatchingKnowledgeProjectDirs(
+  memoryDir: string,
+  cwd: string,
+): Promise<string[]> {
+  const root = join(memoryDir, "knowledge");
+  const exactDir = join(root, projectSlug(cwd));
+  const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+  const matches: Array<{ dir: string; cwd: string }> = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(root, entry.name);
+    const projectCwd = await readKnowledgeProjectCwd(dir);
+    if (projectCwd ? arePathsRelated(projectCwd, cwd) : dir === exactDir) {
+      matches.push({ dir, cwd: projectCwd ?? cwd });
+    }
+  }
+
+  matches.sort((a, b) => compareKnowledgeScope(a.cwd, b.cwd, cwd));
+  return matches.map((match) => match.dir);
+}
+
+function compareKnowledgeScope(a: string, b: string, requestedCwd: string): number {
+  const rank = (candidate: string): number => {
+    if (candidate === requestedCwd) return 0;
+    return isPathRelated(candidate, requestedCwd) ? 1 : 2;
+  };
+  const rankDifference = rank(a) - rank(b);
+  if (rankDifference !== 0) return rankDifference;
+
+  // Prefer the closest ancestor; if only descendants exist, prefer the shallowest one.
+  return rank(a) === 1 ? b.length - a.length : a.length - b.length;
+}
+
+/** Resolve the best existing knowledge directory for a CWD, or its canonical new path. */
+export async function resolveKnowledgeProjectDir(memoryDir: string, cwd: string): Promise<string> {
+  const matches = await findMatchingKnowledgeProjectDirs(memoryDir, cwd);
+  return matches[0] ?? join(memoryDir, "knowledge", projectSlug(cwd));
 }
 
 /**
@@ -529,10 +594,11 @@ export async function compileKnowledge(
 ): Promise<CompilationResult> {
   const empty: CompilationResult = { sessionsProcessed: 0, topicsCreated: [], topicsUpdated: [] };
 
-  const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+  const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
   await mkdir(knowledgeDir, { recursive: true });
 
   const result = await withKnowledgeLock(knowledgeDir, async () => {
+    await ensureKnowledgeProjectCwd(knowledgeDir, cwd);
     const manifest = await readManifest(knowledgeDir);
     const sessionsDir = join(memoryDir, "sessions");
 
@@ -581,7 +647,7 @@ async function findMatchingSessions(sessionsDir: string, cwd: string): Promise<S
     if (!parsed) continue;
     const sessionCwd = String(parsed.frontmatter.cwd ?? "");
     if (!sessionCwd) continue;
-    if (!isPathRelated(sessionCwd, cwd) && !isPathRelated(cwd, sessionCwd)) continue;
+    if (!arePathsRelated(sessionCwd, cwd)) continue;
     matching.push({ filename: file, contentHash: hashContent(content), content });
   }
   return matching;
@@ -650,7 +716,7 @@ async function updateManifest(
  * The LLM can read individual topic pages on demand if it needs deeper context.
  */
 export async function loadKnowledgeIndex(memoryDir: string, cwd: string): Promise<string> {
-  const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+  const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
   const indexPath = join(knowledgeDir, "_index.md");
   const file = Bun.file(indexPath);
 
@@ -797,7 +863,7 @@ export async function bootstrapKnowledge(
   }
 
   const sessionsDir = join(memoryDir, "sessions");
-  const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+  const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
 
   // Step 1: Find sessions matching CWD without ## Knowledge
   const candidates = await findSessionsWithoutKnowledge(sessionsDir, cwd);
@@ -903,7 +969,7 @@ async function findSessionsWithoutKnowledge(
     // CWD matching
     const sessionCwd = String(parsed.frontmatter.cwd ?? "");
     if (!sessionCwd) continue;
-    if (!isPathRelated(sessionCwd, cwd) && !isPathRelated(cwd, sessionCwd)) continue;
+    if (!arePathsRelated(sessionCwd, cwd)) continue;
 
     // Skip sessions that already have ## Knowledge
     if (/^## Knowledge\s*$/m.test(content)) continue;

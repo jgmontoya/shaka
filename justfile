@@ -30,7 +30,7 @@ architecture-check:
 
 # Hermetic unit/integration regression lane
 test-hermetic:
-    bun test test/unit test/integration
+    bun test
 
 # Generated provider artifact load/build lane
 test-generated-artifacts:

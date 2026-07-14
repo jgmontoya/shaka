@@ -83,7 +83,7 @@ Shaka uses canonical event names internally. Each provider maps them to its nati
 
 ## Tool Integration
 
-Tools live once in `defaults/system/tools/` (canonical) with `customizations/tools/` overrides — the same set every provider sees. Shipped tools: `inference` (provider-agnostic AI calls) and `memory-search` (session/learning lookup).
+Tools live once in `defaults/system/tools/` (canonical) with `customizations/tools/` overrides. Every provider sees the same set. Shipped tools: `inference` (provider-agnostic AI calls) and `memory-search` (project-scoped session, learning, and compiled-knowledge lookup).
 
 How each provider exposes them to its model:
 

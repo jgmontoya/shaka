@@ -66,6 +66,7 @@ export {
 
 export {
   readExistingTopicTitles,
+  resolveKnowledgeProjectDir,
   loadKnowledgeIndex,
   compileKnowledge,
   bootstrapKnowledge,
@@ -116,6 +117,10 @@ export {
   renderLearnings,
   loadLearnings,
   writeLearnings,
+  mutateLearnings,
+  removeLearningIfUnchanged,
+  replaceLearningsIfUnchanged,
+  withLearningsLock,
   appendToArchive,
   scoreEntry,
   selectLearnings,

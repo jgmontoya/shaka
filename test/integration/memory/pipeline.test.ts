@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { compileKnowledge } from "../../../src/memory/knowledge";
 import { searchMemory } from "../../../src/memory/search";
 import {
   listSummaries,
@@ -70,7 +71,7 @@ describe("Memory pipeline", () => {
       expect(listed[0]?.cwd).toBe("/projects/api-server");
       expect(listed[0]?.sessionId).toBe("ses-claude-fixture");
 
-      const results = await searchMemory("redis", testMemoryDir);
+      const results = await searchMemory("redis", testMemoryDir, { cwd: CLAUDE_METADATA.cwd });
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.title).toContain("Rate Limiting");
 
@@ -112,7 +113,7 @@ describe("Memory pipeline", () => {
       expect(listed[0]?.provider).toBe("opencode");
       expect(listed[0]?.cwd).toBe("/projects/dashboard");
 
-      const results = await searchMemory("grid", testMemoryDir);
+      const results = await searchMemory("grid", testMemoryDir, { cwd: OPENCODE_METADATA.cwd });
       expect(results.length).toBeGreaterThan(0);
 
       const loaded = await loadSummary(filePath);
@@ -144,13 +145,95 @@ describe("Memory pipeline", () => {
       const opencodeParsed = parseSummaryOutput(OPENCODE_LLM_OUTPUT)!;
       await writeSummary(testMemoryDir, { ...opencodeParsed, metadata: OPENCODE_METADATA });
 
-      const claudeResults = await searchMemory("rate limiter", testMemoryDir);
+      const claudeResults = await searchMemory("rate limiter", testMemoryDir, {
+        cwd: CLAUDE_METADATA.cwd,
+      });
       expect(claudeResults).toHaveLength(1);
       expect(claudeResults[0]?.title).toContain("Rate Limiting");
 
-      const opencodeResults = await searchMemory("sidebar", testMemoryDir);
+      const opencodeResults = await searchMemory("sidebar", testMemoryDir, {
+        cwd: OPENCODE_METADATA.cwd,
+      });
       expect(opencodeResults).toHaveLength(1);
       expect(opencodeResults[0]?.title).toContain("Dashboard Layout");
+    });
+
+    test("search scopes identical queries to the selected project", async () => {
+      const claudeParsed = parseSummaryOutput(CLAUDE_LLM_OUTPUT)!;
+      await writeSummary(testMemoryDir, {
+        ...claudeParsed,
+        metadata: CLAUDE_METADATA,
+        body: `${claudeParsed.body}\n\nShared project token.`,
+      });
+
+      const opencodeParsed = parseSummaryOutput(OPENCODE_LLM_OUTPUT)!;
+      await writeSummary(testMemoryDir, {
+        ...opencodeParsed,
+        metadata: OPENCODE_METADATA,
+        body: `${opencodeParsed.body}\n\nShared project token.`,
+      });
+
+      const apiResults = await searchMemory("shared project token", testMemoryDir, {
+        cwd: CLAUDE_METADATA.cwd,
+      });
+      const dashboardResults = await searchMemory("shared project token", testMemoryDir, {
+        cwd: OPENCODE_METADATA.cwd,
+      });
+      const allResults = await searchMemory("shared project token", testMemoryDir, {
+        allProjects: true,
+      });
+
+      expect(apiResults.map((result) => result.title)).toEqual([claudeParsed.title]);
+      expect(dashboardResults.map((result) => result.title)).toEqual([opencodeParsed.title]);
+      expect(allResults).toHaveLength(2);
+    });
+  });
+
+  describe("compiled knowledge", () => {
+    test("compiles a topic page and finds it through memory search", async () => {
+      const parsed = parseSummaryOutput(CLAUDE_LLM_OUTPUT)!;
+      await writeSummary(testMemoryDir, {
+        ...parsed,
+        metadata: CLAUDE_METADATA,
+        body: `${parsed.body}
+
+## Knowledge
+
+### Rate Limiter Storage
+
+Redis stores the distributed limiter counters with atomic increments.
+Topics: rate-limiting
+`,
+      });
+
+      await compileKnowledge(
+        testMemoryDir,
+        CLAUDE_METADATA.cwd,
+        async () => `---
+title: Rate Limiter Architecture
+created: 2026-07-01
+updated: 2026-07-14
+confidence: high
+sources:
+  - ses-claude-fixture
+summary: Redis-backed distributed rate limiting.
+---
+
+## Overview
+
+Distributed limiter counters use a searchable compilation token.
+`,
+      );
+
+      const results = await searchMemory("searchable compilation token", testMemoryDir, {
+        cwd: CLAUDE_METADATA.cwd,
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        type: "knowledge",
+        title: "Rate Limiter Architecture",
+      });
     });
   });
 
@@ -275,10 +358,10 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
       ]);
 
       // Search should find both
-      const activeResults = await searchMemory("Active", testMemoryDir);
+      const activeResults = await searchMemory("Active", testMemoryDir, { cwd: "/myapp" });
       expect(activeResults.length).toBeGreaterThan(0);
 
-      const archiveResults = await searchMemory("Archived", testMemoryDir);
+      const archiveResults = await searchMemory("Archived", testMemoryDir, { cwd: "/myapp" });
       expect(archiveResults.length).toBeGreaterThan(0);
       expect(archiveResults[0]?.snippet).toContain("[archived]");
     });
@@ -339,7 +422,9 @@ Some content without a heading.`;
       expect(listed).toHaveLength(1);
       expect(listed[0]?.title).toBe(parsed.title);
 
-      const results = await searchMemory("Dashboard", testMemoryDir);
+      const results = await searchMemory("Dashboard", testMemoryDir, {
+        cwd: OPENCODE_METADATA.cwd,
+      });
       expect(results).toHaveLength(1);
     });
   });

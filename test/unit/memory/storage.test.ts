@@ -293,20 +293,30 @@ describe("Storage", () => {
       expect(result.every((s) => s.cwd === "/projects/myapp")).toBe(true);
     });
 
-    test("fills remaining slots with most recent from other cwds", () => {
+    test("does not fill remaining slots from unrelated cwds", () => {
       const result = selectRecentSummaries(summaries, "/projects/myapp", 5);
-      expect(result).toHaveLength(5);
-      // First 3 are CWD matches, then 2 from other
-      expect(result[3]?.cwd).toBe("/projects/other");
-      expect(result[4]?.cwd).toBe("/projects/other");
+      expect(result).toHaveLength(3);
+      expect(result.every((summary) => summary.cwd === "/projects/myapp")).toBe(true);
     });
 
-    test("falls back to most recent if no CWD matches", () => {
+    test("returns no summaries if the current project has no matches", () => {
       const result = selectRecentSummaries(summaries, "/projects/unknown", 3);
-      expect(result).toHaveLength(3);
-      expect(result[0]?.date).toBe("2026-02-09");
-      expect(result[1]?.date).toBe("2026-02-08");
-      expect(result[2]?.date).toBe("2026-02-07");
+      expect(result).toEqual([]);
+    });
+
+    test("treats nested working directories as the same project scope", () => {
+      const root = summaries[0];
+      expect(root).toBeDefined();
+      if (!root) throw new Error("expected root summary fixture");
+      const nested = {
+        ...root,
+        filePath: "/nested.md",
+        cwd: "/projects/myapp/packages/api",
+        sessionId: "nested",
+      };
+
+      expect(selectRecentSummaries([nested], "/projects/myapp")).toEqual([nested]);
+      expect(selectRecentSummaries([root], "/projects/myapp/packages/api")).toEqual([root]);
     });
 
     test("respects limit (default 3)", () => {

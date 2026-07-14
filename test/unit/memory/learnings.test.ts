@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, utimes } from "node:fs/promises";
 import {
   type LearningEntry,
   buildExtractionPromptSection,
@@ -9,13 +9,16 @@ import {
   loadLearnings,
   markNonglobal,
   mergeNewLearnings,
+  mutateLearnings,
   parseExtractedLearnings,
   parseLearnings,
   parseQualityAssessmentOutput,
   promoteToGlobal,
+  removeLearningIfUnchanged,
   renderEntry,
   renderEntryForContext,
   renderLearnings,
+  replaceLearningsIfUnchanged,
   scoreEntry,
   selectLearnings,
   sortByExposures,
@@ -546,6 +549,111 @@ describe("loadLearnings / writeLearnings", () => {
     const glob = new Bun.Glob("*.tmp.*");
     const tmpFiles = await Array.fromAsync(glob.scan(testMemoryDir));
     expect(tmpFiles).toHaveLength(0);
+  });
+
+  test("concurrent mutations preserve both updates", async () => {
+    const first = makeEntry({ title: "First concurrent update" });
+    const second = makeEntry({ title: "Second concurrent update" });
+
+    await Promise.all([
+      mutateLearnings(testMemoryDir, async (entries) => {
+        await Bun.sleep(20);
+        return [...entries, first];
+      }),
+      mutateLearnings(testMemoryDir, async (entries) => {
+        await Bun.sleep(20);
+        return [...entries, second];
+      }),
+    ]);
+
+    const stored = await loadLearnings(testMemoryDir);
+    expect(stored.map((entry) => entry.title).sort()).toEqual([
+      "First concurrent update",
+      "Second concurrent update",
+    ]);
+  });
+
+  test("stale locks are recovered before applying a mutation", async () => {
+    const lockPath = `${testMemoryDir}/.learnings.lock`;
+    await mkdir(lockPath);
+    const staleTime = new Date(Date.now() - 1_000);
+    await utimes(lockPath, staleTime, staleTime);
+
+    await mutateLearnings(testMemoryDir, () => [makeEntry()], {
+      pollMs: 5,
+      timeoutMs: 100,
+      staleMs: 50,
+    });
+
+    expect(await loadLearnings(testMemoryDir)).toHaveLength(1);
+    expect(await Bun.file(lockPath).exists()).toBe(false);
+  });
+
+  test("conditional replacement refuses to overwrite a newer mutation", async () => {
+    const original = [makeEntry({ title: "Original" })];
+    await writeLearnings(testMemoryDir, original);
+
+    await mutateLearnings(testMemoryDir, (entries) => [
+      ...entries,
+      makeEntry({ title: "Concurrent update" }),
+    ]);
+
+    const replaced = await replaceLearningsIfUnchanged(testMemoryDir, original, [
+      makeEntry({ title: "Stale replacement" }),
+    ]);
+
+    expect(replaced).toBe(false);
+    expect((await loadLearnings(testMemoryDir)).map((entry) => entry.title)).toEqual([
+      "Original",
+      "Concurrent update",
+    ]);
+  });
+
+  test("conditional replacement keeps active learnings when its prerequisite fails", async () => {
+    const original = [makeEntry({ title: "Original" })];
+    await writeLearnings(testMemoryDir, original);
+
+    await expect(
+      replaceLearningsIfUnchanged(
+        testMemoryDir,
+        original,
+        [makeEntry({ title: "Replacement" })],
+        async () => {
+          throw new Error("archive unavailable");
+        },
+      ),
+    ).rejects.toThrow("archive unavailable");
+
+    expect(await loadLearnings(testMemoryDir)).toEqual(original);
+  });
+
+  test("conditional removal deletes only the selected duplicate title", async () => {
+    const selected = makeEntry({ title: "Duplicate", body: "Selected body." });
+    const sameTitle = makeEntry({ title: "Duplicate", body: "Different body." });
+    await writeLearnings(testMemoryDir, [selected, sameTitle]);
+
+    const result = await removeLearningIfUnchanged(testMemoryDir, selected);
+
+    expect(result.removed).toBe(true);
+    expect(result.entries).toEqual([sameTitle]);
+  });
+
+  test("conditional removal preserves an entry that changed after review", async () => {
+    const selected = makeEntry({ title: "Reviewed", body: "Original body." });
+    const changed = makeEntry({
+      title: "Reviewed",
+      body: "Updated body.",
+      exposures: [
+        { date: "2026-02-09", sessionHash: "a1b2c3d4" },
+        { date: "2026-02-10", sessionHash: "b2c3d4e5" },
+      ],
+    });
+    await writeLearnings(testMemoryDir, [changed]);
+
+    const result = await removeLearningIfUnchanged(testMemoryDir, selected);
+
+    expect(result.removed).toBe(false);
+    expect(result.entries).toEqual([changed]);
   });
 });
 

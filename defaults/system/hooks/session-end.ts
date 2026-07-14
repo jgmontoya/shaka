@@ -30,26 +30,26 @@ import {
   loadConfig,
   loadLearnings,
   mergeNewLearnings,
+  mutateLearnings,
   parseClaudeCodeTranscript,
   parseCodexTranscript,
   parseExtractedLearnings,
   parseOpencodeTranscript,
   parsePiTranscript,
   parseSummaryOutput,
-  projectSlug,
   readExistingTopicTitles,
+  resolveKnowledgeProjectDir,
   resolveShakaHome,
   runMaintenance,
   truncateTranscript,
   undoSessionLearnings,
   updateRollups,
-  writeLearnings,
   writeSummary,
 } from "shaka";
 
 /** Hook trigger events — Shaka canonical names */
 export const TRIGGER = ["session.end"] as const;
-export const HOOK_VERSION = "0.2.0";
+export const HOOK_VERSION = "0.3.0";
 
 /** Max transcript chars to send to inference (avoid token limits) */
 const MAX_TRANSCRIPT_CHARS = 100_000;
@@ -305,7 +305,7 @@ async function worker(tmpPath: string) {
 
   // Load existing knowledge topic titles for tag convergence (fail-open)
   t = performance.now();
-  const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+  const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
   const existingTopicTitles = await readExistingTopicTitles(knowledgeDir);
   mark("Loaded topic titles", t, `${existingTopicTitles.length} topics`);
 
@@ -450,12 +450,10 @@ async function extractAndWriteLearnings(
       return 0;
     }
 
-    // Load, undo previous extractions from this session, merge new
-    let entries = await loadLearnings(memoryDir);
-    entries = undoSessionLearnings(entries, sessionHash);
-    entries = mergeNewLearnings(entries, extracted);
-
-    await writeLearnings(memoryDir, entries);
+    await mutateLearnings(memoryDir, (entries) => {
+      const withoutPrevious = undoSessionLearnings(entries, sessionHash);
+      return mergeNewLearnings(withoutPrevious, extracted);
+    });
     console.error(`Wrote ${extracted.length} learning(s) to learnings.md`);
     return extracted.length;
   } catch (err) {

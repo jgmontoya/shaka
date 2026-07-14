@@ -19,9 +19,13 @@ import {
   resolveDefaultsUserDir,
   resolveShakaHome,
 } from "../domain/config";
-import { loadKnowledgeIndex, readExistingTopicTitles } from "../memory/knowledge";
+import {
+  loadKnowledgeIndex,
+  readExistingTopicTitles,
+  resolveKnowledgeProjectDir,
+} from "../memory/knowledge";
 import { loadLearnings, renderEntryForContext, selectLearnings } from "../memory/learnings";
-import { loadRollups, projectSlug } from "../memory/rollups";
+import { loadRollups } from "../memory/rollups";
 import { listSummaries, renderSessionSection, selectRecentSummaries } from "../memory/storage";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -263,7 +267,7 @@ async function measureKnowledge(shakaHome: string): Promise<KnowledgeComponent> 
   let topicCount = 0;
 
   try {
-    const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+    const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
     const topics = await readExistingTopicTitles(knowledgeDir);
     topicCount = topics.length;
 

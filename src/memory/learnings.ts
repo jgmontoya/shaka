@@ -11,8 +11,9 @@
  */
 
 import { mkdir, rename } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
-import { hashSessionId } from "./utils";
+import { join } from "node:path";
+import { type DirectoryLockOptions, withDirectoryLock } from "./lock";
+import { arePathsRelated, hashSessionId } from "./utils";
 
 // --- Types ---
 
@@ -187,6 +188,72 @@ export async function writeLearnings(memoryDir: string, entries: LearningEntry[]
   await rename(tmpPath, filePath);
 }
 
+/** Run an operation while holding the process-shared learnings lock. */
+export async function withLearningsLock<T>(
+  memoryDir: string,
+  operation: () => Promise<T>,
+  lockOptions?: DirectoryLockOptions,
+): Promise<T> {
+  await mkdir(memoryDir, { recursive: true });
+  return await withDirectoryLock(join(memoryDir, ".learnings.lock"), operation, lockOptions);
+}
+
+/** Serialize a complete learnings read-modify-write transaction. */
+export async function mutateLearnings(
+  memoryDir: string,
+  mutation: (entries: LearningEntry[]) => LearningEntry[] | Promise<LearningEntry[]>,
+  lockOptions?: DirectoryLockOptions,
+): Promise<LearningEntry[]> {
+  return await withLearningsLock(
+    memoryDir,
+    async () => {
+      const entries = await loadLearnings(memoryDir);
+      const updated = await mutation(entries);
+      await writeLearnings(memoryDir, updated);
+      return updated;
+    },
+    lockOptions,
+  );
+}
+
+/** Replace a previously read snapshot only if no concurrent mutation changed it. */
+export async function replaceLearningsIfUnchanged(
+  memoryDir: string,
+  expected: LearningEntry[],
+  replacement: LearningEntry[],
+  beforeWrite?: () => Promise<void>,
+): Promise<boolean> {
+  return await withLearningsLock(memoryDir, async () => {
+    const current = await loadLearnings(memoryDir);
+    if (renderLearnings(current) !== renderLearnings(expected)) return false;
+
+    await beforeWrite?.();
+    await writeLearnings(memoryDir, replacement);
+    return true;
+  });
+}
+
+export interface LearningRemovalResult {
+  readonly removed: boolean;
+  readonly entries: LearningEntry[];
+}
+
+/** Remove exactly one reviewed entry, provided its persisted representation has not changed. */
+export async function removeLearningIfUnchanged(
+  memoryDir: string,
+  expected: LearningEntry,
+): Promise<LearningRemovalResult> {
+  const expectedContent = renderEntry(expected);
+  let removed = false;
+  const entries = await mutateLearnings(memoryDir, (current) => {
+    const index = current.findIndex((entry) => renderEntry(entry) === expectedContent);
+    if (index === -1) return current;
+    removed = true;
+    return current.toSpliced(index, 1);
+  });
+  return { removed, entries };
+}
+
 // --- Scoring ---
 
 function daysBetween(dateStr: string, now: Date, windowDays: number): number {
@@ -211,10 +278,7 @@ function reinforcementScore(entry: LearningEntry): number {
 
 export function matchesCwd(entry: LearningEntry, cwd: string): boolean {
   if (entry.cwds.includes("*")) return true;
-  return entry.cwds.some((parent) => {
-    const rel = relative(parent, cwd);
-    return !rel.startsWith("..") && !isAbsolute(rel);
-  });
+  return entry.cwds.some((entryCwd) => arePathsRelated(entryCwd, cwd));
 }
 
 /** Score a single entry for context loading. Range: 0.0 to 2.0. */

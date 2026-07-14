@@ -4,8 +4,8 @@
  */
 
 import { join } from "node:path";
-import { Command } from "commander";
-import { resolveShakaHome } from "../../domain/config";
+import { Command, Option } from "commander";
+import { loadConfig, resolveShakaHome } from "../../domain/config";
 import { type LearningEntry, loadLearnings } from "../../memory/learnings";
 import { type SearchFilter, searchMemory } from "../../memory/search";
 import { type SummaryIndex, listSummaries } from "../../memory/storage";
@@ -13,14 +13,14 @@ import { runCompile } from "./compile";
 import { runConsolidation } from "./consolidate";
 import { runReview } from "./review";
 
-function resolveMemoryDir(): string {
+function resolveMemoryPaths(): { shakaHome: string; memoryDir: string } {
   const shakaHome = resolveShakaHome({
     SHAKA_HOME: process.env.SHAKA_HOME,
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     HOME: process.env.HOME,
     USERPROFILE: process.env.USERPROFILE,
   });
-  return join(shakaHome, "memory");
+  return { shakaHome, memoryDir: join(shakaHome, "memory") };
 }
 
 export function createMemoryCommand(): Command {
@@ -28,53 +28,72 @@ export function createMemoryCommand(): Command {
 
   memory
     .command("search <query>")
-    .description("Search session summaries and learnings for a query")
+    .description("Search session summaries, learnings, and compiled knowledge")
     .option(
       "--category <category>",
       "Filter learnings by category (correction/preference/pattern/fact)",
     )
-    .option("--cwd <path>", "Filter by working directory (substring match)")
-    .option("--type <type>", "Filter by result type (session/learning)")
-    .action(async (query: string, options: { category?: string; cwd?: string; type?: string }) => {
-      const memoryDir = resolveMemoryDir();
+    .addOption(new Option("--cwd <path>", "Search a specific project").conflicts("all"))
+    .addOption(new Option("--all", "Search every project").conflicts("cwd"))
+    .addOption(
+      new Option("--type <type>", "Filter by result type").choices([
+        "session",
+        "learning",
+        "knowledge",
+      ]),
+    )
+    .action(
+      async (
+        query: string,
+        options: { all?: boolean; category?: string; cwd?: string; type?: string },
+      ) => {
+        const { shakaHome, memoryDir } = resolveMemoryPaths();
+        const config = await loadConfig(shakaHome);
 
-      const filter: SearchFilter | undefined =
-        options.category || options.cwd || options.type
-          ? {
-              category: options.category,
-              cwd: options.cwd,
-              type: options.type as "session" | "learning" | undefined,
-            }
-          : undefined;
+        const filter: SearchFilter | undefined =
+          options.all || options.category || options.cwd || options.type
+            ? {
+                allProjects: options.all,
+                category: options.category,
+                cwd: options.cwd,
+                type: options.type as "session" | "learning" | "knowledge" | undefined,
+              }
+            : undefined;
 
-      const results = await searchMemory(query, memoryDir, filter);
+        const results = await searchMemory(
+          query,
+          memoryDir,
+          filter,
+          config?.memory?.search_max_results,
+        );
 
-      if (results.length === 0) {
-        console.log(`No results for "${query}"`);
-        return;
-      }
-
-      console.log(
-        `Found ${results.length} result${results.length > 1 ? "s" : ""} for "${query}":\n`,
-      );
-
-      for (const result of results) {
-        const typeLabel = result.type === "learning" ? "[learning]" : "[session]";
-        console.log(`  ${result.date}  ${typeLabel} ${result.title}`);
-        if (result.tags.length > 0) {
-          console.log(`           tags: ${result.tags.join(", ")}`);
+        if (results.length === 0) {
+          console.log(`No results for "${query}"`);
+          return;
         }
-        console.log(`           ${result.snippet}`);
-        console.log();
-      }
-    });
+
+        console.log(
+          `Found ${results.length} result${results.length > 1 ? "s" : ""} for "${query}":\n`,
+        );
+
+        for (const result of results) {
+          const typeLabel = `[${result.type}]`;
+          console.log(`  ${result.date}  ${typeLabel} ${result.title}`);
+          if (result.tags.length > 0) {
+            console.log(`           tags: ${result.tags.join(", ")}`);
+          }
+          console.log(`           ${result.snippet}`);
+          console.log();
+        }
+      },
+    );
 
   memory
     .command("list")
     .description("List recent session summaries")
     .option("-n, --limit <count>", "Number of summaries to show", "10")
     .action(async (options: { limit: string }) => {
-      const memoryDir = resolveMemoryDir();
+      const { memoryDir } = resolveMemoryPaths();
 
       const summaries = await listSummaries(memoryDir);
 
@@ -105,7 +124,7 @@ export function createMemoryCommand(): Command {
     .command("consolidate")
     .description("Consolidate learnings: merge duplicates, resolve contradictions")
     .action(async () => {
-      const memoryDir = resolveMemoryDir();
+      const { memoryDir } = resolveMemoryPaths();
       await runConsolidation(memoryDir);
     });
 
@@ -115,7 +134,7 @@ export function createMemoryCommand(): Command {
     .option("--prune", "AI-assisted quality assessment: flag low-quality entries for review")
     .option("--filter <text>", "Pre-filter learnings by text (matches CWDs, titles, body)")
     .action(async (options: { prune?: boolean; filter?: string }) => {
-      const memoryDir = resolveMemoryDir();
+      const { memoryDir } = resolveMemoryPaths();
       await runReview(memoryDir, options);
     });
 
@@ -133,7 +152,7 @@ export function createMemoryCommand(): Command {
         batchSize?: string;
         limit?: string;
       }) => {
-        const memoryDir = resolveMemoryDir();
+        const { memoryDir } = resolveMemoryPaths();
         const cwd = process.cwd();
         await runCompile(memoryDir, cwd, options);
       },
@@ -143,7 +162,7 @@ export function createMemoryCommand(): Command {
     .command("stats")
     .description("Show memory system health at a glance")
     .action(async () => {
-      const memoryDir = resolveMemoryDir();
+      const { memoryDir } = resolveMemoryPaths();
       const [learnings, summaries] = await Promise.all([
         loadLearnings(memoryDir),
         listSummaries(memoryDir),

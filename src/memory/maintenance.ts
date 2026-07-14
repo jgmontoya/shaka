@@ -4,7 +4,7 @@
  *
  * Pure decision function determines when to run consolidation + pruning.
  * Orchestration function (`runMaintenance`) runs as a sequential step
- * in the session-end worker — no separate process, no lockfiles.
+ * in the session-end worker while holding the shared learnings lock.
  *
  * State tracked in .last-maintenance JSON file; audit trail in JSONL log.
  */
@@ -25,6 +25,7 @@ import {
   promoteToGlobal,
   renderLearnings,
   selectLearnings,
+  withLearningsLock,
   writeLearnings,
 } from "./learnings";
 
@@ -246,6 +247,17 @@ async function findPruneTargets(
  * Single write: all mutations are applied in-memory, written once at the end.
  */
 export async function runMaintenance(
+  memoryDir: string,
+  cwd: string,
+  newLearningsExtracted: number,
+  opts?: { now?: Date; provider?: ProviderName },
+): Promise<MaintenanceResult> {
+  return await withLearningsLock(memoryDir, () =>
+    runMaintenanceTransaction(memoryDir, cwd, newLearningsExtracted, opts),
+  );
+}
+
+async function runMaintenanceTransaction(
   memoryDir: string,
   cwd: string,
   newLearningsExtracted: number,

@@ -490,6 +490,12 @@ else
   warn "Knowledge directory not created (session-end worker may not have triggered compilation)"
 fi
 
+# Deterministic recall checks run after the live memory pipeline so fixtures
+# cannot make the session-end assertions above pass accidentally.
+# shellcheck source=lib/memory.sh
+source "$(dirname "$0")/lib/memory.sh"
+run_memory_recall_e2e
+
 # ── Workflow until ────────────────────────────────────────────────────
 
 # shellcheck source=lib/workflow-until.sh

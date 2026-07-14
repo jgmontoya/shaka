@@ -3,6 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeLearnings } from "../../../src/memory/learnings";
+import { projectSlug } from "../../../src/memory/rollups";
 import { type SearchFilter, type SearchResult, searchMemory } from "../../../src/memory/search";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
@@ -23,7 +24,7 @@ function makeSummary(
   return {
     metadata: {
       date: overrides.date ?? "2026-02-09",
-      cwd: overrides.cwd ?? "/projects/myapp",
+      cwd: overrides.cwd ?? process.cwd(),
       provider: overrides.provider ?? "claude",
       sessionId: overrides.sessionId ?? "ses-search001",
     },
@@ -65,6 +66,29 @@ describe("searchMemory", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("Fix authentication bug");
+  });
+
+  test("default search excludes sessions from unrelated projects", async () => {
+    await writeSummary(
+      testMemoryDir,
+      makeSummary({
+        cwd: process.cwd(),
+        title: "Current project scope",
+        sessionId: "ses-scope001",
+      }),
+    );
+    await writeSummary(
+      testMemoryDir,
+      makeSummary({
+        cwd: "/projects/unrelated",
+        title: "Unrelated project scope",
+        sessionId: "ses-scope002",
+      }),
+    );
+
+    const results = await searchMemory("project scope", testMemoryDir);
+
+    expect(results.map((result) => result.title)).toEqual(["Current project scope"]);
   });
 
   test("search is case-insensitive", async () => {
@@ -240,7 +264,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "correction",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Use Bun.file() instead of fs.readFile()",
@@ -288,7 +312,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "pattern",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Always write testing patterns first",
@@ -308,7 +332,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "correction",
-        cwds: ["/x"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Use UPPERCASE Convention",
@@ -341,7 +365,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "pattern",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Testing patterns for Bun",
@@ -366,7 +390,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "pattern",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Testing patterns for Bun",
@@ -383,7 +407,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "correction",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Always use Bun runtime",
@@ -391,7 +415,7 @@ describe("searchMemory", () => {
       },
       {
         category: "preference",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
         nonglobal: false,
         title: "Prefer Bun APIs",
@@ -425,7 +449,7 @@ describe("searchMemory", () => {
       }),
     );
 
-    const results = await searchMemory("refactoring", testMemoryDir, { cwd: "myapp" });
+    const results = await searchMemory("refactoring", testMemoryDir, { cwd: "/projects/myapp" });
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("Session in myapp");
   });
@@ -450,7 +474,7 @@ describe("searchMemory", () => {
       },
     ]);
 
-    const results = await searchMemory("insight", testMemoryDir, { cwd: "myapp" });
+    const results = await searchMemory("insight", testMemoryDir, { cwd: "/projects/myapp" });
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("App-specific pattern");
   });
@@ -487,6 +511,107 @@ describe("searchMemory", () => {
     expect(results[0]?.category).toBe("fact");
   });
 
+  test("finds matches in the current project's compiled knowledge", async () => {
+    const knowledgeDir = join(testMemoryDir, "knowledge", projectSlug(process.cwd()));
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(
+      join(knowledgeDir, "authentication.md"),
+      `---
+title: Authentication Decisions
+created: 2026-07-01
+updated: 2026-07-14
+confidence: high
+sources:
+  - session-1
+summary: Token rotation behavior for this project.
+---
+
+## Overview
+
+Refresh tokens use deterministic rotation.
+`,
+    );
+
+    const results = await searchMemory("deterministic rotation", testMemoryDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      type: "knowledge",
+      title: "Authentication Decisions",
+      date: "2026-07-14",
+    });
+  });
+
+  test("finds project knowledge when searching from a nested working directory", async () => {
+    const knowledgeDir = join(testMemoryDir, "knowledge", projectSlug(process.cwd()));
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(join(knowledgeDir, ".project.json"), JSON.stringify({ cwd: process.cwd() }));
+    await Bun.write(
+      join(knowledgeDir, "nested-scope.md"),
+      `---
+title: Nested Scope
+created: 2026-07-01
+updated: 2026-07-14
+confidence: medium
+sources: []
+summary: Knowledge shared across a project's working directories.
+---
+
+## Overview
+
+Nested scope lookup token.
+`,
+    );
+
+    const results = await searchMemory("lookup token", testMemoryDir, {
+      cwd: join(process.cwd(), "src"),
+    });
+
+    expect(results.map((result) => result.title)).toEqual(["Nested Scope"]);
+  });
+
+  test("allProjects includes compiled knowledge from unrelated projects", async () => {
+    const knowledgeDir = join(testMemoryDir, "knowledge", "unrelated-project");
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(
+      join(knowledgeDir, ".project.json"),
+      JSON.stringify({ cwd: "/projects/unrelated" }),
+    );
+    await Bun.write(
+      join(knowledgeDir, "remote-decision.md"),
+      `---
+title: Remote Decision
+updated: 2026-07-14
+summary: Explicit cross-project knowledge.
+---
+
+All-project knowledge token.
+`,
+    );
+
+    expect(await searchMemory("knowledge token", testMemoryDir)).toEqual([]);
+    const results = await searchMemory("knowledge token", testMemoryDir, { allProjects: true });
+    expect(results.map((result) => result.title)).toEqual(["Remote Decision"]);
+  });
+
+  test("ignores knowledge indexes, logs, and malformed topic pages", async () => {
+    const knowledgeDir = join(testMemoryDir, "knowledge", projectSlug(process.cwd()));
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(join(knowledgeDir, "_index.md"), "Internal search token");
+    await Bun.write(join(knowledgeDir, "log.md"), "Internal search token");
+    await Bun.write(join(knowledgeDir, "malformed.md"), "Internal search token");
+
+    const results = await searchMemory("search token", testMemoryDir, { type: "knowledge" });
+
+    expect(results).toEqual([]);
+  });
+
+  test("rejects combining a project CWD with allProjects", async () => {
+    await expect(
+      searchMemory("anything", testMemoryDir, { cwd: process.cwd(), allProjects: true }),
+    ).rejects.toThrow("cwd and allProjects cannot be used together");
+  });
+
   // --- Archive search tests ---
 
   test("finds entries in learnings-archive.md", async () => {
@@ -495,7 +620,7 @@ describe("searchMemory", () => {
     const archiveEntries = [
       {
         category: "pattern" as const,
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-05", sessionHash: "arch0000" }],
         nonglobal: false,
         title: "Archived testing pattern",
@@ -519,7 +644,7 @@ describe("searchMemory", () => {
     await writeLearnings(testMemoryDir, [
       {
         category: "correction",
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "Active Bun Pattern",
@@ -531,7 +656,7 @@ describe("searchMemory", () => {
     const archiveEntries = [
       {
         category: "pattern" as const,
-        cwds: ["/projects/myapp"],
+        cwds: [process.cwd()],
         exposures: [{ date: "2026-02-05", sessionHash: "arch0000" }],
         nonglobal: false,
         title: "Archived Bun Pattern",
