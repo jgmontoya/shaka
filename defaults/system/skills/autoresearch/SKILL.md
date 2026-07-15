@@ -45,6 +45,19 @@ One change, smallest useful. Resist the urge to bundle.
 
 If you find yourself proposing one of the above, step back and find a change with real leverage.
 
+## Protect benchmark integrity
+
+Improve the behavior the benchmark represents, not the benchmark case itself. A change should remain useful on comparable inputs the benchmark does not contain.
+
+Do not:
+
+- Detect or special-case benchmark fixtures, commands, paths, or environment variables in production code.
+- Skip required work, weaken validation, suppress errors, or change observable behavior merely to improve the metric.
+- Return precomputed or stale results unless the same reuse is correct for normal callers with equivalent inputs.
+- Remove correctness coverage or narrow supported behavior.
+
+Project-wide structural optimization, valid memoization, and specialization that is part of the documented product contract remain legitimate. The distinction is whether the change improves normal behavior or only recognizes the active judge.
+
 ## The `asi` annotation
 
 On your response you may emit an optional `ASI:` line with whitespace-separated short tags. They're free-form, saved verbatim into the jsonl, and exist so a future-you (or a future resume) can skim what was tried.

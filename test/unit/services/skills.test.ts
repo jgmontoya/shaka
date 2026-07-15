@@ -64,4 +64,15 @@ describe("loadSkill", () => {
     expect(body).toContain("Output contract");
     expect(body).toContain("Required spec structure");
   });
+
+  test("ships explicit benchmark-integrity guidance for autoresearch", async () => {
+    const defaultsDir = resolve(import.meta.dir, "..", "..", "..", "defaults");
+    process.env.SHAKA_HOME = defaultsDir;
+
+    const body = await loadSkill("autoresearch");
+
+    expect(body).toContain("Protect benchmark integrity");
+    expect(body).toContain("special-case benchmark fixtures");
+    expect(body).toContain("documented product contract");
+  });
 });
