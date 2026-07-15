@@ -6,6 +6,7 @@
 import { join } from "node:path";
 import { Command, Option } from "commander";
 import { loadConfig, resolveShakaHome } from "../../domain/config";
+import { findKnowledgeSourceImpact, inspectKnowledge } from "../../memory/inspection";
 import { type LearningEntry, loadLearnings } from "../../memory/learnings";
 import { type SearchFilter, searchMemory } from "../../memory/search";
 import { type SummaryIndex, listSummaries } from "../../memory/storage";
@@ -82,6 +83,7 @@ export function createMemoryCommand(): Command {
           if (result.tags.length > 0) {
             console.log(`           tags: ${result.tags.join(", ")}`);
           }
+          console.log(`           path: ${result.filePath}`);
           console.log(`           ${result.snippet}`);
           console.log();
         }
@@ -157,6 +159,55 @@ export function createMemoryCommand(): Command {
         await runCompile(memoryDir, cwd, options);
       },
     );
+
+  memory
+    .command("check")
+    .description("Check compiled project knowledge without changing it")
+    .option("--cwd <path>", "Check a specific project", process.cwd())
+    .action(async (options: { cwd: string }) => {
+      const { memoryDir } = resolveMemoryPaths();
+      const inspection = await inspectKnowledge(memoryDir, options.cwd);
+      const healthy =
+        inspection.complete &&
+        inspection.diagnostics.every((diagnostic) => diagnostic.severity !== "error");
+
+      console.log(`Knowledge integrity: ${healthy ? "PASS" : "FAIL"}`);
+      console.log(`  project: ${inspection.projectCwd ?? options.cwd}`);
+      console.log(`  directory: ${inspection.knowledgeDir}`);
+      console.log(`  topics: ${inspection.topics.length}`);
+      console.log(`  inspection complete: ${inspection.complete ? "yes" : "no"}`);
+
+      for (const diagnostic of inspection.diagnostics) {
+        console.log(
+          `  [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.filePath}\n` +
+            `    ${diagnostic.message}`,
+        );
+      }
+
+      if (!healthy) process.exitCode = 1;
+    });
+
+  memory
+    .command("impact <source>")
+    .description("Report where a session source appears in compiled knowledge")
+    .option("--cwd <path>", "Inspect a specific project", process.cwd())
+    .action(async (source: string, options: { cwd: string }) => {
+      const { memoryDir } = resolveMemoryPaths();
+      const inspection = await inspectKnowledge(memoryDir, options.cwd);
+      const impact = findKnowledgeSourceImpact(inspection, source);
+
+      console.log(`Source impact: ${impact.sourceSession}`);
+      console.log(`  inspection complete: ${impact.complete ? "yes" : "no"}`);
+      console.log(`  topics: ${impact.topics.length}`);
+
+      for (const topic of impact.topics) {
+        console.log(`  topic: ${topic.title} (${topic.filePath})`);
+        console.log(`    frontmatter: ${topic.referencedInFrontmatter ? "yes" : "no"}`);
+        for (const decision of topic.decisions) console.log(`    decision: ${decision}`);
+      }
+
+      if (!impact.complete) process.exitCode = 1;
+    });
 
   memory
     .command("stats")

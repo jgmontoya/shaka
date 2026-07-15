@@ -76,7 +76,7 @@ export default {
     const formatted = results.map((r) => {
       const typeLabel = `[${r.type}]`;
       const tags = r.tags.length > 0 ? ` [${r.tags.join(", ")}]` : "";
-      return `### ${typeLabel} ${r.title}\n*${r.date}*${tags}\n\n${r.snippet}`;
+      return `### ${typeLabel} ${r.title}\n*${r.date}*${tags}\n\nPath: ${r.filePath}\n\n${r.snippet}`;
     });
 
     return `Found ${results.length} matching result${results.length > 1 ? "s" : ""}:\n\n${formatted.join("\n\n---\n\n")}`;

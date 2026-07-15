@@ -10,9 +10,12 @@ mock.module("../../../src/inference", () => ({
 }));
 
 import { createMemoryCommand } from "../../../src/commands/memory/index";
+import { rebuildIndex } from "../../../src/memory/knowledge";
 import { type LearningEntry, loadLearnings, writeLearnings } from "../../../src/memory/learnings";
+import { projectSlug } from "../../../src/memory/rollups";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
+import { hashContent } from "../../../src/memory/utils";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
@@ -150,7 +153,7 @@ describe("memory search", () => {
   });
 
   test("--all includes matches from unrelated projects", async () => {
-    await writeSummary(searchMemoryDir, {
+    const summaryPath = await writeSummary(searchMemoryDir, {
       metadata: {
         date: "2026-02-15",
         cwd: "/projects/unrelated",
@@ -172,7 +175,9 @@ describe("memory search", () => {
       console.log = originalLog;
     }
 
-    expect(output.join("\n")).toContain("Cross-project needle");
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Cross-project needle");
+    expect(rendered).toContain(`path: ${summaryPath}`);
   });
 
   test("default search excludes matches from unrelated projects", async () => {
@@ -269,5 +274,134 @@ Compiled knowledge needle.
     }
 
     expect(output.join("\n")).toContain("[knowledge] Memory Architecture");
+  });
+});
+
+describe("memory check", () => {
+  let savedShakaHome: string | undefined;
+  let savedExitCode: typeof process.exitCode;
+  let checkRoot: string;
+
+  beforeEach(async () => {
+    savedShakaHome = process.env.SHAKA_HOME;
+    savedExitCode = process.exitCode;
+    process.exitCode = 0;
+    checkRoot = await mkdtemp(join(tmpdir(), "shaka-memory-check-"));
+    process.env.SHAKA_HOME = checkRoot;
+  });
+
+  afterEach(async () => {
+    if (savedShakaHome === undefined) process.env.SHAKA_HOME = undefined;
+    else process.env.SHAKA_HOME = savedShakaHome;
+    process.exitCode = savedExitCode ?? 0;
+    await rm(checkRoot, { recursive: true, force: true });
+  });
+
+  test("reports integrity failures and sets a failing exit code", async () => {
+    const cwd = "/projects/shaka";
+    const knowledgeDir = join(checkRoot, "memory", "knowledge", projectSlug(cwd));
+    const topicPath = join(knowledgeDir, "broken-topic.md");
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(join(knowledgeDir, ".project.json"), JSON.stringify({ cwd }));
+    await Bun.write(
+      join(knowledgeDir, ".manifest.json"),
+      JSON.stringify({ compiledSources: {}, lastCompilation: "2026-07-15T12:00:00.000Z" }),
+    );
+    await Bun.write(topicPath, "# Missing frontmatter");
+    await Bun.write(join(knowledgeDir, "_index.md"), "# Knowledge Index\n");
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Knowledge integrity: FAIL");
+    expect(rendered).toContain("malformed-topic-page");
+    expect(rendered).toContain(topicPath);
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe("memory impact", () => {
+  let savedShakaHome: string | undefined;
+  let impactRoot: string;
+
+  beforeEach(async () => {
+    savedShakaHome = process.env.SHAKA_HOME;
+    impactRoot = await mkdtemp(join(tmpdir(), "shaka-memory-impact-"));
+    process.env.SHAKA_HOME = impactRoot;
+  });
+
+  afterEach(async () => {
+    if (savedShakaHome === undefined) process.env.SHAKA_HOME = undefined;
+    else process.env.SHAKA_HOME = savedShakaHome;
+    await rm(impactRoot, { recursive: true, force: true });
+  });
+
+  test("reports source references without changing knowledge files", async () => {
+    const cwd = "/projects/shaka";
+    const sourceId = "2026-07-15-impact001";
+    const memoryDir = join(impactRoot, "memory");
+    const sourcePath = join(memoryDir, "sessions", `${sourceId}.md`);
+    const knowledgeDir = join(memoryDir, "knowledge", projectSlug(cwd));
+    const topicPath = join(knowledgeDir, "retrieval.md");
+    const sourceContent = "source session";
+    await mkdir(join(memoryDir, "sessions"), { recursive: true });
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(sourcePath, sourceContent);
+    await Bun.write(join(knowledgeDir, ".project.json"), JSON.stringify({ cwd }));
+    await Bun.write(
+      join(knowledgeDir, ".manifest.json"),
+      JSON.stringify({
+        compiledSources: { [`${sourceId}.md`]: hashContent(sourceContent) },
+        lastCompilation: "2026-07-15T12:00:00.000Z",
+      }),
+    );
+    await Bun.write(
+      topicPath,
+      `---
+title: Retrieval
+created: 2026-07-15
+updated: 2026-07-15
+confidence: medium
+sources:
+  - ${sourceId}
+summary: Deterministic retrieval
+---
+
+## Overview
+
+Search is deterministic.
+
+## Key Decisions
+
+- Keep substring matching (source: ${sourceId})
+`,
+    );
+    await rebuildIndex(knowledgeDir);
+    const before = await Bun.file(topicPath).text();
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["impact", sourcePath, "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain(`Source impact: ${sourceId}`);
+    expect(rendered).toContain(`topic: Retrieval (${topicPath})`);
+    expect(rendered).toContain("decision: Keep substring matching");
+    expect(rendered).toContain("inspection complete: yes");
+    expect(await Bun.file(topicPath).text()).toBe(before);
   });
 });

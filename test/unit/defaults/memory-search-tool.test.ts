@@ -25,7 +25,7 @@ describe("memory-search tool", () => {
   });
 
   test("all_projects includes matches from unrelated projects", async () => {
-    await writeSummary(memoryDir, {
+    const summaryPath = await writeSummary(memoryDir, {
       metadata: {
         date: "2026-07-14",
         cwd: "/projects/unrelated",
@@ -40,6 +40,7 @@ describe("memory-search tool", () => {
     const result = await memorySearchTool.execute({ query: "needle", all_projects: true });
 
     expect(result).toContain("Remote project needle");
+    expect(result).toContain(`Path: ${summaryPath}`);
   });
 
   test("default search excludes matches from unrelated projects", async () => {

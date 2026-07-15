@@ -1,0 +1,255 @@
+{
+  "version": 1,
+  "searchMaxResults": 3,
+  "sessions": [
+    {
+      "key": "exact",
+      "date": "2026-07-10",
+      "scope": "current",
+      "title": "Cobalt cache invariant",
+      "body": "The cobalt cache invariant requires deterministic invalidation."
+    },
+    {
+      "key": "paraphrase",
+      "date": "2026-07-09",
+      "scope": "current",
+      "title": "Credential renewal lifecycle",
+      "body": "Refresh credentials before their lease expires."
+    },
+    {
+      "key": "scope-current",
+      "date": "2026-07-01",
+      "scope": "current",
+      "title": "Current scope sentinel",
+      "body": "Scope sentinel belongs to the active project."
+    },
+    {
+      "key": "scope-unrelated",
+      "date": "2026-07-15",
+      "scope": "unrelated",
+      "title": "Unrelated scope sentinel",
+      "body": "Scope sentinel belongs to another project."
+    },
+    {
+      "key": "knowledge-one",
+      "date": "2026-07-08",
+      "scope": "current",
+      "title": "Compilation source one",
+      "body": "Source material for compiled knowledge."
+    },
+    {
+      "key": "knowledge-two",
+      "date": "2026-07-11",
+      "scope": "current",
+      "title": "Compilation source two",
+      "body": "A later source preserves a conflicting decision."
+    },
+    {
+      "key": "limit-one",
+      "date": "2026-07-01",
+      "scope": "current",
+      "title": "Limit swarm one",
+      "body": "Limit swarm evidence."
+    },
+    {
+      "key": "limit-two",
+      "date": "2026-07-02",
+      "scope": "current",
+      "title": "Limit swarm two",
+      "body": "Limit swarm evidence."
+    },
+    {
+      "key": "limit-three",
+      "date": "2026-07-03",
+      "scope": "current",
+      "title": "Limit swarm three",
+      "body": "Limit swarm evidence."
+    },
+    {
+      "key": "limit-four",
+      "date": "2026-07-04",
+      "scope": "current",
+      "title": "Limit swarm four",
+      "body": "Limit swarm evidence."
+    },
+    {
+      "key": "limit-five",
+      "date": "2026-07-05",
+      "scope": "current",
+      "title": "Limit swarm five",
+      "body": "Limit swarm evidence."
+    }
+  ],
+  "activeLearnings": [
+    {
+      "title": "Active retention boundary",
+      "body": "Retention boundary guidance remains active.",
+      "category": "pattern",
+      "date": "2026-07-12"
+    }
+  ],
+  "archivedLearnings": [
+    {
+      "title": "Archived retention boundary",
+      "body": "Retention boundary guidance is preserved in the archive.",
+      "category": "pattern",
+      "date": "2026-07-07"
+    }
+  ],
+  "knowledgeTopics": [
+    {
+      "slug": "compiled-provenance",
+      "title": "Compiled provenance beacon",
+      "summary": "Compiled provenance beacon points to exact source evidence.",
+      "body": "Compiled provenance beacon keeps evidence inspectable.",
+      "sourceKeys": ["knowledge-one"],
+      "decisions": [
+        {
+          "text": "Return the exact evidence path",
+          "sourceKey": "knowledge-one"
+        }
+      ]
+    },
+    {
+      "slug": "conflicting-storage-policy",
+      "title": "Conflicting storage policy",
+      "summary": "Conflict sentinel preserves both storage decisions.",
+      "body": "Conflict sentinel records the change instead of overwriting history.",
+      "sourceKeys": ["knowledge-one", "knowledge-two"],
+      "decisions": [
+        {
+          "text": "Originally keep storage ephemeral",
+          "sourceKey": "knowledge-one"
+        },
+        {
+          "text": "Updated: persist storage locally",
+          "sourceKey": "knowledge-two"
+        }
+      ]
+    }
+  ],
+  "searchCases": [
+    {
+      "id": "exact-keyword",
+      "query": "cobalt cache invariant",
+      "scope": "default",
+      "expectedResultCount": 1,
+      "requiredTitles": ["Cobalt cache invariant"],
+      "forbiddenTitles": ["Unrelated scope sentinel"],
+      "expectedEvidence": [{ "title": "Cobalt cache invariant", "source": "session:exact" }],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "known-paraphrase-miss",
+      "query": "rotate auth tokens",
+      "scope": "default",
+      "expectedResultCount": 0,
+      "requiredTitles": [],
+      "forbiddenTitles": ["Credential renewal lifecycle"],
+      "expectedEvidence": [],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "current-project-before-limit",
+      "query": "scope sentinel",
+      "scope": "default",
+      "expectedResultCount": 1,
+      "requiredTitles": ["Current scope sentinel"],
+      "forbiddenTitles": ["Unrelated scope sentinel"],
+      "expectedEvidence": [
+        { "title": "Current scope sentinel", "source": "session:scope-current" }
+      ],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "explicit-cross-project",
+      "query": "scope sentinel",
+      "scope": "all",
+      "expectedResultCount": 2,
+      "requiredTitles": ["Current scope sentinel", "Unrelated scope sentinel"],
+      "forbiddenTitles": [],
+      "expectedEvidence": [
+        { "title": "Current scope sentinel", "source": "session:scope-current" },
+        { "title": "Unrelated scope sentinel", "source": "session:scope-unrelated" }
+      ],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "active-and-archived",
+      "query": "retention boundary",
+      "scope": "default",
+      "expectedResultCount": 2,
+      "requiredTitles": ["Active retention boundary", "Archived retention boundary"],
+      "forbiddenTitles": [],
+      "expectedEvidence": [
+        { "title": "Active retention boundary", "source": "learning:active" },
+        { "title": "Archived retention boundary", "source": "learning:archive" }
+      ],
+      "requiredText": ["[archived]"],
+      "noMutation": true
+    },
+    {
+      "id": "compiled-topic-path",
+      "query": "compiled provenance beacon",
+      "scope": "default",
+      "type": "knowledge",
+      "expectedResultCount": 1,
+      "requiredTitles": ["Compiled provenance beacon"],
+      "forbiddenTitles": [],
+      "expectedEvidence": [
+        { "title": "Compiled provenance beacon", "source": "knowledge:compiled-provenance" }
+      ],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "conflicting-knowledge",
+      "query": "conflict sentinel",
+      "scope": "default",
+      "type": "knowledge",
+      "expectedResultCount": 1,
+      "requiredTitles": ["Conflicting storage policy"],
+      "forbiddenTitles": [],
+      "expectedEvidence": [
+        { "title": "Conflicting storage policy", "source": "knowledge:conflicting-storage-policy" }
+      ],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "no-evidence",
+      "query": "evidence that does not exist",
+      "scope": "default",
+      "expectedResultCount": 0,
+      "requiredTitles": [],
+      "forbiddenTitles": [],
+      "expectedEvidence": [],
+      "requiredText": [],
+      "noMutation": true
+    },
+    {
+      "id": "configured-maximum",
+      "query": "limit swarm",
+      "scope": "default",
+      "expectedResultCount": 3,
+      "requiredTitles": ["Limit swarm five", "Limit swarm four", "Limit swarm three"],
+      "forbiddenTitles": ["Limit swarm two", "Limit swarm one"],
+      "expectedEvidence": [
+        { "title": "Limit swarm five", "source": "session:limit-five" },
+        { "title": "Limit swarm four", "source": "session:limit-four" },
+        { "title": "Limit swarm three", "source": "session:limit-three" }
+      ],
+      "requiredText": [],
+      "noMutation": true
+    }
+  ],
+  "contextCases": [
+    { "topicCount": 1, "maxCharacters": 2000 },
+    { "topicCount": 4, "maxCharacters": 4000 },
+    { "topicCount": 8, "maxCharacters": 7000 }
+  ]
+}
