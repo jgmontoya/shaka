@@ -8,8 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Added
 
-- **Compiled knowledge search** - `shaka memory search` and the `memory-search` tool now return matching topic pages with the `knowledge` result type. Use `--type knowledge` to limit CLI results.
+- **Compiled knowledge search** - `shaka memory search` and the `memory-search` tool now return matching topic pages with the `knowledge` result type and show the exact source path for every result. Use `--type knowledge` to limit CLI results.
 - **Explicit cross-project memory search** - pass `--all` to the CLI or `all_projects: true` to the tool when a query should span every project.
+- **Knowledge integrity inspection** - `shaka memory check` reports malformed pages, missing sources, index drift, and invalid topic files without changing memory. `shaka memory impact <source>` shows the topic pages and decisions that cite a session source.
 
 ### Changed
 
@@ -19,6 +20,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 ### Fixed
 
 - **Concurrent learning updates are serialized** - session extraction, maintenance, consolidation, and review now share one lock for complete read-modify-write transactions. Live locks use heartbeats, stale locks recover after a fixed threshold, and reviewed entries use compare-and-delete semantics.
+- **Invalid compiled knowledge is rejected before writing** - Shaka validates generated topic pages and their source references, gives invalid model output one correction attempt, and leaves compiled knowledge unchanged when correction fails.
+- **Unsafe compiled topic filenames are rejected** - Shaka rejects topic tags that would create unsafe or ambiguous filenames, reports invalid stored topic files through `shaka memory check`, and prevents them from entering search results or rebuilt indexes.
 
 ## [0.13.0] - 2026-07-08
 
