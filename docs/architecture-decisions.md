@@ -150,3 +150,47 @@ name that shared contract. A warning-only architecture check guards large
 configurers, provider branches outside provider modules, stale opencode agent
 names, provider-specific generic option fields, and duplicate process timeout
 chains.
+
+---
+
+## ADR-012: Canonical Boundaries for Compiled Knowledge
+
+**Status:** Accepted
+
+**Context:** Compiled topic pages use model-produced tags as filesystem
+identities. A page can satisfy the Markdown schema while its filename creates a
+second identity. This happened when a backtick-wrapped tag created a duplicate
+topic. Generated pages can also omit required fields or source provenance.
+
+**Decision:** Treat generated topic pages and tags as untrusted input. Use one
+topic-slug contract for compilation, indexing, inspection, title discovery, and
+search. Topic slugs contain lowercase ASCII letters and digits separated by
+single hyphens, have a 200-character limit, and exclude reserved filenames.
+Normalize Unicode form, surrounding whitespace, case, and whitespace runs in
+model-produced tags before validation. Reject punctuation, path syntax, and
+noncanonical stored entries.
+
+Validate stored topic entries and fragment tags before compilation inference.
+Validate every generated page against the topic schema and its expected sources
+before writing any page in the batch. If generated output is invalid, make one
+correction request containing typed validation issues and the authoritative
+sources, then fail the compilation if the corrected output remains invalid.
+
+Each reader uses the same filename parser: index rebuilding rejects invalid
+stored entries, search and title discovery exclude them, and inspection reports
+them while retaining provenance from readable regular files. Knowledge project
+directories must be non-symlink directories directly under the knowledge root,
+and topic paths must remain direct children of their project directory.
+
+**Rationale:** A shared identity contract keeps compilation and retrieval from
+assigning different meanings to the same filename. Preflight checks stop invalid
+identities before model calls or filesystem mutation. One correction attempt
+handles repairable model output with a fixed cost. Batch validation prevents a
+validation failure from leaving a partially written topic set.
+
+**Consequences:** Unicode remains available in page content while filesystem
+identities stay portable. Existing noncanonical entries require explicit repair
+before compilation can continue. Invalid generated output may use one extra
+model call. A second validation failure leaves topic pages, the index, the log,
+and the manifest unchanged. Readers report invalid stored state according to
+their role without treating it as valid knowledge.
