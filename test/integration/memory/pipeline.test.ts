@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { compileKnowledge } from "../../../src/memory/knowledge";
 import { searchMemory } from "../../../src/memory/search";
 import {
@@ -192,7 +192,7 @@ describe("Memory pipeline", () => {
   describe("compiled knowledge", () => {
     test("compiles a topic page and finds it through memory search", async () => {
       const parsed = parseSummaryOutput(CLAUDE_LLM_OUTPUT)!;
-      await writeSummary(testMemoryDir, {
+      const summaryPath = await writeSummary(testMemoryDir, {
         ...parsed,
         metadata: CLAUDE_METADATA,
         body: `${parsed.body}
@@ -205,6 +205,7 @@ Redis stores the distributed limiter counters with atomic increments.
 Topics: rate-limiting
 `,
       });
+      const sourceSession = basename(summaryPath, ".md");
 
       await compileKnowledge(
         testMemoryDir,
@@ -215,13 +216,17 @@ created: 2026-07-01
 updated: 2026-07-14
 confidence: high
 sources:
-  - ses-claude-fixture
+  - ${sourceSession}
 summary: Redis-backed distributed rate limiting.
 ---
 
 ## Overview
 
 Distributed limiter counters use a searchable compilation token.
+
+## Key Decisions
+
+- Store distributed limiter counters in Redis (source: ${sourceSession})
 `,
       );
 

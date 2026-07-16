@@ -7,8 +7,8 @@
 
 import { readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
-import { parseFrontmatter } from "../domain/frontmatter";
 import { resolveKnowledgeProjectDir } from "./knowledge";
+import { type CompiledTopicDecision, parseCompiledTopicPage } from "./topic-page";
 import { hashContent } from "./utils";
 
 export type KnowledgeDiagnosticSeverity = "error" | "warning";
@@ -37,10 +37,7 @@ export interface KnowledgeDiagnostic {
   readonly message: string;
 }
 
-export interface KnowledgeDecision {
-  readonly text: string;
-  readonly sourceSession: string;
-}
+export type KnowledgeDecision = CompiledTopicDecision;
 
 export interface InspectedKnowledgeTopic {
   readonly filePath: string;
@@ -116,57 +113,23 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   );
 }
 
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function hasValidTopicFrontmatter(frontmatter: Record<string, unknown>): boolean {
-  const confidence = frontmatter.confidence;
-  const sources = frontmatter.sources;
-  return (
-    isNonEmptyString(frontmatter.title) &&
-    isNonEmptyString(frontmatter.created) &&
-    isNonEmptyString(frontmatter.updated) &&
-    (confidence === "high" || confidence === "medium" || confidence === "low") &&
-    Array.isArray(sources) &&
-    sources.length > 0 &&
-    sources.every(isNonEmptyString) &&
-    isNonEmptyString(frontmatter.summary)
-  );
-}
-
-function extractDecisions(body: string): KnowledgeDecision[] {
-  const section = body.split(/^## Key Decisions\s*$/m)[1]?.split(/^## /m)[0] ?? "";
-  return section.split("\n").flatMap((line): KnowledgeDecision[] => {
-    const bullet = line.match(/^\s*-\s+(.+)$/)?.[1];
-    if (!bullet) return [];
-    const text = bullet.replace(/\s+\(source:\s*[^)]+\)\s*$/, "");
-    return [...bullet.matchAll(/\bsource:\s*([^),]+)/g)].map((match) => ({
-      text,
-      sourceSession: match[1]?.trim() ?? "",
-    }));
-  });
-}
-
 function parseTopic(
   filePath: string,
   filename: string,
   content: string,
 ): InspectedKnowledgeTopic | null {
-  const parsed = parseFrontmatter(content);
-  if (!parsed || !hasValidTopicFrontmatter(parsed.frontmatter)) return null;
-  const decisions = extractDecisions(parsed.body);
-  const sources = parsed.frontmatter.sources as string[];
+  const page = parseCompiledTopicPage(content);
+  if (!page) return null;
   return {
     filePath,
     slug: filename.slice(0, -3),
-    title: parsed.frontmatter.title as string,
-    confidence: parsed.frontmatter.confidence as string,
-    updated: parsed.frontmatter.updated as string,
-    summary: parsed.frontmatter.summary as string,
-    sources,
-    decisions,
-    decisionSources: [...new Set(decisions.map((decision) => decision.sourceSession))],
+    title: page.title,
+    confidence: page.confidence,
+    updated: page.updated,
+    summary: page.summary,
+    sources: page.sources,
+    decisions: page.decisions,
+    decisionSources: [...new Set(page.decisions.map((decision) => decision.sourceSession))],
   };
 }
 
@@ -204,7 +167,7 @@ async function inspectProjectMetadata(
 ): Promise<string | null> {
   const metadataPath = join(knowledgeDir, ".project.json");
   const metadata = await readJsonObject(metadataPath);
-  if (isNonEmptyString(metadata?.cwd)) return metadata.cwd;
+  if (typeof metadata?.cwd === "string" && metadata.cwd.trim().length > 0) return metadata.cwd;
   reportError(
     state,
     "invalid-project-metadata",

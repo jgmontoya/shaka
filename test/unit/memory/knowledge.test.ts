@@ -14,9 +14,9 @@ import {
   groupFragmentsByTopic,
   loadKnowledgeIndex,
   readExistingTopicTitles,
-  resolveKnowledgeProjectDir,
   readManifest,
   rebuildIndex,
+  resolveKnowledgeProjectDir,
   writeManifest,
 } from "../../../src/memory/knowledge";
 import type { KnowledgeFragment } from "../../../src/memory/summarize";
@@ -396,6 +396,30 @@ FTS5-based search.
       expect(indexContent).toContain("Topic");
       expect(indexContent).toContain("Confidence");
     });
+
+    test("omits pages that do not match the compiled topic schema", async () => {
+      const knowledgeDir = join(tmpDir, "knowledge-invalid-schema-index");
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(
+        join(knowledgeDir, "invalid-topic.md"),
+        `---
+title: Invalid Topic
+updated: 2026-04-15
+confidence: high
+summary: Missing created date and sources
+---
+
+## Overview
+
+This is not a valid compiled topic.
+`,
+      );
+
+      await rebuildIndex(knowledgeDir);
+
+      const indexContent = await Bun.file(join(knowledgeDir, "_index.md")).text();
+      expect(indexContent).not.toContain("Invalid Topic");
+    });
   });
 
   describe("appendToLog", () => {
@@ -483,6 +507,311 @@ ${knowledgeContent}
 `;
       await Bun.write(join(sessionsDir, filename), content);
     }
+
+    test("rejects invalid merge output without replacing the existing topic or manifest", async () => {
+      const memoryDir = join(tmpDir, "memory-invalid-merge");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      const topicPath = join(knowledgeDir, "auth.md");
+      const existingTopic = `---
+title: Auth
+created: 2026-04-01
+updated: 2026-04-01
+confidence: low
+sources:
+  - 2026-04-01-original
+summary: Existing auth decision
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Keep tokens signed (source: 2026-04-01-original)
+`;
+      const existingManifest = {
+        compiledSources: { "2026-04-01-original.md": "original-hash" },
+        lastCompilation: "2026-04-01T12:00:00.000Z",
+      };
+      await mkdir(sessionsDir, { recursive: true });
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(
+        join(knowledgeDir, ".project.json"),
+        JSON.stringify({ cwd: "/projects/myapp" }),
+      );
+      await Bun.write(topicPath, existingTopic);
+      await writeManifest(knowledgeDir, existingManifest);
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Update
+
+Rotate signing keys.
+Topics: auth`,
+      );
+
+      await expect(
+        compileKnowledge(
+          memoryDir,
+          "/projects/myapp",
+          async () => "I cannot merge this page safely.",
+        ),
+      ).rejects.toThrow(/invalid compiled topic/i);
+
+      expect(await Bun.file(topicPath).text()).toBe(existingTopic);
+      expect(await readManifest(knowledgeDir)).toEqual(existingManifest);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+    });
+
+    test("rejects invalid create output without creating a topic page", async () => {
+      const memoryDir = join(tmpDir, "memory-invalid-create");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`,
+      );
+
+      await expect(
+        compileKnowledge(
+          memoryDir,
+          "/projects/myapp",
+          async () => "Analysis before an otherwise plausible topic page.",
+        ),
+      ).rejects.toThrow(/invalid compiled topic/i);
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("rejects empty topic output without advancing the manifest", async () => {
+      const memoryDir = join(tmpDir, "memory-empty-create");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`,
+      );
+
+      await expect(compileKnowledge(memoryDir, "/projects/myapp", async () => "")).rejects.toThrow(
+        /empty compiled topic/i,
+      );
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("validates every generated topic before writing any page", async () => {
+      const memoryDir = join(tmpDir, "memory-invalid-batch");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth
+
+### Search Design
+
+Use deterministic substring matching.
+Topics: search`,
+      );
+
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async (prompt) => {
+          if (prompt.includes("Auth Design")) {
+            return `---
+title: Auth
+created: 2026-04-02
+updated: 2026-04-02
+confidence: low
+sources:
+  - 2026-04-02-new12345
+summary: Signed token authentication
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Use signed tokens (source: 2026-04-02-new12345)
+`;
+          }
+          return "The search fragment does not belong here.";
+        }),
+      ).rejects.toThrow(/invalid compiled topic/i);
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "search.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("rejects generated topics that omit their input source", async () => {
+      const memoryDir = join(tmpDir, "memory-missing-provenance");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`,
+      );
+
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          return `---
+title: Auth
+created: 2026-04-02
+updated: 2026-04-02
+confidence: low
+sources:
+  - invented-source
+summary: Signed token authentication
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Use signed tokens (source: invented-source)
+`;
+        }),
+      ).rejects.toThrow(/provenance/i);
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("rejects generated decisions that cite an unlisted source", async () => {
+      const memoryDir = join(tmpDir, "memory-invalid-decision-source");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`,
+      );
+
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          return `---
+title: Auth
+created: 2026-04-02
+updated: 2026-04-02
+confidence: low
+sources:
+  - 2026-04-02-new12345
+summary: Signed token authentication
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Use signed tokens (source: invented-source)
+`;
+        }),
+      ).rejects.toThrow(/decision provenance/i);
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+    });
+
+    test("rejects generated decisions without a source citation", async () => {
+      const memoryDir = join(tmpDir, "memory-uncited-decision");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-new12345.md",
+        `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`,
+      );
+
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          return `---
+title: Auth
+created: 2026-04-02
+updated: 2026-04-02
+confidence: low
+sources:
+  - 2026-04-02-new12345
+summary: Signed token authentication
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Use signed tokens
+`;
+        }),
+      ).rejects.toThrow(/decision citation/i);
+
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+    });
 
     test("end-to-end: compiles fragments into new topic page", async () => {
       const memoryDir = join(tmpDir, "memory-e2e");
@@ -839,7 +1168,27 @@ Topics: auth
       await createSessionWithoutKnowledge(sessionsDir, "2026-04-01-abc12345.md");
 
       // Mock inference that returns fragments for this session
-      const inferFn = async (_prompt: string): Promise<string> => {
+      const inferFn = async (prompt: string): Promise<string> => {
+        if (prompt.includes("knowledge base editor")) {
+          return `---
+title: JWT Architecture
+created: 2026-04-01
+updated: 2026-04-01
+confidence: low
+sources:
+  - 2026-04-01-abc12345
+summary: JWT authentication architecture
+---
+
+## Overview
+
+The system uses JWT with rotating refresh tokens.
+
+## Key Decisions
+
+- Use stateless JWT authentication (source: 2026-04-01-abc12345)
+`;
+        }
         return `SESSION: 2026-04-01-abc12345.md
 ### JWT Architecture Decision
 
@@ -877,8 +1226,29 @@ SESSION: 2026-04-01-abc12345.md
       await createSessionWithKnowledge(sessionsDir, "2026-04-02-def67890.md");
 
       let inferCallCount = 0;
-      const inferFn = async (_prompt: string): Promise<string> => {
+      const inferFn = async (prompt: string): Promise<string> => {
         inferCallCount++;
+        if (prompt.includes("knowledge base editor")) {
+          return `---
+title: Auth Design
+created: 2026-04-01
+updated: 2026-04-02
+confidence: medium
+sources:
+  - 2026-04-01-abc12345
+  - 2026-04-02-def67890
+summary: Stateless JWT authentication
+---
+
+## Overview
+
+JWT provides stateless authentication.
+
+## Key Decisions
+
+- Use JWT for stateless auth (source: 2026-04-01-abc12345)
+`;
+        }
         return `SESSION: 2026-04-01-abc12345.md
 ### Auth Design
 

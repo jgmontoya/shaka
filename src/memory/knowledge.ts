@@ -14,6 +14,13 @@ import { join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { projectSlug } from "./rollups";
 import { type KnowledgeFragment, parseExtractedKnowledge } from "./summarize";
+import {
+  type CompiledTopicPage,
+  hasCompleteDecisionCitations,
+  hasExactTopicSources,
+  hasListedDecisionSources,
+  parseCompiledTopicPage,
+} from "./topic-page";
 import { arePathsRelated, hashContent, isPathRelated } from "./utils";
 
 // --- Types ---
@@ -409,16 +416,14 @@ interface TopicPageMeta {
 
 /** Parse frontmatter from a topic page to extract index metadata. */
 function parseTopicMeta(slug: string, content: string): TopicPageMeta | null {
-  const result = parseFrontmatter(content);
-  if (!result) return null;
-
-  const fm = result.frontmatter;
+  const page = parseCompiledTopicPage(content);
+  if (!page) return null;
   return {
     slug,
-    title: String(fm.title ?? slug),
-    confidence: String(fm.confidence ?? "low"),
-    updated: String(fm.updated ?? ""),
-    summary: String(fm.summary ?? ""),
+    title: page.title,
+    confidence: page.confidence,
+    updated: page.updated,
+    summary: page.summary,
   };
 }
 
@@ -666,29 +671,91 @@ async function writeTopicPages(
   groups: Map<string, KnowledgeFragment[]>,
   inferFn: (prompt: string) => Promise<string>,
 ): Promise<{ topicsCreated: string[]; topicsUpdated: string[] }> {
+  const pendingPages: PendingTopicPage[] = [];
   const topicsCreated: string[] = [];
   const topicsUpdated: string[] = [];
 
   for (const [slug, fragments] of groups) {
-    const topicPath = join(knowledgeDir, `${slug}.md`);
-    const topicFile = Bun.file(topicPath);
-    const exists = await topicFile.exists();
+    const pendingPage = await prepareTopicPage(knowledgeDir, slug, fragments, inferFn);
+    if (pendingPage) pendingPages.push(pendingPage);
+  }
 
-    const prompt = exists
-      ? buildMergePrompt(await topicFile.text(), fragments)
-      : buildCreatePrompt(fragments);
-
-    const rawOutput = await inferFn(prompt);
-    if (!rawOutput) continue;
-
+  for (const page of pendingPages) {
+    const { slug, topicPath, content, existed } = page;
     const tmpPath = join(knowledgeDir, `.${slug}.md.tmp.${process.pid}`);
-    await Bun.write(tmpPath, stripCodeFences(rawOutput));
+    await Bun.write(tmpPath, content);
     await rename(tmpPath, topicPath);
 
-    (exists ? topicsUpdated : topicsCreated).push(slug);
+    (existed ? topicsUpdated : topicsCreated).push(slug);
   }
 
   return { topicsCreated, topicsUpdated };
+}
+
+interface PendingTopicPage {
+  readonly slug: string;
+  readonly topicPath: string;
+  readonly content: string;
+  readonly existed: boolean;
+}
+
+interface ExistingTopicPage {
+  readonly content: string;
+  readonly page: CompiledTopicPage;
+}
+
+async function loadExistingTopicPage(
+  topicPath: string,
+  slug: string,
+): Promise<ExistingTopicPage | null> {
+  const file = Bun.file(topicPath);
+  if (!(await file.exists())) return null;
+
+  const content = await file.text();
+  const page = parseCompiledTopicPage(content);
+  if (!page) throw new Error(`Invalid existing compiled topic for ${slug}`);
+  return { content, page };
+}
+
+function validateGeneratedTopicPage(
+  slug: string,
+  content: string,
+  expectedSources: Iterable<string>,
+): void {
+  const page = parseCompiledTopicPage(content);
+  if (!page) throw new Error(`Invalid compiled topic output for ${slug}`);
+  if (!hasExactTopicSources(page, expectedSources)) {
+    throw new Error(`Invalid compiled topic provenance for ${slug}`);
+  }
+  if (!hasCompleteDecisionCitations(page)) {
+    throw new Error(`Invalid compiled topic decision citation for ${slug}`);
+  }
+  if (!hasListedDecisionSources(page)) {
+    throw new Error(`Invalid compiled topic decision provenance for ${slug}`);
+  }
+}
+
+async function prepareTopicPage(
+  knowledgeDir: string,
+  slug: string,
+  fragments: KnowledgeFragment[],
+  inferFn: (prompt: string) => Promise<string>,
+): Promise<PendingTopicPage | null> {
+  const topicPath = join(knowledgeDir, `${slug}.md`);
+  const existing = await loadExistingTopicPage(topicPath, slug);
+  const prompt = existing
+    ? buildMergePrompt(existing.content, fragments)
+    : buildCreatePrompt(fragments);
+  const rawOutput = await inferFn(prompt);
+  if (!rawOutput.trim()) throw new Error(`Empty compiled topic output for ${slug}`);
+
+  const content = stripCodeFences(rawOutput);
+  const expectedSources = [
+    ...(existing?.page.sources ?? []),
+    ...fragments.map((fragment) => fragment.sourceSession),
+  ];
+  validateGeneratedTopicPage(slug, content, expectedSources);
+  return { slug, topicPath, content, existed: existing !== null };
 }
 
 async function updateManifest(
