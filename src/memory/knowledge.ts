@@ -16,10 +16,9 @@ import { projectSlug } from "./rollups";
 import { type KnowledgeFragment, parseExtractedKnowledge } from "./summarize";
 import {
   type CompiledTopicPage,
-  hasCompleteDecisionCitations,
-  hasExactTopicSources,
-  hasListedDecisionSources,
+  type TopicPageValidationIssue,
   parseCompiledTopicPage,
+  validateGeneratedTopicPage,
 } from "./topic-page";
 import { arePathsRelated, hashContent, isPathRelated } from "./utils";
 
@@ -717,22 +716,37 @@ async function loadExistingTopicPage(
   return { content, page };
 }
 
-function validateGeneratedTopicPage(
-  slug: string,
-  content: string,
-  expectedSources: Iterable<string>,
-): void {
-  const page = parseCompiledTopicPage(content);
-  if (!page) throw new Error(`Invalid compiled topic output for ${slug}`);
-  if (!hasExactTopicSources(page, expectedSources)) {
-    throw new Error(`Invalid compiled topic provenance for ${slug}`);
-  }
-  if (!hasCompleteDecisionCitations(page)) {
-    throw new Error(`Invalid compiled topic decision citation for ${slug}`);
-  }
-  if (!hasListedDecisionSources(page)) {
-    throw new Error(`Invalid compiled topic decision provenance for ${slug}`);
-  }
+function buildTopicCorrectionPrompt(
+  originalPrompt: string,
+  previousOutput: string,
+  issues: TopicPageValidationIssue[],
+  expectedSources: string[],
+): string {
+  const renderedIssues = issues.map((issue) => `- ${issue.code}: ${issue.message}`).join("\n");
+  return `Your previous compiled topic failed validation.
+
+## Validation issues
+
+${renderedIssues}
+
+## Authoritative sources
+
+${expectedSources.map((source) => `- ${source}`).join("\n")}
+
+Return the complete corrected Markdown document only.
+Do not include analysis, commentary, or code fences.
+
+## Original task
+
+${originalPrompt}
+
+## Previous output
+
+${previousOutput}`;
+}
+
+function invalidTopicError(slug: string, issues: TopicPageValidationIssue[]): Error {
+  return new Error(`${issues.map((issue) => issue.message).join(" ")} Topic: ${slug}.`);
 }
 
 async function prepareTopicPage(
@@ -746,16 +760,25 @@ async function prepareTopicPage(
   const prompt = existing
     ? buildMergePrompt(existing.content, fragments)
     : buildCreatePrompt(fragments);
-  const rawOutput = await inferFn(prompt);
-  if (!rawOutput.trim()) throw new Error(`Empty compiled topic output for ${slug}`);
-
-  const content = stripCodeFences(rawOutput);
   const expectedSources = [
     ...(existing?.page.sources ?? []),
     ...fragments.map((fragment) => fragment.sourceSession),
   ];
-  validateGeneratedTopicPage(slug, content, expectedSources);
-  return { slug, topicPath, content, existed: existing !== null };
+  const rawOutput = await inferFn(prompt);
+  const content = stripCodeFences(rawOutput);
+  const validation = validateGeneratedTopicPage(content, expectedSources);
+  if (validation.ok) return { slug, topicPath, content, existed: existing !== null };
+
+  const correctionPrompt = buildTopicCorrectionPrompt(
+    prompt,
+    rawOutput,
+    validation.issues,
+    expectedSources,
+  );
+  const correctedContent = stripCodeFences(await inferFn(correctionPrompt));
+  const correctedValidation = validateGeneratedTopicPage(correctedContent, expectedSources);
+  if (!correctedValidation.ok) throw invalidTopicError(slug, correctedValidation.issues);
+  return { slug, topicPath, content: correctedContent, existed: existing !== null };
 }
 
 async function updateManifest(

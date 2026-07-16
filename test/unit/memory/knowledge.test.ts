@@ -480,6 +480,32 @@ This is not a valid compiled topic.
   });
 
   describe("compileKnowledge", () => {
+    const authSession = "2026-04-02-new12345.md";
+    const authKnowledge = `## Knowledge
+
+### Auth Design
+
+Use signed tokens.
+Topics: auth`;
+    const validAuthTopic = `---
+title: Auth
+created: 2026-04-02
+updated: 2026-04-02
+confidence: low
+sources:
+  - 2026-04-02-new12345
+summary: Signed token authentication
+---
+
+## Overview
+
+Auth uses signed tokens.
+
+## Key Decisions
+
+- Use signed tokens (source: 2026-04-02-new12345)
+`;
+
     /**
      * Helper: create a session summary file with a Knowledge section.
      */
@@ -506,6 +532,20 @@ Test session summary.
 ${knowledgeContent}
 `;
       await Bun.write(join(sessionsDir, filename), content);
+    }
+
+    async function createAuthCompilationFixture(name: string): Promise<{
+      memoryDir: string;
+      knowledgeDir: string;
+    }> {
+      const memoryDir = join(tmpDir, name);
+      const sessionsDir = join(memoryDir, "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(sessionsDir, authSession, authKnowledge);
+      return {
+        memoryDir,
+        knowledgeDir: join(memoryDir, "knowledge", "-projects-myapp"),
+      };
     }
 
     test("rejects invalid merge output without replacing the existing topic or manifest", async () => {
@@ -597,6 +637,95 @@ Topics: auth`,
         compiledSources: {},
         lastCompilation: "",
       });
+    });
+
+    test("retries invalid generated output once with validation feedback", async () => {
+      const { memoryDir } = await createAuthCompilationFixture("memory-corrected-create");
+
+      const prompts: string[] = [];
+      const result = await compileKnowledge(memoryDir, "/projects/myapp", async (prompt) => {
+        prompts.push(prompt);
+        if (prompts.length === 1) return "Analysis before the document.";
+        return validAuthTopic;
+      });
+
+      expect(result.topicsCreated).toEqual(["auth"]);
+      expect(prompts).toHaveLength(2);
+      expect(prompts[1]).toContain("invalid-frontmatter");
+      expect(prompts[1]).toContain("Analysis before the document.");
+      expect(prompts[1]).toContain("2026-04-02-new12345");
+    });
+
+    test("stops after one invalid correction without writing knowledge", async () => {
+      const { memoryDir, knowledgeDir } = await createAuthCompilationFixture(
+        "memory-invalid-correction",
+      );
+
+      const prompts: string[] = [];
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async (prompt) => {
+          prompts.push(prompt);
+          return "Still not a compiled topic.";
+        }),
+      ).rejects.toThrow(/invalid compiled topic output/i);
+
+      expect(prompts).toHaveLength(2);
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("does not request a correction for valid generated output", async () => {
+      const { memoryDir } = await createAuthCompilationFixture("memory-valid-first-output");
+
+      const prompts: string[] = [];
+      const result = await compileKnowledge(memoryDir, "/projects/myapp", async (prompt) => {
+        prompts.push(prompt);
+        return validAuthTopic;
+      });
+
+      expect(result.topicsCreated).toEqual(["auth"]);
+      expect(prompts).toHaveLength(1);
+    });
+
+    test("does not retry when the existing topic is invalid", async () => {
+      const { memoryDir, knowledgeDir } = await createAuthCompilationFixture(
+        "memory-invalid-existing-topic",
+      );
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(
+        join(knowledgeDir, ".project.json"),
+        JSON.stringify({ cwd: "/projects/myapp" }),
+      );
+      await Bun.write(join(knowledgeDir, "auth.md"), "Invalid existing topic.");
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          return "unused";
+        }),
+      ).rejects.toThrow(/invalid existing compiled topic/i);
+
+      expect(inferenceCalls).toBe(0);
+    });
+
+    test("does not retry inference failures", async () => {
+      const { memoryDir } = await createAuthCompilationFixture("memory-inference-failure");
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          throw new Error("provider unavailable");
+        }),
+      ).rejects.toThrow("provider unavailable");
+
+      expect(inferenceCalls).toBe(1);
     });
 
     test("rejects empty topic output without advancing the manifest", async () => {
