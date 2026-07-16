@@ -309,6 +309,8 @@ Knowledge requires substance — how something works, why a decision was made, w
 If a fact genuinely contains both a behavioral nudge AND domain understanding, it can appear in both.
 
 ${topicsBlock}
+Topic tags must use lowercase ASCII letters and digits separated by single hyphens
+(for example, auth-system). Do not wrap tags in quotes or code formatting.
 
 Format knowledge as:
 

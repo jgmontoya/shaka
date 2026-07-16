@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findKnowledgeSourceImpact, inspectKnowledge } from "../../../src/memory/inspection";
@@ -98,6 +98,42 @@ Shaka compiles durable project knowledge.
     expect(inspection.topics).toEqual([]);
     expect(inspection.diagnostics).toContainEqual(
       expect.objectContaining({ code: "malformed-topic-page", filePath: topicPath }),
+    );
+  });
+
+  test("reports noncanonical topic filenames while retaining their provenance", async () => {
+    const canonicalPath = join(knowledgeDir, "memory-architecture.md");
+    const noncanonicalPath = join(knowledgeDir, "`memory-architecture`.md");
+    await rename(canonicalPath, noncanonicalPath);
+
+    const inspection = await inspectKnowledge(memoryDir, cwd);
+
+    expect(inspection.complete).toBe(true);
+    expect(inspection.topics).toContainEqual(
+      expect.objectContaining({ filePath: noncanonicalPath, sources: [sourceId] }),
+    );
+    expect(inspection.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "noncanonical-topic-filename",
+        filePath: noncanonicalPath,
+        severity: "error",
+      }),
+    );
+  });
+
+  test("does not follow non-file topic entries", async () => {
+    const topicEntry = join(knowledgeDir, "linked-topic.md");
+    await mkdir(topicEntry);
+
+    const inspection = await inspectKnowledge(memoryDir, cwd);
+
+    expect(inspection.complete).toBe(false);
+    expect(inspection.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "non-regular-topic-file",
+        filePath: topicEntry,
+        severity: "error",
+      }),
     );
   });
 

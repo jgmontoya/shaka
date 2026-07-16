@@ -5,10 +5,11 @@
  * source provenance. It never repairs or mutates the knowledge store.
  */
 
-import { readdir } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { resolveKnowledgeProjectDir } from "./knowledge";
 import { type CompiledTopicDecision, parseCompiledTopicPage } from "./topic-page";
+import { parseTopicFilename } from "./topic-slug";
 import { hashContent } from "./utils";
 
 export type KnowledgeDiagnosticSeverity = "error" | "warning";
@@ -18,6 +19,8 @@ export type KnowledgeDiagnosticCode =
   | "invalid-project-metadata"
   | "invalid-manifest"
   | "temporary-file"
+  | "noncanonical-topic-filename"
+  | "non-regular-topic-file"
   | "duplicate-topic-slug"
   | "missing-index"
   | "malformed-index"
@@ -345,6 +348,25 @@ async function inspectTopicFile(
   state: InspectionState,
 ): Promise<InspectedKnowledgeTopic | null> {
   const filePath = join(knowledgeDir, filename);
+  const fileStats = await lstat(filePath).catch(() => null);
+  if (!fileStats?.isFile()) {
+    reportError(
+      state,
+      "non-regular-topic-file",
+      filePath,
+      "Topic path must be a regular file.",
+      true,
+    );
+    return null;
+  }
+  if (!parseTopicFilename(filename)) {
+    reportError(
+      state,
+      "noncanonical-topic-filename",
+      filePath,
+      `Topic filename is not canonical ASCII kebab-case: ${JSON.stringify(filename)}.`,
+    );
+  }
   const content = await Bun.file(filePath)
     .text()
     .catch(() => null);

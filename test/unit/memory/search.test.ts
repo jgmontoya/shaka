@@ -606,6 +606,25 @@ All-project knowledge token.
     expect(results).toEqual([]);
   });
 
+  test("ignores compiled knowledge with a noncanonical topic filename", async () => {
+    const knowledgeDir = join(testMemoryDir, "knowledge", projectSlug(process.cwd()));
+    await mkdir(knowledgeDir, { recursive: true });
+    await Bun.write(
+      join(knowledgeDir, "`authentication`.md"),
+      `---
+title: Noncanonical Authentication
+updated: 2026-07-14
+---
+
+Noncanonical search sentinel.
+`,
+    );
+
+    const results = await searchMemory("search sentinel", testMemoryDir, { type: "knowledge" });
+
+    expect(results).toEqual([]);
+  });
+
   test("rejects combining a project CWD with allProjects", async () => {
     await expect(
       searchMemory("anything", testMemoryDir, { cwd: process.cwd(), allProjects: true }),

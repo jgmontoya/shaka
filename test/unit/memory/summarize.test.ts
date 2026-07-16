@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  type KnowledgeFragment,
   type SessionMetadata,
   type SessionSummary,
   buildSummarizationPrompt,
-  parseSummaryOutput,
   parseExtractedKnowledge,
-  type KnowledgeFragment,
+  parseSummaryOutput,
 } from "../../../src/memory/summarize";
 import type { NormalizedMessage } from "../../../src/memory/transcript";
 
@@ -133,6 +133,14 @@ describe("Summarize", () => {
       );
       expect(prompt).toContain("auth-system");
       expect(prompt).toContain("deployment-pipeline");
+    });
+
+    test("requires portable ASCII kebab-case knowledge topic tags", () => {
+      const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata);
+
+      expect(prompt).toContain(
+        "Topic tags must use lowercase ASCII letters and digits separated by single hyphens",
+      );
     });
 
     test("knowledge section distinguishes behavioral nudges from domain knowledge", () => {
@@ -648,12 +656,12 @@ Topics: search, architecture-decisions
     });
 
     test("returns empty array when no Knowledge section exists", () => {
-      const raw = `## Summary\nSome summary.\n\n## Learnings\n\n### (fact) Something\n\nA fact.`;
+      const raw = "## Summary\nSome summary.\n\n## Learnings\n\n### (fact) Something\n\nA fact.";
       expect(parseExtractedKnowledge(raw, metadata)).toEqual([]);
     });
 
     test("returns empty array when Knowledge section is empty", () => {
-      const raw = `## Summary\nSome summary.\n\n## Knowledge\n`;
+      const raw = "## Summary\nSome summary.\n\n## Knowledge\n";
       expect(parseExtractedKnowledge(raw, metadata)).toEqual([]);
     });
 

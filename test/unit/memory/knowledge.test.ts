@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +66,22 @@ describe("Knowledge", () => {
 
       const titles = await readExistingTopicTitles(knowledgeDir);
       expect(titles).toEqual(["auth-system"]);
+    });
+
+    test("omits noncanonical topic filenames while retaining canonical titles", async () => {
+      const knowledgeDir = join(tmpDir, "knowledge-noncanonical-title");
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(join(knowledgeDir, "auth-system.md"), "# Auth\n");
+      await Bun.write(join(knowledgeDir, "`search`.md"), "# Search\n");
+
+      expect(await readExistingTopicTitles(knowledgeDir)).toEqual(["auth-system"]);
+    });
+
+    test("omits canonical-named entries that are not regular files", async () => {
+      const knowledgeDir = join(tmpDir, "knowledge-non-file-title");
+      await mkdir(join(knowledgeDir, "auth-system.md"), { recursive: true });
+
+      expect(await readExistingTopicTitles(knowledgeDir)).toEqual([]);
     });
   });
 
@@ -251,11 +267,36 @@ A fact.
     });
 
     test("normalizes tags: lowercase, trim, hyphens for spaces", () => {
-      const fragments = [makeFragment("Mixed Case", ["Auth System", " SCALING "])];
+      const fragments = [makeFragment("Mixed Case", ["Ａｕｔｈ   System", " SCALING "])];
       const existingSlugs = ["auth-system"];
       const groups = groupFragmentsByTopic(fragments, existingSlugs);
 
       expect(groups.has("auth-system")).toBe(true);
+    });
+
+    test("rejects Windows reserved topic names", () => {
+      const fragments = [makeFragment("Console", ["CON"], "session-reserved")];
+
+      expect(() => groupFragmentsByTopic(fragments, [])).toThrow(
+        'Invalid topic tag "CON" in session-reserved.',
+      );
+    });
+
+    test("rejects topic names too long for temporary filename suffixes", () => {
+      const overlong = "a".repeat(201);
+      const fragments = [makeFragment("Long Topic", [overlong], "session-overlong")];
+
+      expect(() => groupFragmentsByTopic(fragments, [])).toThrow(
+        `Invalid topic tag ${JSON.stringify(overlong)} in session-overlong.`,
+      );
+    });
+
+    test("rejects noncanonical existing topic slugs", () => {
+      const fragments = [makeFragment("Auth", ["auth"])];
+
+      expect(() => groupFragmentsByTopic(fragments, ["../auth"])).toThrow(
+        'Noncanonical existing topic slug: "../auth".',
+      );
     });
   });
 
@@ -419,6 +460,17 @@ This is not a valid compiled topic.
 
       const indexContent = await Bun.file(join(knowledgeDir, "_index.md")).text();
       expect(indexContent).not.toContain("Invalid Topic");
+    });
+
+    test("rejects noncanonical topic filenames instead of silently omitting them", async () => {
+      const knowledgeDir = join(tmpDir, "knowledge-invalid-filename-index");
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(join(knowledgeDir, "`auth`.md"), "# Invalid filename");
+
+      await expect(rebuildIndex(knowledgeDir)).rejects.toThrow(
+        'Noncanonical topic filename: "`auth`.md".',
+      );
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
     });
   });
 
@@ -726,6 +778,136 @@ Topics: auth`,
       ).rejects.toThrow("provider unavailable");
 
       expect(inferenceCalls).toBe(1);
+    });
+
+    test("rejects unsafe topic tags before inference or knowledge writes", async () => {
+      const memoryDir = join(tmpDir, "memory-unsafe-topic-tag");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeDir = join(memoryDir, "knowledge", "-projects-myapp");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionSummary(
+        sessionsDir,
+        "2026-04-02-unsafe01.md",
+        `## Knowledge
+
+### Valid Topic Tag
+
+This fragment must not be written when another tag is invalid.
+Topics: auth
+
+### Unsafe Topic Tag
+
+This fragment must remain retryable.
+Topics: \`memory-system\``,
+      );
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          return validAuthTopic;
+        }),
+      ).rejects.toThrow('Invalid topic tag "`memory-system`" in 2026-04-02-unsafe01.');
+
+      expect(inferenceCalls).toBe(0);
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "`memory-system`.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("rejects noncanonical stored topic filenames before inference or writes", async () => {
+      const { memoryDir, knowledgeDir } = await createAuthCompilationFixture(
+        "memory-noncanonical-topic-filename",
+      );
+      const invalidTopicPath = join(knowledgeDir, "`auth`.md");
+      await mkdir(knowledgeDir, { recursive: true });
+      await Bun.write(invalidTopicPath, validAuthTopic);
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          return validAuthTopic;
+        }),
+      ).rejects.toThrow('Noncanonical topic filename: "`auth`.md".');
+
+      expect(inferenceCalls).toBe(0);
+      expect(await Bun.file(invalidTopicPath).text()).toBe(validAuthTopic);
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+      expect(await readManifest(knowledgeDir)).toEqual({
+        compiledSources: {},
+        lastCompilation: "",
+      });
+    });
+
+    test("rejects a symlinked knowledge project before writing through it", async () => {
+      const memoryDir = join(tmpDir, "memory-symlinked-project");
+      const sessionsDir = join(memoryDir, "sessions");
+      const knowledgeRoot = join(memoryDir, "knowledge");
+      const knowledgeDir = join(knowledgeRoot, "-projects-myapp");
+      const outsideDir = join(tmpDir, "outside-knowledge-project");
+      await mkdir(sessionsDir, { recursive: true });
+      await mkdir(knowledgeRoot, { recursive: true });
+      await mkdir(outsideDir, { recursive: true });
+      await symlink(outsideDir, knowledgeDir, process.platform === "win32" ? "junction" : "dir");
+      await createSessionSummary(sessionsDir, authSession, authKnowledge);
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          return validAuthTopic;
+        }),
+      ).rejects.toThrow("Knowledge project directory must not be a symbolic link");
+
+      expect(inferenceCalls).toBe(0);
+      expect(await readdir(outsideDir)).toEqual([]);
+    });
+
+    test("rejects stored topic paths that are not regular files", async () => {
+      const { memoryDir, knowledgeDir } = await createAuthCompilationFixture(
+        "memory-non-file-topic-entry",
+      );
+      await mkdir(join(knowledgeDir, "auth.md"), { recursive: true });
+
+      let inferenceCalls = 0;
+      await expect(
+        compileKnowledge(memoryDir, "/projects/myapp", async () => {
+          inferenceCalls++;
+          return validAuthTopic;
+        }),
+      ).rejects.toThrow("Topic path is not a regular file: auth.md.");
+
+      expect(inferenceCalls).toBe(0);
+      expect(await Bun.file(join(knowledgeDir, "_index.md")).exists()).toBe(false);
+      expect(await Bun.file(join(knowledgeDir, "log.md")).exists()).toBe(false);
+    });
+
+    test("serializes concurrent compilation while creating a new project directory", async () => {
+      const { memoryDir, knowledgeDir } = await createAuthCompilationFixture(
+        "memory-concurrent-project-creation",
+      );
+      let inferenceCalls = 0;
+      const infer = async (): Promise<string> => {
+        inferenceCalls++;
+        return validAuthTopic;
+      };
+
+      const results = await Promise.all([
+        compileKnowledge(memoryDir, "/projects/myapp", infer),
+        compileKnowledge(memoryDir, "/projects/myapp", infer),
+      ]);
+
+      expect(inferenceCalls).toBe(1);
+      expect(results.reduce((total, result) => total + result.sessionsProcessed, 0)).toBe(1);
+      expect(await Bun.file(join(knowledgeDir, "auth.md")).exists()).toBe(true);
     });
 
     test("rejects empty topic output without advancing the manifest", async () => {
@@ -1288,6 +1470,23 @@ Topics: auth
         return "SESSION: unknown.md\n(no knowledge)";
       };
     }
+
+    test("bootstrap requires portable ASCII kebab-case knowledge topic tags", async () => {
+      const memoryDir = join(tmpDir, "memory-bootstrap-topic-tag-contract");
+      const sessionsDir = join(memoryDir, "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await createSessionWithoutKnowledge(sessionsDir, "2026-04-01-abc12345.md");
+
+      let prompt = "";
+      await bootstrapKnowledge(memoryDir, "/projects/myapp", async (value) => {
+        prompt = value;
+        return "SESSION: 2026-04-01-abc12345.md\n(no knowledge)";
+      });
+
+      expect(prompt).toContain(
+        "Topic tags must use lowercase ASCII letters and digits separated by single hyphens",
+      );
+    });
 
     test("Slice 1: bootstrap with 1 session extracts fragments and writes them back", async () => {
       const memoryDir = join(tmpDir, "memory-bootstrap-1");

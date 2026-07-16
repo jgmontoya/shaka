@@ -9,8 +9,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, rename, rmdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, readdir, realpath, rename, rmdir, stat } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { parseFrontmatter } from "../domain/frontmatter";
 import { projectSlug } from "./rollups";
 import { type KnowledgeFragment, parseExtractedKnowledge } from "./summarize";
@@ -20,6 +20,7 @@ import {
   parseCompiledTopicPage,
   validateGeneratedTopicPage,
 } from "./topic-page";
+import { parseTopicFilename, parseTopicSlug, topicFilePath, topicSlugFromTag } from "./topic-slug";
 import { arePathsRelated, hashContent, isPathRelated } from "./utils";
 
 // --- Types ---
@@ -36,6 +37,60 @@ export interface SessionEntry {
 }
 
 const PROJECT_METADATA_FILE = ".project.json";
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error !== null && typeof error === "object" && "code" in error && error.code === code;
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return hasErrorCode(error, "ENOENT");
+}
+
+async function lstatIfExists(path: string) {
+  try {
+    return await lstat(path);
+  } catch (error) {
+    if (isMissingPathError(error)) return null;
+    throw error;
+  }
+}
+
+async function assertRegularKnowledgeDirectory(knowledgeDir: string): Promise<void> {
+  const stats = await lstatIfExists(knowledgeDir);
+  if (!stats) throw new Error(`Knowledge project directory does not exist: ${knowledgeDir}`);
+  if (stats.isSymbolicLink()) {
+    throw new Error(`Knowledge project directory must not be a symbolic link: ${knowledgeDir}`);
+  }
+  if (!stats.isDirectory()) {
+    throw new Error(`Knowledge project path must be a directory: ${knowledgeDir}`);
+  }
+}
+
+async function ensureKnowledgeProjectDirectory(
+  memoryDir: string,
+  knowledgeDir: string,
+): Promise<void> {
+  const knowledgeRoot = join(memoryDir, "knowledge");
+  await mkdir(knowledgeRoot, { recursive: true });
+  await assertRegularKnowledgeDirectory(knowledgeRoot);
+
+  const existing = await lstatIfExists(knowledgeDir);
+  if (!existing) {
+    await mkdir(knowledgeDir).catch((error: unknown) => {
+      if (hasErrorCode(error, "EEXIST")) return;
+      throw error;
+    });
+  }
+  await assertRegularKnowledgeDirectory(knowledgeDir);
+
+  const [physicalRoot, physicalProject] = await Promise.all([
+    realpath(knowledgeRoot),
+    realpath(knowledgeDir),
+  ]);
+  if (dirname(physicalProject) !== physicalRoot) {
+    throw new Error(`Knowledge project directory is outside the knowledge root: ${knowledgeDir}`);
+  }
+}
 
 async function readKnowledgeProjectCwd(knowledgeDir: string): Promise<string | null> {
   try {
@@ -108,13 +163,30 @@ export async function resolveKnowledgeProjectDir(memoryDir: string, cwd: string)
  */
 export async function readExistingTopicTitles(knowledgeDir: string): Promise<string[]> {
   try {
-    const entries = await readdir(knowledgeDir);
-    return entries
-      .filter((f) => f.endsWith(".md") && f !== "_index.md" && f !== "log.md")
-      .map((f) => f.replace(/\.md$/, ""));
+    const entries = await readdir(knowledgeDir, { withFileTypes: true });
+    return entries.flatMap((entry) => {
+      if (!entry.isFile() || entry.name === "_index.md" || entry.name === "log.md") return [];
+      const slug = parseTopicFilename(entry.name);
+      return slug ? [slug] : [];
+    });
   } catch {
     return [];
   }
+}
+
+async function readStoredTopicSlugs(knowledgeDir: string): Promise<string[]> {
+  const entries = await readdir(knowledgeDir, { withFileTypes: true });
+  const slugs: string[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.name.endsWith(".md") || entry.name === "_index.md" || entry.name === "log.md") {
+      continue;
+    }
+    const slug = parseTopicFilename(entry.name);
+    if (!slug) throw new Error(`Noncanonical topic filename: ${JSON.stringify(entry.name)}.`);
+    if (!entry.isFile()) throw new Error(`Topic path is not a regular file: ${entry.name}.`);
+    slugs.push(slug);
+  }
+  return slugs;
 }
 
 // --- Manifest ---
@@ -179,9 +251,14 @@ export function extractFragmentsFromSummary(
 
 // --- Tag grouping ---
 
-/** Normalize a tag: lowercase, trim, replace spaces with hyphens. */
-function normalizeTag(tag: string): string {
-  return tag.trim().toLowerCase().replace(/\s+/g, "-");
+function normalizeFragmentTopics(fragment: KnowledgeFragment): string[] {
+  return fragment.topics.map((tag) => {
+    const slug = topicSlugFromTag(tag);
+    if (!slug) {
+      throw new Error(`Invalid topic tag ${JSON.stringify(tag)} in ${fragment.sourceSession}.`);
+    }
+    return slug;
+  });
 }
 
 /**
@@ -200,11 +277,16 @@ export function groupFragmentsByTopic(
   existingSlugs: string[],
 ): Map<string, KnowledgeFragment[]> {
   const groups = new Map<string, KnowledgeFragment[]>();
+  for (const slug of existingSlugs) {
+    if (!parseTopicSlug(slug)) {
+      throw new Error(`Noncanonical existing topic slug: ${JSON.stringify(slug)}.`);
+    }
+  }
   const slugSet = new Set(existingSlugs);
   const unmatched: KnowledgeFragment[] = [];
 
   for (const fragment of fragments) {
-    const tags = fragment.topics.map(normalizeTag).filter(Boolean);
+    const tags = normalizeFragmentTopics(fragment);
     if (tags.length === 0) continue;
 
     const match = tags.find((t) => slugSet.has(t));
@@ -237,13 +319,13 @@ function groupUnmatchedByFrequency(
 
   const tagCounts = new Map<string, number>();
   for (const f of unmatched) {
-    for (const tag of f.topics.map(normalizeTag).filter(Boolean)) {
+    for (const tag of normalizeFragmentTopics(f)) {
       tagCounts.set(tag, (tagCounts.get(tag) ?? 0) + 1);
     }
   }
 
   for (const fragment of unmatched) {
-    const tags = fragment.topics.map(normalizeTag).filter(Boolean);
+    const tags = normalizeFragmentTopics(fragment);
     const bestTag = pickMostFrequentTag(tags, tagCounts);
     if (bestTag) addToGroup(groups, bestTag, fragment);
   }
@@ -431,15 +513,12 @@ function parseTopicMeta(slug: string, content: string): TopicPageMeta | null {
  * No LLM call — reads all topic pages and generates the index table.
  */
 export async function rebuildIndex(knowledgeDir: string): Promise<void> {
-  const entries = await readdir(knowledgeDir).catch(() => [] as string[]);
-  const topicFiles = entries.filter(
-    (f) => f.endsWith(".md") && f !== "_index.md" && f !== "log.md",
-  );
+  await assertRegularKnowledgeDirectory(knowledgeDir);
+  const topicSlugs = await readStoredTopicSlugs(knowledgeDir);
 
   const metas: TopicPageMeta[] = [];
-  for (const file of topicFiles) {
-    const content = await Bun.file(join(knowledgeDir, file)).text();
-    const slug = file.replace(/\.md$/, "");
+  for (const slug of topicSlugs) {
+    const content = await Bun.file(topicFilePath(knowledgeDir, slug)).text();
     const meta = parseTopicMeta(slug, content);
     if (meta) metas.push(meta);
   }
@@ -454,7 +533,7 @@ export async function rebuildIndex(knowledgeDir: string): Promise<void> {
 
   const rows = metas.map(
     (m) =>
-      `| [${m.title}](${join(knowledgeDir, `${m.slug}.md`)}) | ${m.confidence} | ${m.updated} | ${m.summary} |`,
+      `| [${m.title}](${topicFilePath(knowledgeDir, m.slug)}) | ${m.confidence} | ${m.updated} | ${m.summary} |`,
   );
 
   const content = `${header}\n${tableHeader}\n${rows.join("\n")}\n`;
@@ -599,10 +678,11 @@ export async function compileKnowledge(
   const empty: CompilationResult = { sessionsProcessed: 0, topicsCreated: [], topicsUpdated: [] };
 
   const knowledgeDir = await resolveKnowledgeProjectDir(memoryDir, cwd);
-  await mkdir(knowledgeDir, { recursive: true });
+  await ensureKnowledgeProjectDirectory(memoryDir, knowledgeDir);
 
   const result = await withKnowledgeLock(knowledgeDir, async () => {
     await ensureKnowledgeProjectCwd(knowledgeDir, cwd);
+    const existingSlugs = await readStoredTopicSlugs(knowledgeDir);
     const manifest = await readManifest(knowledgeDir);
     const sessionsDir = join(memoryDir, "sessions");
 
@@ -617,7 +697,6 @@ export async function compileKnowledge(
       return { sessionsProcessed: unprocessed.length, topicsCreated: [], topicsUpdated: [] };
     }
 
-    const existingSlugs = await readExistingTopicTitles(knowledgeDir);
     const groups = groupFragmentsByTopic(allFragments, existingSlugs);
     const { topicsCreated, topicsUpdated } = await writeTopicPages(knowledgeDir, groups, inferFn);
 
@@ -681,7 +760,7 @@ async function writeTopicPages(
 
   for (const page of pendingPages) {
     const { slug, topicPath, content, existed } = page;
-    const tmpPath = join(knowledgeDir, `.${slug}.md.tmp.${process.pid}`);
+    const tmpPath = join(knowledgeDir, `.${basename(topicPath)}.tmp.${process.pid}`);
     await Bun.write(tmpPath, content);
     await rename(tmpPath, topicPath);
 
@@ -755,7 +834,7 @@ async function prepareTopicPage(
   fragments: KnowledgeFragment[],
   inferFn: (prompt: string) => Promise<string>,
 ): Promise<PendingTopicPage | null> {
-  const topicPath = join(knowledgeDir, `${slug}.md`);
+  const topicPath = topicFilePath(knowledgeDir, slug);
   const existing = await loadExistingTopicPage(topicPath, slug);
   const prompt = existing
     ? buildMergePrompt(existing.content, fragments)
@@ -876,6 +955,8 @@ Do NOT extract:
 - Implementation details too narrow to help with future work
 
 ${topicsBlock}
+Topic tags must use lowercase ASCII letters and digits separated by single hyphens
+(for example, auth-system). Do not wrap tags in quotes or code formatting.
 
 For each session, output:
 
@@ -975,7 +1056,7 @@ export async function bootstrapKnowledge(
   }
 
   // Step 2: Get existing topic titles for tag convergence
-  await mkdir(knowledgeDir, { recursive: true });
+  await ensureKnowledgeProjectDirectory(memoryDir, knowledgeDir);
   const existingTopicTitles = await readExistingTopicTitles(knowledgeDir);
 
   // Step 3: Batch and extract

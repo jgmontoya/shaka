@@ -20,6 +20,7 @@ import {
   renderEntry,
 } from "./learnings";
 import { parseSummaryOutput } from "./summarize";
+import { parseTopicFilename } from "./topic-slug";
 import { arePathsRelated } from "./utils";
 
 const DEFAULT_MAX_RESULTS = 10;
@@ -104,12 +105,12 @@ async function searchKnowledgeDirectory(
   queryLower: string,
   projectDir: string,
 ): Promise<SearchResult[]> {
-  const entries = await readdir(projectDir).catch(() => [] as string[]);
+  const entries = await readdir(projectDir, { withFileTypes: true }).catch(() => []);
   const results: SearchResult[] = [];
   for (const entry of entries) {
-    if (!entry.endsWith(".md") || entry === "_index.md" || entry === "log.md") continue;
+    if (!entry.isFile() || !parseTopicFilename(entry.name)) continue;
 
-    const filePath = join(projectDir, entry);
+    const filePath = join(projectDir, entry.name);
     const content = await Bun.file(filePath)
       .text()
       .catch(() => "");
@@ -119,7 +120,7 @@ async function searchKnowledgeDirectory(
     results.push({
       type: "knowledge",
       filePath,
-      title: String(parsed.frontmatter.title ?? entry.replace(/\.md$/, "")),
+      title: String(parsed.frontmatter.title ?? entry.name.replace(/\.md$/, "")),
       date: String(parsed.frontmatter.updated ?? ""),
       tags: [],
       snippet: extractSnippet(content, queryLower),
