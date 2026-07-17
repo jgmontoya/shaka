@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { mkdir, readdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { removeLink } from "../../../../src/platform/paths";
@@ -18,9 +18,37 @@ describe("OpencodeProviderConfigurer", () => {
     await rm(testShakaHome, { recursive: true, force: true });
     await mkdir(testProjectRoot, { recursive: true });
     await mkdir(`${testShakaHome}/system/hooks`, { recursive: true });
+    await mkdir(`${testShakaHome}/system/tools`, { recursive: true });
     await mkdir(`${testShakaHome}/system/agents`, { recursive: true });
     await mkdir(`${testShakaHome}/system/skills`, { recursive: true });
     await mkdir(`${testShakaHome}/skills`, { recursive: true });
+
+    await Bun.write(
+      `${testShakaHome}/system/tools/memory-search.ts`,
+      `export default {
+        name: "memory-search",
+        description: "Search memory",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+        execute: async () => "ok",
+      };`,
+    );
+    await Bun.write(
+      `${testShakaHome}/system/tools/inference.ts`,
+      `export default {
+        name: "inference",
+        description: "Run inference",
+        inputSchema: {
+          type: "object",
+          properties: { prompt: { type: "string" } },
+          required: ["prompt"],
+        },
+        execute: async () => "ok",
+      };`,
+    );
 
     // Create test hooks with TRIGGER exports (Shaka canonical names)
     await Bun.write(
@@ -469,6 +497,92 @@ console.log("format");
       const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
       expect(content).toContain("memory-search");
       expect(content).toContain("inference");
+    });
+
+    test("plugin declares every discovered canonical tool", async () => {
+      await Bun.write(
+        `${testShakaHome}/system/tools/custom-tool.ts`,
+        `export default {
+          description: "A generated tool",
+          inputSchema: {
+            type: "object",
+            properties: { enabled: { type: "boolean" } },
+          },
+          execute: async () => "ok",
+        };`,
+      );
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+
+      await configurer.install({ shakaHome: testShakaHome });
+
+      const content = await Bun.file(`${testProjectRoot}/plugins/shaka.ts`).text();
+      expect(content).toContain('"custom-tool": tool({');
+    });
+
+    test("schema validation failure preserves the previous plugin", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      const firstResult = await configurer.install({ shakaHome: testShakaHome });
+      expect(firstResult.ok).toBe(true);
+      const pluginPath = `${testProjectRoot}/plugins/shaka.ts`;
+      const previousPlugin = await Bun.file(pluginPath).text();
+      await Bun.write(
+        `${testShakaHome}/system/tools/unsupported.ts`,
+        `export default {
+          description: "Unsupported",
+          inputSchema: {
+            type: "object",
+            properties: { values: { type: "array" } },
+          },
+          execute: async () => "ok",
+        };`,
+      );
+
+      const result = await configurer.install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(false);
+      expect(await Bun.file(pluginPath).text()).toBe(previousPlugin);
+    });
+
+    test("syntax validation failure preserves the previous plugin", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      const firstResult = await configurer.install({ shakaHome: testShakaHome });
+      expect(firstResult.ok).toBe(true);
+      const pluginPath = `${testProjectRoot}/plugins/shaka.ts`;
+      const previousPlugin = await Bun.file(pluginPath).text();
+      const rejectingConfigurer = new OpencodeProviderConfigurer({
+        opencodeConfigDir: testProjectRoot,
+        validatePluginSyntax: async () => ({
+          ok: false as const,
+          error: new Error("generated syntax rejected"),
+        }),
+      });
+
+      const result = await rejectingConfigurer.install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(false);
+      expect(await Bun.file(pluginPath).text()).toBe(previousPlugin);
+    });
+
+    test("syntax validator exceptions preserve the plugin without leaving a temporary artifact", async () => {
+      const configurer = new OpencodeProviderConfigurer({ opencodeConfigDir: testProjectRoot });
+      const firstResult = await configurer.install({ shakaHome: testShakaHome });
+      expect(firstResult.ok).toBe(true);
+      const pluginPath = `${testProjectRoot}/plugins/shaka.ts`;
+      const previousPlugin = await Bun.file(pluginPath).text();
+      const throwingConfigurer = new OpencodeProviderConfigurer({
+        opencodeConfigDir: testProjectRoot,
+        validatePluginSyntax: async () => {
+          throw new Error("validator crashed");
+        },
+      });
+
+      const result = await throwingConfigurer.install({ shakaHome: testShakaHome });
+
+      expect(result.ok).toBe(false);
+      expect(await Bun.file(pluginPath).text()).toBe(previousPlugin);
+      expect(
+        (await readdir(`${testProjectRoot}/plugins`)).filter((name) => name.endsWith(".tmp.ts")),
+      ).toEqual([]);
     });
 
     test("tool execute shells to `shaka tool <name>`", async () => {

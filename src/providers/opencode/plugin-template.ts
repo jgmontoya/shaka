@@ -1,7 +1,25 @@
 import type { DiscoveredHook } from "../hook-discovery";
+import type { ToolManifest } from "../tool-manifest";
 import type { InstallConfig } from "../types";
+import { renderOpencodeToolSchema } from "./tool-schema";
 
-export function renderOpencodePlugin(config: InstallConfig, hooks: DiscoveredHook[]): string {
+function renderOpencodeTools(manifests: readonly ToolManifest[]): string {
+  return manifests
+    .map(
+      (manifest) => `      ${JSON.stringify(manifest.name)}: tool({
+        description: ${JSON.stringify(manifest.description)},
+        args: ${renderOpencodeToolSchema(manifest.inputSchema)},
+        execute: async (args) => runShakaTool(${JSON.stringify(manifest.name)}, args as Record<string, unknown>),
+      })`,
+    )
+    .join(",\n");
+}
+
+export function renderOpencodePlugin(
+  config: InstallConfig,
+  hooks: DiscoveredHook[],
+  manifests: readonly ToolManifest[],
+): string {
   // Group hooks by Shaka canonical event names
   const sessionStartHooks = hooks.filter((h) => h.event === "session.start");
   const sessionEndHooks = hooks.filter((h) => h.event === "session.end");
@@ -370,30 +388,12 @@ ${
 }
 
   return {
-    // Shaka tools — surface our system tools (memory-search, inference) as
-    // native opencode custom tools so the model can call them mid-session.
+    // Shaka tools — surface the resolved canonical tool set as native
+    // opencode custom tools so the model can call them mid-session.
     // Execution shells to \`shaka tool <name>\`; tool defs live in one place
     // (defaults/system/tools/) for every provider that wants to expose them.
     tool: {
-      "memory-search": tool({
-        description:
-          "Search past session summaries and learnings for context, decisions, and work history.",
-        args: {
-          query: z.string().describe("Search query (case-insensitive)"),
-          category: z.string().optional().describe("Filter by learning category"),
-          cwd: z.string().optional().describe("Filter by working directory"),
-          type: z.enum(["session", "learning"]).optional().describe("Filter by result type"),
-        },
-        execute: async (args) => runShakaTool("memory-search", args as Record<string, unknown>),
-      }),
-      inference: tool({
-        description: "Run AI inference using available CLI tools.",
-        args: {
-          prompt: z.string().describe("The user prompt to send"),
-          systemPrompt: z.string().optional().describe("Optional system prompt"),
-        },
-        execute: async (args) => runShakaTool("inference", args as Record<string, unknown>),
-      }),
+${renderOpencodeTools(manifests)}
     },
 ${
   userPromptHooks.length > 0

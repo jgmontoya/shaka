@@ -79,11 +79,11 @@ Shaka uses canonical event names internally. Each provider maps them to its nati
 - **Claude Code:** `shaka init` writes `~/.claude/settings.json` entries pointing at `bun <hook-path>` for each event.
 - **opencode:** `shaka init` generates `~/.config/opencode/plugins/shaka.ts` with native plugin callbacks that dispatch canonical hook logic via Shaka hook runners.
 - **Codex:** `shaka init` registers a wrapper script in `~/.codex/hooks.json`; the wrapper sets `SHAKA_CODEX_SUBAGENT=true` for spawned subagents.
-- **Pi:** `shaka init` generates `~/.pi/agent/extensions/shaka.ts` from `defaults/pi/extension.ts`, injecting the install-time `SHAKA_HOME`. Each handler shells to `shaka hook <event>` and short-circuits when `SHAKA_PI_SUBAGENT=true`.
+- **Pi:** `shaka init` generates `~/.pi/agent/extensions/shaka.ts` from `defaults/pi/extension.ts`, injecting the install-time `SHAKA_HOME` and resolved tool manifests. Each handler shells to `shaka hook <event>` and short-circuits when `SHAKA_PI_SUBAGENT=true`.
 
 ## Tool Integration
 
-Tools live once in `defaults/system/tools/` (canonical) with `customizations/tools/` overrides. Every provider sees the same set. Shipped tools: `inference` (provider-agnostic AI calls) and `memory-search` (project-scoped session, learning, and compiled-knowledge lookup).
+Tools live once in `defaults/system/tools/` (canonical) with `customizations/tools/` overrides. `shaka init` and `shaka reload` generate native registrations from that resolved set, while MCP discovers the same definitions at runtime. Tools supplied only through `shaka mcp serve --tools-dir` stay MCP-only. Shipped tools: `inference` (provider-agnostic AI calls) and `memory-search` (project-scoped session, learning, and compiled-knowledge lookup).
 
 How each provider exposes them to its model:
 
@@ -120,7 +120,7 @@ Codex registration is handled automatically by `shaka init --codex`; the entry l
 
 ### Native bridges (opencode + Pi)
 
-opencode and Pi run plugins in-process, so MCP would be wasteful. Each generated plugin/extension declares the tool inline and delegates execution to `shaka tool <name>`. Provider-specific shape requirements caught empirically:
+opencode and Pi keep their native registration APIs. During install or reload, Shaka validates the resolved canonical tool manifests and renders each provider's required schema shape. The generated plugin or extension then delegates execution to `shaka tool <name>`. Provider-specific shape requirements caught empirically:
 
 - **Pi** expects tool results in `{ content: [{ type: "text", text }], details: undefined }` form. A plain string crashes Pi's renderer (`Cannot read properties of undefined (reading 'filter')`). Verified Exp 52.
 - **opencode** expects tool args as `z.ZodRawShape` (flat record of zod schemas via `import { tool } from "@opencode-ai/plugin"; const z = tool.schema;`). JSON Schema crashes opencode's runtime with `n._zod.def` undefined. Verified Exp 53.

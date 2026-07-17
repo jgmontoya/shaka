@@ -10,7 +10,7 @@ import { type InferenceOptions, inference } from "shaka";
 export default {
   name: "inference",
   description:
-    "Run AI inference using available CLI tools (claude or opencode). " +
+    "Run AI inference using an available provider CLI. " +
     "Useful for tasks requiring a separate AI model call.",
 
   inputSchema: {

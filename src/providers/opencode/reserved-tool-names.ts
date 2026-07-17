@@ -1,0 +1,22 @@
+/** OpenCode 1.14.20 built-in tool names, including conditionally enabled tools. */
+export const OPENCODE_RESERVED_TOOL_NAMES = new Set([
+  "invalid",
+  "question",
+  "bash",
+  "read",
+  "glob",
+  "grep",
+  "edit",
+  "write",
+  "task",
+  "webfetch",
+  "todowrite",
+  "websearch",
+  "codesearch",
+  "skill",
+  "apply_patch",
+  "lsp",
+  "plan",
+  "plan_enter",
+  "plan_exit",
+]);

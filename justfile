@@ -34,7 +34,7 @@ test-hermetic:
 
 # Generated provider artifact load/build lane
 test-generated-artifacts:
-    bun test test/integration/providers test/unit/providers/codex/configurer.test.ts test/unit/providers/opencode/configurer.test.ts test/integration/providers/pi/extension-load.test.ts
+    bun test test/integration/providers test/unit/providers/tool-manifest.test.ts test/unit/providers/opencode/tool-schema.test.ts test/unit/providers/codex/configurer.test.ts test/unit/providers/opencode/configurer.test.ts test/unit/providers/pi/configurer.test.ts
 
 # Fix lint issues
 lint-fix:

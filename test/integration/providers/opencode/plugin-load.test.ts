@@ -44,8 +44,15 @@ let pluginImportCounter = 0;
 
 interface PluginTool {
   description?: string;
-  args?: Record<string, unknown>;
+  args?: Record<string, RecordedSchema>;
   execute?: (args: Record<string, unknown>, ctx: unknown) => Promise<unknown>;
+}
+
+interface RecordedSchema {
+  type: "string" | "number" | "boolean";
+  required: boolean;
+  enumValues?: string[];
+  description?: string;
 }
 
 interface PluginHooks {
@@ -59,21 +66,25 @@ async function writeStubPluginPackage(): Promise<void> {
     join(STUB_PKG_DIR, "package.json"),
     JSON.stringify({ name: "@opencode-ai/plugin", type: "module", main: "index.js" }),
   );
-  // Stub stands in for the real `@opencode-ai/plugin`: `tool()` is identity
-  // (opencode's helper just forwards the input object too — see
-  // `@opencode-ai/plugin/dist/tool.d.ts`); `tool.schema` is a Proxy that
-  // accepts any zod chain (`.string().optional().describe(...)`,
-  // `.enum([...]).optional()`) without throwing. We only care about loading
-  // the plugin and inspecting its returned shape — argument validation lives
-  // inside opencode's runtime and is exercised by Exp 53.
+  // `tool()` is identity, matching opencode's helper. The schema functions
+  // record each generated Zod chain so this test can compare semantic fields
+  // without adding the provider SDK or Zod as production dependencies.
   await Bun.write(
     join(STUB_PKG_DIR, "index.js"),
-    `const chainable = () => new Proxy(function noop() {}, {
-  get: () => chainable,
-  apply: () => chainable(),
+    `const schema = (type, enumValues) => ({
+  type,
+  required: true,
+  enumValues,
+  optional() { this.required = false; return this; },
+  describe(value) { this.description = value; return this; },
 });
 export const tool = (def) => def;
-tool.schema = new Proxy({}, { get: () => chainable });
+tool.schema = {
+  string: () => schema("string"),
+  number: () => schema("number"),
+  boolean: () => schema("boolean"),
+  enum: (values) => schema("string", values),
+};
 `,
   );
 }
@@ -160,9 +171,50 @@ beforeEach(async () => {
 
   await mkdir(BIN_DIR, { recursive: true });
   await mkdir(`${SHAKA_HOME}/system/hooks`, { recursive: true });
+  await mkdir(`${SHAKA_HOME}/system/tools`, { recursive: true });
   await mkdir(`${SHAKA_HOME}/system/agents`, { recursive: true });
   await mkdir(`${SHAKA_HOME}/system/skills`, { recursive: true });
   await mkdir(`${SHAKA_HOME}/skills`, { recursive: true });
+  await Bun.write(
+    `${SHAKA_HOME}/system/tools/memory-search.ts`,
+    `export default {
+      name: "memory-search",
+      description: "Search past session summaries, learnings, and compiled project knowledge.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          query: { type: "string", description: "Search query" },
+          category: { type: "string", description: "Learning category" },
+          cwd: { type: "string", description: "Working directory" },
+          all_projects: { type: "boolean", description: "Search every project" },
+          type: {
+            type: "string",
+            enum: ["session", "learning", "knowledge"],
+            description: "Result type",
+          },
+        },
+        required: ["query"],
+      },
+      execute: async () => "ok",
+    };`,
+  );
+  await Bun.write(
+    `${SHAKA_HOME}/system/tools/inference.ts`,
+    `export default {
+      name: "inference",
+      description: "Run AI inference using an available provider CLI.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "User prompt" },
+          systemPrompt: { type: "string", description: "System prompt" },
+          expectJson: { type: "boolean", description: "Parse JSON" },
+        },
+        required: ["prompt"],
+      },
+      execute: async () => "ok",
+    };`,
+  );
   await writeStubPluginPackage();
   // SHAKA_BIN is honored by the generated plugin's `runShakaTool` (set for
   // the same reason Pi's extension reads it — lets the test point at a stub
@@ -208,9 +260,51 @@ describe.serial.skipIf(process.platform === "win32")(
       const inference = hooks.tool?.inference;
       expect(inference?.description).toContain("Run AI inference");
       expect(typeof inference?.execute).toBe("function");
-      // Shape of `args` (zod vs JSON Schema) is asserted at the unit level
-      // via substring on the generated source — the stub `tool.schema` Proxy
-      // here can't distinguish the two without pulling in real zod.
+      expect(memorySearch?.args?.query).toEqual(
+        expect.objectContaining({ type: "string", required: true, description: "Search query" }),
+      );
+      expect(memorySearch?.args?.all_projects).toEqual(
+        expect.objectContaining({ type: "boolean", required: false }),
+      );
+      expect(memorySearch?.args?.type).toEqual(
+        expect.objectContaining({
+          required: false,
+          enumValues: ["session", "learning", "knowledge"],
+        }),
+      );
+      expect(inference?.args?.expectJson).toEqual(
+        expect.objectContaining({ type: "boolean", required: false }),
+      );
+    });
+
+    test("uses a customization override in the generated registration", async () => {
+      await mkdir(join(SHAKA_HOME, "customizations", "tools"), { recursive: true });
+      await Bun.write(
+        join(SHAKA_HOME, "customizations", "tools", "memory-search.ts"),
+        `export default {
+          name: "memory-search",
+          description: "Customized memory search",
+          inputSchema: {
+            type: "object",
+            properties: { limit: { type: "number", description: "Result limit" } },
+            required: ["limit"],
+          },
+          execute: async () => "ok",
+        };`,
+      );
+
+      const ShakaPlugin = await loadPlugin();
+      const hooks = await ShakaPlugin({ directory: ROOT });
+      const memorySearch = hooks.tool?.["memory-search"];
+
+      expect(memorySearch?.description).toBe("Customized memory search");
+      expect(memorySearch?.args).toEqual({
+        limit: expect.objectContaining({
+          type: "number",
+          required: true,
+          description: "Result limit",
+        }),
+      });
     });
 
     test("memory-search execute() shells to `shaka tool memory-search` with JSON args on stdin", async () => {

@@ -26,6 +26,7 @@ import {
 } from "../asset-installer";
 import { discoverAllHooks } from "../hook-discovery";
 import { OPENCODE_PERMISSION_DEFAULTS, hasExistingOpencodePermissions } from "../permissions";
+import { buildToolManifests } from "../tool-manifest";
 import type {
   CommandInstallConfig,
   InstallConfig,
@@ -56,23 +57,23 @@ async function writeValidatedPlugin(
   pluginsDir: string,
   pluginPath: string,
   pluginContent: string,
+  validateSyntax: typeof validateOpencodePluginSyntax,
 ): Promise<Result<void, Error>> {
   const tempPath = tempPluginPath(pluginsDir);
   await Bun.write(tempPath, pluginContent);
-
-  const validationResult = await validateOpencodePluginSyntax(tempPath);
-  if (!validationResult.ok) {
-    await unlink(tempPath).catch(() => {});
-    return validationResult;
-  }
-
+  let installed = false;
   try {
+    const validationResult = await validateSyntax(tempPath);
+    if (!validationResult.ok) return validationResult;
+
     await rename(tempPath, pluginPath);
-  } catch (error) {
-    await unlink(tempPath).catch(() => {});
-    throw error;
+    installed = true;
+    return ok(undefined);
+  } finally {
+    if (!installed) {
+      await unlink(tempPath).catch(() => {});
+    }
   }
-  return ok(undefined);
 }
 
 export class OpencodeProviderConfigurer implements ProviderConfigurer {
@@ -83,9 +84,14 @@ export class OpencodeProviderConfigurer implements ProviderConfigurer {
     install: (config: CommandInstallConfig) => this.installCommands(config),
   };
   private readonly opencodeConfigDir: string;
+  private readonly validatePluginSyntax: typeof validateOpencodePluginSyntax;
 
-  constructor(options?: { opencodeConfigDir?: string }) {
+  constructor(options?: {
+    opencodeConfigDir?: string;
+    validatePluginSyntax?: typeof validateOpencodePluginSyntax;
+  }) {
     this.opencodeConfigDir = options?.opencodeConfigDir ?? defaultOpencodeConfigDir();
+    this.validatePluginSyntax = options?.validatePluginSyntax ?? validateOpencodePluginSyntax;
     this.skillsDir = join(this.opencodeConfigDir, "skills");
   }
 
@@ -95,16 +101,19 @@ export class OpencodeProviderConfigurer implements ProviderConfigurer {
 
   async install(config: InstallConfig): Promise<Result<void, Error>> {
     try {
+      const manifests = await buildToolManifests(config.shakaHome);
+      const hooks = await discoverAllHooks(config.shakaHome);
+      const pluginContent = renderOpencodePlugin(config, hooks, manifests);
+
       const pluginsDir = join(this.opencodeConfigDir, "plugins");
       await mkdir(pluginsDir, { recursive: true });
-
-      // Discover hooks from system/ and customizations/
-      const hooks = await discoverAllHooks(config.shakaHome);
-
-      // Generate plugin
       const pluginPath = join(pluginsDir, "shaka.ts");
-      const pluginContent = renderOpencodePlugin(config, hooks);
-      const pluginResult = await writeValidatedPlugin(pluginsDir, pluginPath, pluginContent);
+      const pluginResult = await writeValidatedPlugin(
+        pluginsDir,
+        pluginPath,
+        pluginContent,
+        this.validatePluginSyntax,
+      );
       if (!pluginResult.ok) return pluginResult;
 
       // Install agents from defaults/system/agents/

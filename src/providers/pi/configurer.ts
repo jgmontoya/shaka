@@ -14,8 +14,8 @@
  * Shipped surface: extension generation + smoke-load gate, system + installed
  * skill symlinks, agent-as-skill translation (`shaka-agent-<name>`), Pi
  * prompt-template compilation, idempotent install/uninstall with user-file
- * preservation, native `pi.registerTool()` bridge for `inference` and
- * `memory-search`.
+ * preservation, and native `pi.registerTool()` bridges generated from the
+ * canonical Shaka tool manifests.
  */
 
 import {
@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { type Result, err, ok } from "../../domain/result";
 import { resolveFromModule } from "../../platform/paths";
 import { installAssetSymlink, verifyAssetSymlink } from "../asset-installer";
+import { type ToolManifest, buildToolManifests } from "../tool-manifest";
 import type {
   CommandInstallConfig,
   InstallConfig,
@@ -57,6 +58,25 @@ const EXTENSION_MARKER = "SHAKA_GENERATED_EXTENSION";
 /** Smoke-load gate signal emitted by Pi on a broken extension (Exp 44). */
 const PI_LOAD_FAILURE_MARKER = "Failed to load extension";
 const SHAKA_HOME_PLACEHOLDER = "__SHAKA_INSTALLED_HOME__";
+const TOOL_MANIFEST_PLACEHOLDER = "__SHAKA_TOOL_MANIFEST__";
+
+function replaceExactlyOnce(
+  source: string,
+  target: string,
+  replacement: string,
+  missingMessage: string,
+  duplicateMessage: string,
+): string {
+  const index = source.indexOf(target);
+  if (index === -1) {
+    throw new Error(missingMessage);
+  }
+  if (source.indexOf(target, index + target.length) !== -1) {
+    throw new Error(duplicateMessage);
+  }
+
+  return `${source.slice(0, index)}${replacement}${source.slice(index + target.length)}`;
+}
 
 /**
  * Pi auto-discovers skills from `~/.agents/skills/` regardless of
@@ -111,8 +131,10 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     let extensionInstalled = false;
     let rollbackSnapshot: PiRollbackSnapshot | undefined;
     try {
+      const manifests = await buildToolManifests(config.shakaHome);
+      const extensionContent = await this.renderExtension(config.shakaHome, manifests);
       rollbackSnapshot = await this.captureRollbackSnapshot();
-      await this.installExtension(config.shakaHome);
+      await this.installExtension(extensionContent);
       extensionInstalled = true;
       const smokeLoadError = await this.smokeLoadExtension();
       if (smokeLoadError) throw smokeLoadError;
@@ -241,7 +263,32 @@ export class PiProviderConfigurer implements ProviderConfigurer {
     return null;
   }
 
-  private async installExtension(shakaHome: string): Promise<void> {
+  private async renderExtension(
+    shakaHome: string,
+    manifests: readonly ToolManifest[],
+  ): Promise<string> {
+    const template = await Bun.file(this.extensionTemplatePath).text();
+    const homeAssignment = `const INSTALLED_SHAKA_HOME = ${JSON.stringify(SHAKA_HOME_PLACEHOLDER)};`;
+    let content = replaceExactlyOnce(
+      template,
+      homeAssignment,
+      `const INSTALLED_SHAKA_HOME = ${JSON.stringify(shakaHome)};`,
+      "Failed to inject install-time SHAKA_HOME into Pi extension template",
+      "Pi extension template contains multiple SHAKA_HOME placeholders",
+    );
+
+    const manifestAssignment = `const SHAKA_TOOL_MANIFEST_JSON = ${JSON.stringify(TOOL_MANIFEST_PLACEHOLDER)};`;
+    content = replaceExactlyOnce(
+      content,
+      manifestAssignment,
+      `const SHAKA_TOOL_MANIFEST_JSON = ${JSON.stringify(JSON.stringify(manifests))};`,
+      "Failed to inject tool manifests into Pi extension template",
+      "Pi extension template contains multiple tool manifest placeholders",
+    );
+    return content;
+  }
+
+  private async installExtension(content: string): Promise<void> {
     const extensionPath = join(this.piHome, "extensions", "shaka.ts");
     await mkdir(join(this.piHome, "extensions"), { recursive: true });
     // Refuse to clobber a user-owned extension at the same path.
@@ -256,18 +303,6 @@ export class PiProviderConfigurer implements ProviderConfigurer {
           `Refusing to overwrite non-Shaka Pi extension at ${extensionPath}. Move it aside and re-run \`shaka init --pi\`.`,
         );
       }
-    }
-    const template = await Bun.file(this.extensionTemplatePath).text();
-    const placeholderAssignment = `const INSTALLED_SHAKA_HOME = ${JSON.stringify(SHAKA_HOME_PLACEHOLDER)};`;
-    if (!template.includes(placeholderAssignment)) {
-      throw new Error("Failed to inject install-time SHAKA_HOME into Pi extension template");
-    }
-    const content = template.replaceAll(
-      placeholderAssignment,
-      `const INSTALLED_SHAKA_HOME = ${JSON.stringify(shakaHome)};`,
-    );
-    if (content.includes(placeholderAssignment)) {
-      throw new Error("Failed to inject install-time SHAKA_HOME into Pi extension template");
     }
     await Bun.write(extensionPath, content);
   }

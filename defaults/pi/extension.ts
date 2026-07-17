@@ -57,6 +57,11 @@ interface ToolRegistration {
   parameters: { type: "object"; properties: Record<string, ToolParameter>; required?: string[] };
   execute: (toolCallId: string, args: Record<string, unknown>) => Promise<ToolResult>;
 }
+interface ToolManifestEntry {
+  name: string;
+  description: string;
+  inputSchema: ToolRegistration["parameters"];
+}
 interface ExtensionAPI {
   on(
     name: "before_agent_start",
@@ -131,9 +136,8 @@ function isSubagent(): boolean {
   return process.env.SHAKA_PI_SUBAGENT === "true";
 }
 
-// Pi tool name → Shaka canonical name. Pi has only 4 built-in tools (Exp 48
-// verified live; bash subsumes ls/grep/find). Extension-registered tools
-// would each need their own normalization entry added here.
+// Pi tool names with direct Claude Code equivalents are normalized here.
+// Provider-specific built-ins and extension tools pass through unchanged.
 const TOOL_NAME_MAP: Record<string, string> = {
   bash: "Bash",
   read: "Read",
@@ -230,59 +234,18 @@ function writeSidecarErrorLog(handlerName: string, err: unknown): void {
 }
 
 /**
- * Catalog of Shaka tools to surface to Pi's model. Schema descriptors mirror
- * `defaults/system/tools/*.ts:inputSchema` exactly so they round-trip
- * without translation. When a new tool ships in `defaults/system/tools/`,
- * add an entry here and `shaka reload` propagates it to Pi.
- *
- * Execution always shells to `shaka tool <name>` — keeps tool defs in one
- * place (the `defaults/system/tools/` directory the MCP server already walks
- * for Claude Code and Codex) and avoids embedding tool source in every
- * provider's generated artifact.
+ * Install-time snapshot of the resolved canonical tool metadata. Execution
+ * still resolves the tool by name through `shaka tool` on every call.
  */
-const SHAKA_TOOLS: ToolRegistration[] = [
-  {
-    name: "memory-search",
-    label: "memory-search",
-    description:
-      "Search past session summaries and learnings for context, decisions, and work history. " +
-      "Returns matching sessions and learnings with snippets.",
-    parameters: {
-      type: "object",
-      properties: {
-        query: { type: "string", description: "Search query (case-insensitive substring match)" },
-        category: {
-          type: "string",
-          description: "Filter learnings by category (correction/preference/pattern/fact)",
-        },
-        cwd: { type: "string", description: "Filter by working directory (substring match)" },
-        type: {
-          type: "string",
-          enum: ["session", "learning"],
-          description: "Filter by result type",
-        },
-      },
-      required: ["query"],
-    },
-    execute: (_toolCallId, args) => runShakaTool("memory-search", args),
-  },
-  {
-    name: "inference",
-    label: "inference",
-    description:
-      "Run AI inference using available CLI tools (claude, opencode, codex, or pi). " +
-      "Useful for tasks requiring a separate AI model call.",
-    parameters: {
-      type: "object",
-      properties: {
-        prompt: { type: "string", description: "The user prompt to send to the AI model" },
-        systemPrompt: { type: "string", description: "Optional system prompt to set context" },
-      },
-      required: ["prompt"],
-    },
-    execute: (_toolCallId, args) => runShakaTool("inference", args),
-  },
-];
+const SHAKA_TOOL_MANIFEST_JSON = "__SHAKA_TOOL_MANIFEST__";
+const SHAKA_TOOL_MANIFEST: ToolManifestEntry[] = JSON.parse(SHAKA_TOOL_MANIFEST_JSON);
+const SHAKA_TOOLS: ToolRegistration[] = SHAKA_TOOL_MANIFEST.map((manifest) => ({
+  name: manifest.name,
+  label: manifest.name,
+  description: manifest.description,
+  parameters: manifest.inputSchema,
+  execute: (_toolCallId, args) => runShakaTool(manifest.name, args),
+}));
 
 // Live-path budget for `shaka tool <name>` invocations. Generous enough for
 // real `inference` calls (which can take tens of seconds), tight enough that

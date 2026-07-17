@@ -38,6 +38,7 @@ export interface JsonSchema {
 export interface JsonSchemaProperty {
   type: "string" | "number" | "boolean" | "array" | "object";
   description?: string;
+  enum?: string[];
 }
 
 export interface McpToolResult {

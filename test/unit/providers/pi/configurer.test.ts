@@ -11,6 +11,8 @@ interface CapturedHandlers {
 
 interface RegisteredTool {
   name?: string;
+  description?: string;
+  parameters?: unknown;
   execute?: (toolCallId: unknown, args: Record<string, unknown>) => Promise<unknown>;
 }
 
@@ -76,9 +78,36 @@ describe("PiProviderConfigurer", () => {
     testShakaHome = join(testRoot, "shaka");
     await mkdir(testPiHome, { recursive: true });
     await mkdir(`${testShakaHome}/system/hooks`, { recursive: true });
+    await mkdir(`${testShakaHome}/system/tools`, { recursive: true });
     await mkdir(`${testShakaHome}/system/agents`, { recursive: true });
     await mkdir(`${testShakaHome}/system/skills`, { recursive: true });
     await mkdir(`${testShakaHome}/skills`, { recursive: true });
+    await Bun.write(
+      `${testShakaHome}/system/tools/memory-search.ts`,
+      `export default {
+        name: "memory-search",
+        description: "Search memory",
+        inputSchema: {
+          type: "object",
+          properties: { query: { type: "string" } },
+          required: ["query"],
+        },
+        execute: async () => "ok",
+      };`,
+    );
+    await Bun.write(
+      `${testShakaHome}/system/tools/inference.ts`,
+      `export default {
+        name: "inference",
+        description: "Run inference",
+        inputSchema: {
+          type: "object",
+          properties: { prompt: { type: "string" } },
+          required: ["prompt"],
+        },
+        execute: async () => "ok",
+      };`,
+    );
   });
 
   afterEach(async () => {
@@ -125,6 +154,74 @@ describe("PiProviderConfigurer", () => {
       expect(extensionContent).toContain("SHAKA_GENERATED_EXTENSION");
     });
 
+    test("registers every discovered canonical tool", async () => {
+      await Bun.write(
+        `${testShakaHome}/system/tools/custom-tool.ts`,
+        `export default {
+          description: "A generated Pi tool",
+          inputSchema: {
+            type: "object",
+            properties: { enabled: { type: "boolean" } },
+          },
+          execute: async () => "ok",
+        };`,
+      );
+      const configurer = createConfigurer();
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(true);
+      const { tools } = await loadInstalledExtension(join(testPiHome, "extensions", "shaka.ts"));
+      expect(tools.find((tool) => tool.name === "custom-tool")).toEqual(
+        expect.objectContaining({
+          description: "A generated Pi tool",
+          parameters: {
+            type: "object",
+            properties: { enabled: { type: "boolean" } },
+          },
+        }),
+      );
+    });
+
+    test("uses a customization override in the generated registration", async () => {
+      await mkdir(`${testShakaHome}/customizations/tools`, { recursive: true });
+      await Bun.write(
+        `${testShakaHome}/customizations/tools/memory-search.ts`,
+        `export default {
+          name: "memory-search",
+          description: "Customized memory search",
+          inputSchema: {
+            type: "object",
+            properties: { limit: { type: "number", description: "Result limit" } },
+            required: ["limit"],
+          },
+          execute: async () => "ok",
+        };`,
+      );
+      const configurer = createConfigurer();
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(true);
+      const { tools } = await loadInstalledExtension(join(testPiHome, "extensions", "shaka.ts"));
+      expect(tools.find((tool) => tool.name === "memory-search")).toEqual(
+        expect.objectContaining({
+          description: "Customized memory search",
+          parameters: {
+            type: "object",
+            properties: { limit: { type: "number", description: "Result limit" } },
+            required: ["limit"],
+          },
+        }),
+      );
+    });
+
     test("installed extension embeds install-time shakaHome", async () => {
       const configurer = createConfigurer();
       const result = await configurer.install({
@@ -140,6 +237,82 @@ describe("PiProviderConfigurer", () => {
       expect(extensionContent).not.toContain(
         'const INSTALLED_SHAKA_HOME = "__SHAKA_INSTALLED_HOME__";',
       );
+      expect(extensionContent).not.toContain("__SHAKA_TOOL_MANIFEST__");
+    });
+
+    test("preserves template placeholder text used as canonical tool metadata", async () => {
+      const placeholder = "__SHAKA_TOOL_MANIFEST__";
+      await Bun.write(
+        `${testShakaHome}/system/tools/literal-placeholder.ts`,
+        `export default {
+          description: ${JSON.stringify(placeholder)},
+          inputSchema: {
+            type: "object",
+            properties: {
+              value: {
+                type: "string",
+                description: ${JSON.stringify(placeholder)},
+                enum: [${JSON.stringify(placeholder)}],
+              },
+            },
+          },
+          execute: async () => "ok",
+        };`,
+      );
+      const configurer = createConfigurer();
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(true);
+      const { tools } = await loadInstalledExtension(join(testPiHome, "extensions", "shaka.ts"));
+      expect(tools.find((tool) => tool.name === "literal-placeholder")).toEqual(
+        expect.objectContaining({
+          description: placeholder,
+          parameters: {
+            type: "object",
+            properties: {
+              value: {
+                type: "string",
+                description: placeholder,
+                enum: [placeholder],
+              },
+            },
+          },
+        }),
+      );
+    });
+
+    test("schema validation failure preserves the previous extension", async () => {
+      const configurer = createConfigurer();
+      const firstResult = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+      expect(firstResult.ok).toBe(true);
+      const extensionPath = join(testPiHome, "extensions", "shaka.ts");
+      const previousExtension = await Bun.file(extensionPath).text();
+      await Bun.write(
+        `${testShakaHome}/system/tools/unsupported.ts`,
+        `export default {
+          description: "Unsupported",
+          inputSchema: {
+            type: "object",
+            properties: { values: { type: "array" } },
+          },
+          execute: async () => "ok",
+        };`,
+      );
+
+      const result = await configurer.install({
+        shakaHome: testShakaHome,
+        permissionMode: "apply",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(await Bun.file(extensionPath).text()).toBe(previousExtension);
     });
 
     test("fails fast when the extension template installed-home placeholder is missing", async () => {

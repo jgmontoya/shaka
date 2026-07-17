@@ -87,6 +87,82 @@ async function loadToolsFromFile(filePath: string, baseName: string): Promise<To
   return tools;
 }
 
+export interface SourcedToolDefinition {
+  readonly tool: ToolDefinition;
+  readonly source: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function loadToolsFromFileStrict(
+  filePath: string,
+  baseName: string,
+): Promise<SourcedToolDefinition[]> {
+  let module: Record<string, unknown>;
+  try {
+    module = (await import(filePath)) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Failed to import tool file ${filePath}: ${errorMessage(error)}`);
+  }
+
+  const tools: SourcedToolDefinition[] = [];
+  if ("default" in module) {
+    if (!isToolDefinition(module.default)) {
+      throw new Error(`Invalid default tool export in ${filePath}`);
+    }
+    tools.push({ tool: toToolDefinition(module.default, baseName), source: `${filePath}#default` });
+  }
+
+  for (const [exportName, exportValue] of Object.entries(module)) {
+    if (exportName === "default" || !exportName.endsWith("Tool")) continue;
+    if (!isToolDefinition(exportValue)) {
+      throw new Error(`Invalid tool export ${exportName} in ${filePath}`);
+    }
+    const toolName = exportName.replace(/Tool$/, "").toLowerCase();
+    tools.push({
+      tool: toToolDefinition(exportValue, toolName),
+      source: `${filePath}#${exportName}`,
+    });
+  }
+
+  if (tools.length === 0) {
+    throw new Error(`Tool file ${filePath} contains no valid tool export`);
+  }
+  return tools;
+}
+
+export async function discoverToolsStrict(
+  toolsDir: string,
+  options: { allowMissing?: boolean } = {},
+): Promise<SourcedToolDefinition[]> {
+  let files: string[];
+  try {
+    files = await readdir(toolsDir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (options.allowMissing && code === "ENOENT") return [];
+    throw new Error(`Failed to read tools directory ${toolsDir}: ${errorMessage(error)}`);
+  }
+
+  const toolFiles = files.filter((file) => file.endsWith(".ts") && !file.endsWith(".d.ts")).sort();
+  const tools: SourcedToolDefinition[] = [];
+  for (const file of toolFiles) {
+    tools.push(...(await loadToolsFromFileStrict(join(toolsDir, file), basename(file, ".ts"))));
+  }
+
+  const firstSourceByName = new Map<string, string>();
+  for (const { tool, source } of tools) {
+    const firstSource = firstSourceByName.get(tool.name);
+    if (firstSource) {
+      throw new Error(`Duplicate tool name "${tool.name}" in ${firstSource} and ${source}`);
+    }
+    firstSourceByName.set(tool.name, source);
+  }
+  return tools;
+}
+
 /**
  * Discover and load tools from a directory.
  * Returns an array of ToolDefinition objects.
