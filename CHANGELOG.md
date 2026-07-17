@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-07-17
+
 ### Added
 
 - **Compiled knowledge search** - `shaka memory search` and the `memory-search` tool now return matching topic pages with the `knowledge` result type and show the exact source path for every result. Use `--type knowledge` to limit CLI results.
@@ -16,10 +18,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 - **Memory recall is project-scoped by default** - session-start context and memory search exclude unrelated project history while keeping global learnings available. Parent and nested working directories share one project scope.
 - **Configured search limits apply everywhere** - CLI and tool searches now honor `memory.search_max_results` after combining session, learning, and knowledge results.
+- **Autoresearch protects benchmark integrity** - the autoresearch skill now directs agents to reject benchmark-specific shortcuts, weakened validation, skipped work, and stale results so accepted changes remain useful on comparable inputs.
 
 ### Fixed
 
-- **Concurrent learning updates are serialized** - session extraction, maintenance, consolidation, and review now share one lock for complete read-modify-write transactions. Live locks use heartbeats, stale locks recover after a fixed threshold, and reviewed entries use compare-and-delete semantics.
+- **Codex hook setup preserves existing configuration** - `shaka init`, `shaka reload`, and `shaka uninstall` retain unrelated hooks and top-level settings, write generated files atomically, and stop with a clear error instead of overwriting an invalid `hooks.json`.
+- **Codex security checks cover patch edits** - file additions, updates, moves, and deletions made through `apply_patch` now pass through the same path validation as other file tools.
+- **Native tools stay in sync across providers** - opencode and Pi now generate native registrations from the same resolved tool definitions as MCP, so new or overridden tools and updated parameters become available after `shaka init` or `shaka reload`.
+- **Concurrent memory updates no longer overwrite each other** - session extraction, automatic maintenance, consolidation, and review coordinate their writes. Stale locks recover automatically, and interactive commands stop safely if memory changes while they run.
 - **Invalid compiled knowledge is rejected before writing** - Shaka validates generated topic pages and their source references, gives invalid model output one correction attempt, and leaves compiled knowledge unchanged when correction fails.
 - **Unsafe compiled topic filenames are rejected** - Shaka rejects topic tags that would create unsafe or ambiguous filenames, reports invalid stored topic files through `shaka memory check`, and prevents them from entering search results or rebuilt indexes.
 
@@ -455,7 +461,9 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
-[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/jgmontoya/shaka/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/jgmontoya/shaka/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jgmontoya/shaka/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/jgmontoya/shaka/compare/v0.10.1...v0.11.0
 [0.10.1]: https://github.com/jgmontoya/shaka/compare/v0.10.0...v0.10.1
