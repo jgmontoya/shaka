@@ -567,7 +567,7 @@ Persistent context that survives sessions. The memory system captures what happe
 - **Automatic maintenance** — After each session, the system checks time (24h) and volume (10+ new learnings) gates. When triggered, it runs consolidation, auto-promotes cross-project learnings to global scope, and conditionally prunes lowest-quality entries under budget pressure (capped at 3 per run, with exposure and age safety floors). Configurable via `memory.maintenance.enabled`
 - **Security event logging** — The security validator writes logs to `memory/security/`
 
-**Planned:** Semantic retrieval via vector search (likely sqlite-vec).
+**Retrieval policy:** Shaka keeps substring search and the complete knowledge index as the baseline. A candidate retrieval backend must retrieve the corpus's known zero-overlap paraphrase or reduce separately measured production context cost without weakening exact lookup, project scope, archive visibility, evidence paths, result limits, or read-only behavior.
 
 ## Autoresearch
 
