@@ -6,8 +6,21 @@
 import { join } from "node:path";
 import { Command, Option } from "commander";
 import { loadConfig, resolveShakaHome } from "../../domain/config";
-import { findKnowledgeSourceImpact, inspectKnowledge } from "../../memory/inspection";
-import { type LearningEntry, loadLearnings } from "../../memory/learnings";
+import {
+  type KnowledgeInspection,
+  findKnowledgeSourceImpact,
+  inspectKnowledge,
+} from "../../memory/inspection";
+import {
+  type LearningStorageDiagnostic,
+  inspectLearningStorage,
+} from "../../memory/learning-inspection";
+import {
+  type LearningEntry,
+  LearningsIntegrityError,
+  LearningsStoragePathError,
+  loadLearnings,
+} from "../../memory/learnings";
 import { type SearchFilter, searchMemory } from "../../memory/search";
 import { type SummaryIndex, listSummaries } from "../../memory/storage";
 import { runCompile } from "./compile";
@@ -126,8 +139,10 @@ export function createMemoryCommand(): Command {
     .command("consolidate")
     .description("Consolidate learnings: merge duplicates, resolve contradictions")
     .action(async () => {
-      const { memoryDir } = resolveMemoryPaths();
-      await runConsolidation(memoryDir);
+      await runLearningMutationCommand(async () => {
+        const { memoryDir } = resolveMemoryPaths();
+        await runConsolidation(memoryDir);
+      });
     });
 
   memory
@@ -136,8 +151,10 @@ export function createMemoryCommand(): Command {
     .option("--prune", "AI-assisted quality assessment: flag low-quality entries for review")
     .option("--filter <text>", "Pre-filter learnings by text (matches CWDs, titles, body)")
     .action(async (options: { prune?: boolean; filter?: string }) => {
-      const { memoryDir } = resolveMemoryPaths();
-      await runReview(memoryDir, options);
+      await runLearningMutationCommand(async () => {
+        const { memoryDir } = resolveMemoryPaths();
+        await runReview(memoryDir, options);
+      });
     });
 
   memory
@@ -162,29 +179,11 @@ export function createMemoryCommand(): Command {
 
   memory
     .command("check")
-    .description("Check compiled project knowledge without changing it")
+    .description("Check memory integrity without changing it")
     .option("--cwd <path>", "Check a specific project", process.cwd())
     .action(async (options: { cwd: string }) => {
       const { memoryDir } = resolveMemoryPaths();
-      const inspection = await inspectKnowledge(memoryDir, options.cwd);
-      const healthy =
-        inspection.complete &&
-        inspection.diagnostics.every((diagnostic) => diagnostic.severity !== "error");
-
-      console.log(`Knowledge integrity: ${healthy ? "PASS" : "FAIL"}`);
-      console.log(`  project: ${inspection.projectCwd ?? options.cwd}`);
-      console.log(`  directory: ${inspection.knowledgeDir}`);
-      console.log(`  topics: ${inspection.topics.length}`);
-      console.log(`  inspection complete: ${inspection.complete ? "yes" : "no"}`);
-
-      for (const diagnostic of inspection.diagnostics) {
-        console.log(
-          `  [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.filePath}\n` +
-            `    ${diagnostic.message}`,
-        );
-      }
-
-      if (!healthy) process.exitCode = 1;
+      await runMemoryCheck(memoryDir, options.cwd);
     });
 
   memory
@@ -223,6 +222,67 @@ export function createMemoryCommand(): Command {
     });
 
   return memory;
+}
+
+async function runLearningMutationCommand(operation: () => Promise<void>): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    if (!(error instanceof LearningsIntegrityError || error instanceof LearningsStoragePathError)) {
+      throw error;
+    }
+
+    console.error(error.message);
+    console.error("Run `shaka memory check` for details.");
+    process.exitCode = 1;
+  }
+}
+
+async function runMemoryCheck(memoryDir: string, cwd: string): Promise<void> {
+  const [knowledge, learningDiagnostics] = await Promise.all([
+    inspectKnowledge(memoryDir, cwd),
+    inspectLearningStorage(memoryDir),
+  ]);
+  const knowledgeHealthy =
+    knowledge.complete &&
+    knowledge.diagnostics.every((diagnostic) => diagnostic.severity !== "error");
+  const learningsHealthy = learningDiagnostics.length === 0;
+  const healthy = knowledgeHealthy && learningsHealthy;
+
+  console.log(`Memory integrity: ${healthy ? "PASS" : "FAIL"}`);
+  printKnowledgeInspection(knowledge, cwd, knowledgeHealthy);
+  printLearningInspection(learningDiagnostics, learningsHealthy);
+
+  if (!healthy) process.exitCode = 1;
+}
+
+function printKnowledgeInspection(
+  inspection: KnowledgeInspection,
+  requestedCwd: string,
+  healthy: boolean,
+): void {
+  console.log(`Knowledge integrity: ${healthy ? "PASS" : "FAIL"}`);
+  console.log(`  project: ${inspection.projectCwd ?? requestedCwd}`);
+  console.log(`  directory: ${inspection.knowledgeDir}`);
+  console.log(`  topics: ${inspection.topics.length}`);
+  console.log(`  inspection complete: ${inspection.complete ? "yes" : "no"}`);
+
+  for (const diagnostic of inspection.diagnostics) {
+    console.log(
+      `  [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.filePath}\n` +
+        `    ${diagnostic.message}`,
+    );
+  }
+}
+
+function printLearningInspection(diagnostics: LearningStorageDiagnostic[], healthy: boolean): void {
+  console.log(`Learning integrity: ${healthy ? "PASS" : "FAIL"}`);
+  for (const diagnostic of diagnostics) {
+    console.log(
+      `  [${diagnostic.severity}] ${diagnostic.code}: ${diagnostic.filePath}\n` +
+        `    ${diagnostic.message}`,
+    );
+  }
 }
 
 function countBy<T>(items: T[], key: (item: T) => string): Record<string, number> {

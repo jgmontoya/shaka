@@ -15,10 +15,9 @@ import {
   type QualityVerdict,
   buildQualityAssessmentPrompt,
   filterLearnings,
-  loadLearnings,
+  loadLearningsForMutation,
   parseQualityAssessmentOutput,
   removeLearningIfUnchanged,
-  renderLearnings,
   sortByExposures,
 } from "../../memory/learnings";
 import { promptUser } from "./index";
@@ -51,7 +50,8 @@ export async function runReview(
     return;
   }
 
-  const entries = await loadLearnings(memoryDir);
+  const document = await loadLearningsForMutation(memoryDir);
+  const entries = document.entries;
   if (entries.length === 0) {
     console.log("No learnings found.");
     return;
@@ -59,7 +59,7 @@ export async function runReview(
 
   // Backup before any changes
   const backupPath = join(memoryDir, "learnings.backup.md");
-  await Bun.write(backupPath, renderLearnings(entries));
+  await Bun.write(backupPath, document.sourceText);
 
   console.log(`Learnings: ${entries.length} entries (backup saved)`);
 

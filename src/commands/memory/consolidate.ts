@@ -11,20 +11,20 @@ import {
   type LearningEntry,
   appendToArchive,
   findPromotionCandidates,
-  loadLearnings,
+  loadLearningsForMutation,
   markNonglobal,
   promoteToGlobal,
   renderEntry,
-  renderLearnings,
   replaceLearningsIfUnchanged,
 } from "../../memory/learnings";
 import { promptUser } from "./index";
 
 export async function runConsolidation(memoryDir: string): Promise<void> {
-  const originalEntries = await loadLearnings(memoryDir);
+  const document = await loadLearningsForMutation(memoryDir);
+  const originalEntries = document.entries;
   let entries = originalEntries;
   const originalCount = entries.length;
-  const content = renderLearnings(entries);
+  const content = document.sourceText;
 
   console.log(
     `learnings.md has ${originalCount} entries (${content.length} chars). Consolidating...`,
@@ -90,7 +90,9 @@ async function promptForPromotions(entries: LearningEntry[]): Promise<LearningEn
     const answer = await promptUser("Promote to global (cwd: *)? [Y/n] ");
     const decline = answer.trim().toLowerCase() === "n";
 
-    result[idx] = decline ? markNonglobal(candidate) : promoteToGlobal(candidate);
+    result[idx] = decline
+      ? markNonglobal(candidate)
+      : promoteToGlobal(candidate, "manual-cross-project-review");
 
     if (decline) {
       console.log("  Marked as nonglobal (won't be prompted again).");

@@ -7,11 +7,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, rm } from "node:fs/promises";
+import { lstat, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LearningEntry } from "../../../src/memory/learnings";
-import { parseLearnings, renderLearnings, writeLearnings } from "../../../src/memory/learnings";
+import {
+  parseLearnings,
+  promoteToGlobal,
+  renderLearnings,
+  writeLearnings,
+} from "../../../src/memory/learnings";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-consolidate-orch");
 
@@ -73,6 +78,72 @@ describe("appendToArchive", () => {
     expect(parsed).toHaveLength(2);
     expect(parsed[0]!.title).toBe("First Entry");
     expect(parsed[1]!.title).toBe("Second Entry");
+  });
+
+  test("preserves promotion evidence in the archive", async () => {
+    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const promoted = promoteToGlobal(
+      makeEntry({ title: "Promoted", cwds: ["/a", "/b", "/c"] }),
+      "automatic-cross-project-threshold",
+    );
+
+    await appendToArchive(testMemoryDir, [promoted]);
+
+    const content = await Bun.file(join(testMemoryDir, "learnings-archive.md")).text();
+    expect(parseLearnings(content)).toEqual([promoted]);
+  });
+
+  test("refuses to append when existing archive promotion metadata is malformed", async () => {
+    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const archivePath = join(testMemoryDir, "learnings-archive.md");
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Archived global entry
+
+Body.
+`;
+    await Bun.write(archivePath, raw);
+
+    await expect(
+      appendToArchive(testMemoryDir, [makeEntry({ title: "New archive entry" })]),
+    ).rejects.toThrow("promotion metadata");
+
+    expect(await Bun.file(archivePath).text()).toBe(raw);
+  });
+
+  test("refuses to replace a symlinked archive", async () => {
+    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const archivePath = join(testMemoryDir, "learnings-archive.md");
+    const targetPath = join(testMemoryDir, "linked-archive.md");
+    const raw = renderLearnings([makeEntry({ title: "Existing archive entry" })]);
+    await Bun.write(targetPath, raw);
+    await symlink(targetPath, archivePath);
+
+    await expect(
+      appendToArchive(testMemoryDir, [makeEntry({ title: "New archive entry" })]),
+    ).rejects.toThrow("regular file");
+
+    expect((await lstat(archivePath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(targetPath).text()).toBe(raw);
+  });
+
+  test("refuses to replace a dangling archive symlink", async () => {
+    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const archivePath = join(testMemoryDir, "learnings-archive.md");
+    const missingTarget = join(testMemoryDir, "missing-archive.md");
+    await symlink(missingTarget, archivePath);
+
+    await expect(
+      appendToArchive(testMemoryDir, [makeEntry({ title: "New archive entry" })]),
+    ).rejects.toThrow("regular file");
+
+    expect((await lstat(archivePath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(missingTarget).exists()).toBe(false);
   });
 
   test("no-ops when given empty array", async () => {
@@ -259,6 +330,51 @@ describe("runConsolidation", () => {
 
   afterEach(async () => {
     await rm(testMemoryDir, { recursive: true, force: true });
+  });
+
+  test("rejects corrupt promotion metadata before consolidation side effects", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Global entry
+
+Body.
+`;
+    const learningsPath = join(testMemoryDir, "learnings.md");
+    await Bun.write(learningsPath, raw);
+
+    const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
+
+    await expect(runConsolidation(testMemoryDir)).rejects.toThrow("promotion metadata");
+
+    expect(await Bun.file(learningsPath).text()).toBe(raw);
+    expect(await Bun.file(join(testMemoryDir, "learnings.backup.md")).exists()).toBe(false);
+    expect(await Bun.file(join(testMemoryDir, "learnings-archive.md")).exists()).toBe(false);
+  });
+
+  test("backs up the original learnings source without canonicalizing it", async () => {
+    const raw = `# Learnings
+
+Custom header retained by the backup.
+
+---
+
+<!-- correction | cwd: /myapp | exposures: 2026-02-09@aaaa0000 -->
+
+### Project entry
+
+Body.
+`;
+    await Bun.write(join(testMemoryDir, "learnings.md"), raw);
+
+    const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
+    await runConsolidation(testMemoryDir);
+
+    expect(await Bun.file(join(testMemoryDir, "learnings.backup.md")).text()).toBe(raw);
   });
 
   test("runs pass 3 even below threshold of 20 entries", async () => {

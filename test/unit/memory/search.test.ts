@@ -279,6 +279,53 @@ describe("searchMemory", () => {
     expect(results[0]?.title).toBe("Use Bun.file() instead of fs.readFile()");
   });
 
+  test("learning snippets exclude promotion metadata", async () => {
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "pattern",
+        cwds: ["*"],
+        exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+        nonglobal: false,
+        title: "Searchable global rule",
+        body: "Use the shared rule everywhere.",
+        promotionEvidence: {
+          sourceCwds: ["/a", "/b", "/c"],
+          exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+          reasons: ["automatic-cross-project-threshold"],
+        },
+      },
+    ]);
+
+    const results = await searchMemory("Searchable", testMemoryDir);
+
+    expect(results[0]?.snippet).not.toContain("promotion");
+    expect(results[0]?.snippet).not.toContain("sourceCwds");
+    expect(results[0]?.snippet).not.toContain("automatic-cross-project-threshold");
+  });
+
+  test("malformed promotion metadata does not hide the learning from search", async () => {
+    await Bun.write(
+      `${testMemoryDir}/learnings.md`,
+      `# Learnings
+
+---
+
+<!-- pattern | cwd: * | exposures: 2026-02-11@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Searchable damaged provenance
+
+The learning remains available for read-only recall.
+`,
+    );
+
+    const results = await searchMemory("damaged provenance", testMemoryDir);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("Searchable damaged provenance");
+    expect(results[0]?.snippet).not.toContain("promotion");
+  });
+
   test("learning results use last exposure date", async () => {
     await writeLearnings(testMemoryDir, [
       {

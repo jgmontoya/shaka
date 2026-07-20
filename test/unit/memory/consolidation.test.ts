@@ -13,7 +13,7 @@ import {
   resolveContradictions,
 } from "../../../src/memory/consolidation";
 import type { CandidateWithClusters } from "../../../src/memory/consolidation";
-import type { LearningEntry } from "../../../src/memory/learnings";
+import { type LearningEntry, promoteToGlobal } from "../../../src/memory/learnings";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
@@ -133,6 +133,37 @@ describe("applyDuplicateMerges", () => {
     const result = applyDuplicateMerges(entries, [{ keep: 0, drop: [1] }]);
     expect(result[0]?.exposures[0]?.date).toBe("2026-02-09");
     expect(result[0]?.exposures[1]?.date).toBe("2026-02-11");
+  });
+
+  test("duplicate merges combine promotion evidence deterministically", () => {
+    const automatic = promoteToGlobal(
+      makeEntry({
+        title: "Automatic",
+        cwds: ["/z", "/b", "/a"],
+        exposures: [{ date: "2026-02-11", sessionHash: "late0000" }],
+      }),
+      "automatic-cross-project-threshold",
+    );
+    const manual = promoteToGlobal(
+      makeEntry({
+        title: "Manual",
+        cwds: ["/d", "/c", "/b"],
+        exposures: [{ date: "2026-02-09", sessionHash: "early000" }],
+      }),
+      "manual-cross-project-review",
+    );
+
+    const result = applyDuplicateMerges([automatic, manual], [{ keep: 0, drop: [1] }]);
+
+    expect(result[0]?.cwds).toEqual(["*"]);
+    expect(result[0]?.promotionEvidence).toEqual({
+      sourceCwds: ["/a", "/b", "/c", "/d", "/z"],
+      exposures: [
+        { date: "2026-02-09", sessionHash: "early000" },
+        { date: "2026-02-11", sessionHash: "late0000" },
+      ],
+      reasons: ["automatic-cross-project-threshold", "manual-cross-project-review"],
+    });
   });
 });
 
@@ -366,9 +397,16 @@ describe("groupByCwd", () => {
     expect(groups.get("/proj-b")![0]!.title).toBe("Shared");
   });
 
-  test("global entries are excluded from all groups", () => {
+  test("global entries are excluded from all groups even with legacy mixed scopes", () => {
     const entries = [
-      makeEntry({ title: "Global", cwds: ["*"] }),
+      {
+        ...makeEntry({ title: "Global", cwds: ["*", "/proj-a"] }),
+        promotionEvidence: {
+          sourceCwds: ["/proj-a", "/proj-b", "/proj-c"],
+          exposures: [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
+          reasons: ["automatic-cross-project-threshold" as const],
+        },
+      },
       makeEntry({ title: "Scoped", cwds: ["/proj-a"] }),
     ];
     const groups = groupByCwd(entries);

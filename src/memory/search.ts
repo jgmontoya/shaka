@@ -17,7 +17,7 @@ import {
   loadLearnings,
   matchesCwd,
   parseLearnings,
-  renderEntry,
+  renderEntryForContext,
 } from "./learnings";
 import { parseSummaryOutput } from "./summarize";
 import { parseTopicFilename } from "./topic-slug";
@@ -206,7 +206,7 @@ function searchEntries(
     if (!searchable.includes(queryLower)) continue;
 
     const lastExposure = entry.exposures[entry.exposures.length - 1];
-    const snippet = extractSnippet(renderEntry(entry), queryLower);
+    const snippet = extractSnippet(renderEntryForContext(entry), queryLower);
 
     results.push({
       type: "learning",

@@ -17,13 +17,13 @@ import { runFullConsolidation } from "./consolidation";
 import {
   type LearningEntry,
   appendToArchive,
+  assertLearningsRepresentable,
   buildRankingPrompt,
   findPromotionCandidates,
-  loadLearnings,
+  loadLearningsForMutation,
   matchesCwd,
   parseRankingOutput,
   promoteToGlobal,
-  renderLearnings,
   selectLearnings,
   withLearningsLock,
   writeLearnings,
@@ -162,6 +162,7 @@ async function consolidate(
   provider?: ProviderName,
 ): Promise<{ entries: LearningEntry[]; condensed: number }> {
   const result = await runFullConsolidation(entries, provider);
+  assertLearningsRepresentable(join(memoryDir, "learnings.md"), result.entries);
 
   if (result.archived.length > 0) {
     await appendToArchive(memoryDir, result.archived);
@@ -170,16 +171,16 @@ async function consolidate(
   return { entries: result.entries, condensed: result.compoundsCreated };
 }
 
-/** Promote entries appearing in 3+ CWDs to global. Returns updated entries and count. */
+/** Promote entries appearing in 3+ CWDs to global and retain their prior scope evidence. */
 function autoPromote(entries: LearningEntry[]): { entries: LearningEntry[]; promoted: number } {
   const candidates = findPromotionCandidates(entries);
-  let promoted = 0;
   const result = [...entries];
+  let promoted = 0;
 
   for (const candidate of candidates) {
     const idx = result.findIndex((e) => e === candidate);
     if (idx === -1) continue;
-    result[idx] = promoteToGlobal(candidate);
+    result[idx] = promoteToGlobal(candidate, "automatic-cross-project-threshold");
     promoted++;
   }
 
@@ -265,7 +266,8 @@ async function runMaintenanceTransaction(
 ): Promise<MaintenanceResult> {
   const { now, provider } = opts ?? {};
   const currentTime = now ?? new Date();
-  let entries = await loadLearnings(memoryDir);
+  const document = await loadLearningsForMutation(memoryDir);
+  let entries = document.entries;
   const state = await readMaintenanceState(memoryDir);
   const decision = shouldRunMaintenance(entries, cwd, state, newLearningsExtracted, currentTime);
 
@@ -276,7 +278,7 @@ async function runMaintenanceTransaction(
   const beforeCount = entries.length;
 
   // Backup before any changes
-  await Bun.write(join(memoryDir, "learnings.backup.md"), renderLearnings(entries));
+  await Bun.write(join(memoryDir, "learnings.backup.md"), document.sourceText);
 
   // Step 1: Consolidation (dedup, contradictions, condensation)
   const condensation = await failOpen(

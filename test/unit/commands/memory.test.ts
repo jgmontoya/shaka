@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,11 +11,18 @@ mock.module("../../../src/inference", () => ({
 
 import { createMemoryCommand } from "../../../src/commands/memory/index";
 import { rebuildIndex } from "../../../src/memory/knowledge";
-import { type LearningEntry, loadLearnings, writeLearnings } from "../../../src/memory/learnings";
+import {
+  type LearningEntry,
+  appendToArchive,
+  loadLearnings,
+  renderLearnings,
+  writeLearnings,
+} from "../../../src/memory/learnings";
 import { projectSlug } from "../../../src/memory/rollups";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
 import { hashContent } from "../../../src/memory/utils";
+import { makeRunShaka } from "../../helpers/run-shaka";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
@@ -76,6 +83,159 @@ describe("memory consolidate", () => {
     expect(promoted).toHaveLength(2);
     expect(promoted[0]?.cwds).toEqual(["*"]);
     expect(promoted[1]?.cwds).toEqual(["*"]);
+    expect(promoted[0]?.promotionEvidence?.sourceCwds).toEqual(["/a", "/b", "/c"]);
+    expect(promoted[0]?.promotionEvidence?.exposures).toEqual([
+      { date: "2026-02-09", sessionHash: "a1b2c3d4" },
+    ]);
+    expect(promoted[0]?.promotionEvidence?.reasons).toEqual(["manual-cross-project-review"]);
+    expect(promoted[1]?.promotionEvidence?.sourceCwds).toEqual(["/d", "/e", "/f"]);
+    expect(promoted[1]?.promotionEvidence?.exposures).toEqual([
+      { date: "2026-02-09", sessionHash: "a1b2c3d4" },
+    ]);
+    expect(promoted[1]?.promotionEvidence?.reasons).toEqual(["manual-cross-project-review"]);
+  });
+});
+
+describe("memory mutation command errors", () => {
+  let commandRoot: string;
+  let savedExitCode: typeof process.exitCode;
+  let savedShakaHome: string | undefined;
+
+  beforeEach(async () => {
+    commandRoot = await mkdtemp(join(tmpdir(), "shaka-memory-command-error-"));
+    savedExitCode = process.exitCode;
+    savedShakaHome = process.env.SHAKA_HOME;
+    process.exitCode = 0;
+    process.env.SHAKA_HOME = commandRoot;
+    await mkdir(join(commandRoot, "memory"), { recursive: true });
+  });
+
+  afterEach(async () => {
+    process.exitCode = savedExitCode ?? 0;
+    if (savedShakaHome === undefined) process.env.SHAKA_HOME = undefined;
+    else process.env.SHAKA_HOME = savedShakaHome;
+    await rm(commandRoot, { recursive: true, force: true });
+  });
+
+  test("consolidate reports damaged storage without a stack trace", async () => {
+    const learningPath = join(commandRoot, "memory", "learnings.md");
+    const source = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-07-18@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Damaged promotion
+
+Body.`;
+    await Bun.write(learningPath, source);
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["consolidate"], { from: "user" });
+    } finally {
+      console.error = originalError;
+    }
+
+    const rendered = errors.join("\n");
+    expect(rendered).toContain("Cannot rewrite");
+    expect(rendered).toContain("shaka memory check");
+    expect(rendered).not.toMatch(/at .*\.(?:js|ts):\d+/);
+    expect(process.exitCode).toBe(1);
+    expect(await Bun.file(learningPath).text()).toBe(source);
+  });
+
+  test("review reports an unsafe storage path without a stack trace", async () => {
+    const learningPath = join(commandRoot, "memory", "learnings.md");
+    const targetPath = join(commandRoot, "linked-learnings.md");
+    const source = renderLearnings([makeEntry({ title: "Linked learning" })]);
+    await Bun.write(targetPath, source);
+    await symlink(targetPath, learningPath);
+    const errors: string[] = [];
+    const originalError = console.error;
+    const originalIsTTY = process.stdin.isTTY;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+    process.stdin.isTTY = true;
+
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["review"], { from: "user" });
+    } finally {
+      console.error = originalError;
+      process.stdin.isTTY = originalIsTTY as boolean;
+    }
+
+    const rendered = errors.join("\n");
+    expect(rendered).toContain("regular file");
+    expect(rendered).toContain("shaka memory check");
+    expect(rendered).not.toMatch(/at .*\.(?:js|ts):\d+/);
+    expect(process.exitCode).toBe(1);
+    expect((await lstat(learningPath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(targetPath).text()).toBe(source);
+  });
+
+  test("consolidate subprocess exits cleanly when storage is damaged", async () => {
+    const learningPath = join(commandRoot, "memory", "learnings.md");
+    const source = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-07-18@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Damaged promotion
+
+Body.`;
+    await Bun.write(learningPath, source);
+
+    const result = makeRunShaka(commandRoot)(["memory", "consolidate"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Cannot rewrite");
+    expect(result.stderr).toContain("shaka memory check");
+    expect(result.stderr).not.toMatch(/at .*\.(?:js|ts):\d+/);
+    expect(result.stderr).not.toContain("LearningsIntegrityError:");
+    expect(await Bun.file(learningPath).text()).toBe(source);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "consolidate subprocess reports an unreadable regular file without a stack trace",
+    async () => {
+      const learningPath = join(commandRoot, "memory", "learnings.md");
+      const source = renderLearnings([makeEntry({ title: "Unreadable learning" })]);
+      await Bun.write(learningPath, source);
+
+      const result = await (async () => {
+        await chmod(learningPath, 0o000);
+        try {
+          return makeRunShaka(commandRoot)(["memory", "consolidate"]);
+        } finally {
+          await chmod(learningPath, 0o600);
+        }
+      })();
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Learning storage file could not be read.");
+      expect(result.stderr).toContain("shaka memory check");
+      expect(result.stderr).not.toMatch(/at .*\.(?:js|ts):\d+/);
+      expect(result.stderr).not.toContain("EACCES");
+      expect(result.stderr).not.toContain("Bun v");
+      expect(await Bun.file(learningPath).text()).toBe(source);
+    },
+  );
+
+  test("consolidate rethrows unexpected failures", async () => {
+    await writeLearnings(join(commandRoot, "memory"), [makeEntry()]);
+    await mkdir(join(commandRoot, "memory", "learnings.backup.md"));
+    const cmd = createMemoryCommand();
+
+    await expect(cmd.parseAsync(["consolidate"], { from: "user" })).rejects.toThrow();
+
+    expect(process.exitCode).toBe(0);
   });
 });
 
@@ -297,6 +457,29 @@ describe("memory check", () => {
     await rm(checkRoot, { recursive: true, force: true });
   });
 
+  test("passes with healthy active and archived learnings", async () => {
+    const cwd = "/projects/shaka";
+    const checkMemoryDir = join(checkRoot, "memory");
+    await writeLearnings(checkMemoryDir, [makeEntry({ title: "Active learning" })]);
+    await appendToArchive(checkMemoryDir, [makeEntry({ title: "Archived learning" })]);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: PASS");
+    expect(rendered).toContain("Knowledge integrity: PASS");
+    expect(rendered).toContain("Learning integrity: PASS");
+    expect(process.exitCode).toBe(0);
+  });
+
   test("reports integrity failures and sets a failing exit code", async () => {
     const cwd = "/projects/shaka";
     const knowledgeDir = join(checkRoot, "memory", "knowledge", projectSlug(cwd));
@@ -321,9 +504,216 @@ describe("memory check", () => {
     }
 
     const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: FAIL");
     expect(rendered).toContain("Knowledge integrity: FAIL");
+    expect(rendered).toContain("Learning integrity: PASS");
     expect(rendered).toContain("malformed-topic-page");
     expect(rendered).toContain(topicPath);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports mixed-case active promotion metadata without changing it", async () => {
+    const cwd = "/projects/shaka";
+    const learningPath = join(checkRoot, "memory", "learnings.md");
+    const source = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-07-18@aaaa0000 -->
+<!-- Promotion: invalid-json -->
+
+### Promotion provenance
+
+Keep the source evidence.
+
+---`;
+    await mkdir(join(checkRoot, "memory"), { recursive: true });
+    await Bun.write(learningPath, source);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: FAIL");
+    expect(rendered).toContain("Knowledge integrity: PASS");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("malformed-promotion-metadata");
+    expect(rendered).toContain("Promotion provenance");
+    expect(rendered).toContain(learningPath);
+    expect(await Bun.file(learningPath).text()).toBe(source);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports malformed learning records with their title and file path", async () => {
+    const cwd = "/projects/shaka";
+    const learningPath = join(checkRoot, "memory", "learnings.md");
+    const source = `# Learnings
+
+---
+
+<!-- correction | cwd: /projects/a | broken -->
+
+### Lost learning
+
+Body.
+
+---`;
+    await mkdir(join(checkRoot, "memory"), { recursive: true });
+    await Bun.write(learningPath, source);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: FAIL");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("malformed-learning-record");
+    expect(rendered).toContain("Lost learning");
+    expect(rendered).toContain(learningPath);
+    expect(await Bun.file(learningPath).text()).toBe(source);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports duplicated archived promotion metadata", async () => {
+    const cwd = "/projects/shaka";
+    const archivePath = join(checkRoot, "memory", "learnings-archive.md");
+    const promotion =
+      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-07-18","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const source = `# Archived Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-07-18@aaaa0000 -->
+${promotion}
+${promotion}
+
+### Archived provenance
+
+Keep the archived source evidence.
+
+---`;
+    await mkdir(join(checkRoot, "memory"), { recursive: true });
+    await Bun.write(archivePath, source);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("duplicate-promotion-metadata");
+    expect(rendered).toContain("Archived provenance");
+    expect(rendered).toContain(archivePath);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports an unreadable learnings file instead of crashing", async () => {
+    const cwd = "/projects/shaka";
+    const learningPath = join(checkRoot, "memory", "learnings.md");
+    await mkdir(learningPath, { recursive: true });
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: FAIL");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("unreadable-learning-file");
+    expect(rendered).toContain(learningPath);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports a symlinked active learnings file without replacing it", async () => {
+    const cwd = "/projects/shaka";
+    const checkMemoryDir = join(checkRoot, "memory");
+    const learningPath = join(checkMemoryDir, "learnings.md");
+    const targetPath = join(checkRoot, "linked-learnings.md");
+    const source = `# Learnings
+
+---
+
+<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+
+### Linked learning
+
+Body.
+
+---`;
+    await mkdir(checkMemoryDir, { recursive: true });
+    await Bun.write(targetPath, source);
+    await symlink(targetPath, learningPath);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: FAIL");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("unreadable-learning-file");
+    expect(rendered).toContain(learningPath);
+    expect((await lstat(learningPath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(targetPath).text()).toBe(source);
+    expect(process.exitCode).toBe(1);
+  });
+
+  test("reports a dangling active learnings symlink as invalid storage", async () => {
+    const cwd = "/projects/shaka";
+    const checkMemoryDir = join(checkRoot, "memory");
+    const learningPath = join(checkMemoryDir, "learnings.md");
+    const missingTarget = join(checkRoot, "missing-learnings.md");
+    await mkdir(checkMemoryDir, { recursive: true });
+    await symlink(missingTarget, learningPath);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Learning integrity: FAIL");
+    expect(rendered).toContain("unreadable-learning-file");
+    expect(rendered).toContain(learningPath);
+    expect((await lstat(learningPath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(missingTarget).exists()).toBe(false);
     expect(process.exitCode).toBe(1);
   });
 });

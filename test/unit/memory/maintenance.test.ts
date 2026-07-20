@@ -347,6 +347,59 @@ describe("runMaintenance", () => {
     expect(result).toEqual({ skipped: true, reason: "no new learnings" });
   });
 
+  test("rejects corrupt promotion metadata before maintenance side effects", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Global entry
+
+Body.
+`;
+    const learningsPath = join(maintenanceTestDir, "learnings.md");
+    await Bun.write(learningsPath, raw);
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+
+    await expect(
+      runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+        now: new Date("2026-03-30T12:00:00Z"),
+      }),
+    ).rejects.toThrow("promotion metadata");
+
+    expect(await Bun.file(learningsPath).text()).toBe(raw);
+    expect(await Bun.file(join(maintenanceTestDir, "learnings.backup.md")).exists()).toBe(false);
+    expect(await Bun.file(join(maintenanceTestDir, ".last-maintenance")).exists()).toBe(false);
+    expect(await Bun.file(join(maintenanceTestDir, "maintenance.log")).exists()).toBe(false);
+    expect(await Bun.file(join(maintenanceTestDir, "learnings-archive.md")).exists()).toBe(false);
+  });
+
+  test("backs up the original learnings source without canonicalizing it", async () => {
+    const raw = `# Learnings
+
+Custom header retained by the backup.
+
+---
+
+<!-- correction | cwd: /projects/myapp | exposures: 2026-02-09@aaaa0000 -->
+
+### Project entry
+
+Body.
+`;
+    await Bun.write(join(maintenanceTestDir, "learnings.md"), raw);
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+
+    expect(await Bun.file(join(maintenanceTestDir, "learnings.backup.md")).text()).toBe(raw);
+  });
+
   test("runs condensation and writes backup when decision is consolidate-only", async () => {
     // Arrange: first run (null state), 2+ exposure entries trigger condensation
     mock.module("../../../src/inference", () => ({
@@ -517,6 +570,76 @@ describe("runMaintenance", () => {
     expect(promoted!.cwds).toEqual(["*"]);
   });
 
+  test("persists automatic promotion evidence with the global learning", async () => {
+    mock.module("../../../src/inference", () => ({
+      inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const sourceEntry = makeEntry({
+      title: "Cross-project pattern",
+      body: "Use one shared boundary in every project.",
+      category: "pattern",
+      cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
+      exposures: [
+        { date: "2026-03-01", sessionHash: "alpha123" },
+        { date: "2026-03-02", sessionHash: "beta456" },
+      ],
+    });
+    await writeLearnings(maintenanceTestDir, [sourceEntry]);
+
+    await runMaintenance(maintenanceTestDir, "/projects/alpha", 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+
+    const [promoted] = await loadLearnings(maintenanceTestDir);
+    expect(promoted?.cwds).toEqual(["*"]);
+    expect(promoted?.promotionEvidence).toEqual({
+      sourceCwds: sourceEntry.cwds,
+      exposures: sourceEntry.exposures,
+      reasons: ["automatic-cross-project-threshold"],
+    });
+
+    const logContent = await Bun.file(join(maintenanceTestDir, "maintenance.log")).text();
+    const logEntry = JSON.parse(logContent.trim());
+    expect(logEntry.promoted).toBe(1);
+    expect(logEntry).not.toHaveProperty("promotions");
+  });
+
+  test("retains promotion evidence when maintenance logging fails", async () => {
+    mock.module("../../../src/inference", () => ({
+      inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const sourceEntry = makeEntry({
+      title: "Cross-project pattern",
+      cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
+      exposures: [
+        { date: "2026-03-01", sessionHash: "alpha123" },
+        { date: "2026-03-02", sessionHash: "beta456" },
+      ],
+    });
+    await writeLearnings(maintenanceTestDir, [sourceEntry]);
+    await mkdir(join(maintenanceTestDir, "maintenance.log"));
+
+    await expect(
+      runMaintenance(maintenanceTestDir, "/projects/alpha", 1, {
+        now: new Date("2026-03-30T12:00:00Z"),
+      }),
+    ).rejects.toThrow();
+
+    const [promoted] = await loadLearnings(maintenanceTestDir);
+    expect(promoted?.cwds).toEqual(["*"]);
+    expect(promoted?.promotionEvidence).toEqual({
+      sourceCwds: sourceEntry.cwds,
+      exposures: sourceEntry.exposures,
+      reasons: ["automatic-cross-project-threshold"],
+    });
+  });
+
   test("does not promote nonglobal entries", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
@@ -566,7 +689,7 @@ RANK 2 [2] — one-time debugging step`;
     const entries: LearningEntry[] = Array.from({ length: 40 }, (_, i) =>
       makeEntry({
         title: `Long Entry ${i} That Takes Up Budget Space`,
-        body: `Detailed body for entry ${i}. `.repeat(5),
+        body: `Detailed body for entry ${i}. `.repeat(5).trim(),
         cwds: ["/projects/myapp"],
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
@@ -605,7 +728,7 @@ RANK 5 [5] — reason 5`;
     const entries: LearningEntry[] = Array.from({ length: 40 }, (_, i) =>
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
-        body: `Detailed body for entry ${i}. `.repeat(5),
+        body: `Detailed body for entry ${i}. `.repeat(5).trim(),
         cwds: ["/projects/myapp"],
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
@@ -666,7 +789,7 @@ RANK 5 [5] — reason 5`;
     const entries: LearningEntry[] = Array.from({ length: 40 }, (_, i) =>
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
-        body: `Detailed body for entry ${i}. `.repeat(5),
+        body: `Detailed body for entry ${i}. `.repeat(5).trim(),
         cwds: ["/projects/myapp"],
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
@@ -700,7 +823,7 @@ RANK 5 [5] — reason 5`;
     const entries: LearningEntry[] = Array.from({ length: 40 }, (_, i) =>
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
-        body: `Detailed body for entry ${i}. `.repeat(5),
+        body: `Detailed body for entry ${i}. `.repeat(5).trim(),
         cwds: ["/projects/myapp"],
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` },
@@ -732,7 +855,7 @@ RANK 5 [5] — reason 5`;
     const entries: LearningEntry[] = Array.from({ length: 40 }, (_, i) =>
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
-        body: `Detailed body for entry ${i}. `.repeat(5),
+        body: `Detailed body for entry ${i}. `.repeat(5).trim(),
         cwds: ["/projects/myapp"],
         exposures: [{ date: "2026-03-24", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
@@ -784,6 +907,51 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
     expect(result.before).toBe(2);
     expect(result.condensed).toBe(1);
     expect(typeof result.after).toBe("number");
+  });
+
+  test("does not archive sources when a compound cannot be represented", async () => {
+    const condensationResponse = `CLUSTER [1, 2] — Invalid compound
+TITLE: Invalid compound
+BODY: Keep before.
+---
+Keep after.`;
+
+    mock.module("../../../src/inference", () => ({
+      inference: async () => ({ success: true, text: condensationResponse }),
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const activePath = join(maintenanceTestDir, "learnings.md");
+    const archivePath = join(maintenanceTestDir, "learnings-archive.md");
+    const entries = [
+      makeEntry({
+        title: "One",
+        exposures: [
+          { date: "2026-03-01", sessionHash: "aaaa0000" },
+          { date: "2026-03-05", sessionHash: "bbbb0000" },
+        ],
+      }),
+      makeEntry({
+        title: "Two",
+        exposures: [
+          { date: "2026-03-02", sessionHash: "cccc0000" },
+          { date: "2026-03-06", sessionHash: "dddd0000" },
+        ],
+      }),
+    ];
+    await writeLearnings(maintenanceTestDir, entries);
+    await Bun.write(archivePath, renderLearnings([makeEntry({ title: "Existing archive" })]));
+    const activeSource = await Bun.file(activePath).text();
+    const archiveSource = await Bun.file(archivePath).text();
+
+    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+
+    expect(result.condensed).toBe(0);
+    expect(await Bun.file(activePath).text()).toBe(activeSource);
+    expect(await Bun.file(archivePath).text()).toBe(archiveSource);
   });
 
   test("forwards provider hint to every inference() call", async () => {

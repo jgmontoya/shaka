@@ -36,6 +36,7 @@ shaka doctor                  # Check installation health
 shaka commands list           # See available commands
 shaka skill list              # See system and installed skills
 shaka memory search "query"   # Search this project's summaries, learnings, and knowledge
+shaka memory check            # Check knowledge and learning storage integrity
 shaka mcp serve               # Start the MCP server for supported providers
 ```
 
@@ -197,6 +198,7 @@ shaka memory review           # Browse and manage learnings interactively
 shaka memory review --prune   # AI-assisted quality assessment of learnings
 shaka memory consolidate      # Deduplicate, resolve contradictions, and condense related learnings
 shaka memory compile          # Compile session knowledge into topic pages
+shaka memory check            # Check knowledge and learning storage integrity
 ```
 
 ### Init Flow

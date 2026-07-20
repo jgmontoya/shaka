@@ -9,7 +9,13 @@
 
 import { inference } from "../inference";
 import type { ProviderName } from "../providers/types";
-import type { Exposure, LearningEntry } from "./learnings";
+import {
+  type Exposure,
+  type LearningEntry,
+  type PromotionEvidence,
+  mergeLearningCwds,
+  mergePromotionEvidence,
+} from "./learnings";
 
 // --- Types ---
 
@@ -95,10 +101,15 @@ export function parseDuplicateOutput(raw: string): DuplicateGroup[] {
 }
 
 function absorbDropEntry(
-  keep: { cwds: string[]; exposures: Exposure[]; nonglobal: boolean },
+  keep: {
+    cwds: string[];
+    exposures: Exposure[];
+    nonglobal: boolean;
+    promotionEvidence?: PromotionEvidence;
+  },
   drop: LearningEntry,
 ): void {
-  keep.cwds = [...new Set([...keep.cwds, ...drop.cwds])];
+  keep.cwds = mergeLearningCwds(keep.cwds, drop.cwds);
   const seen = new Set(keep.exposures.map((e) => `${e.date}@${e.sessionHash}`));
   for (const e of drop.exposures) {
     const key = `${e.date}@${e.sessionHash}`;
@@ -108,6 +119,8 @@ function absorbDropEntry(
     }
   }
   if (drop.nonglobal) keep.nonglobal = true;
+  const promotionEvidence = mergePromotionEvidence(keep.promotionEvidence, drop.promotionEvidence);
+  if (promotionEvidence) keep.promotionEvidence = promotionEvidence;
 }
 
 function applyGroup(result: MutableEntry[], group: DuplicateGroup, dropped: Set<number>): void {
@@ -307,8 +320,8 @@ export function groupByCwd(entries: LearningEntry[]): Map<string, LearningEntry[
   const groups = new Map<string, LearningEntry[]>();
 
   for (const entry of entries) {
+    if (entry.cwds.includes("*")) continue;
     for (const cwd of entry.cwds) {
-      if (cwd === "*") continue;
       const group = groups.get(cwd);
       if (group) {
         group.push(entry);

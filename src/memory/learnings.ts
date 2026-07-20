@@ -11,7 +11,8 @@
  */
 
 import { mkdir, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { inspectLearningFileStatus } from "./learning-file";
 import { type DirectoryLockOptions, withDirectoryLock } from "./lock";
 import { arePathsRelated, hashSessionId } from "./utils";
 
@@ -26,6 +27,30 @@ export interface Exposure {
   readonly sessionHash: string; // first 8 chars of SHA-256(sessionId)
 }
 
+export type PromotionReason = "automatic-cross-project-threshold" | "manual-cross-project-review";
+
+export interface PromotionEvidence {
+  readonly sourceCwds: readonly string[];
+  readonly exposures: readonly Exposure[];
+  readonly reasons: readonly PromotionReason[];
+}
+
+export type LearningDiagnosticCode =
+  | "malformed-learning-record"
+  | "malformed-promotion-metadata"
+  | "duplicate-promotion-metadata";
+
+export interface LearningDiagnostic {
+  readonly code: LearningDiagnosticCode;
+  readonly title?: string;
+  readonly message: string;
+}
+
+export interface ParsedLearningsDocument {
+  readonly entries: LearningEntry[];
+  readonly diagnostics: LearningDiagnostic[];
+}
+
 export interface LearningEntry {
   readonly category: LearningCategory;
   readonly cwds: string[]; // absolute paths, or ["*"] for global
@@ -33,6 +58,7 @@ export interface LearningEntry {
   readonly nonglobal: boolean; // user opted out of global promotion
   readonly title: string;
   readonly body: string; // 1-3 sentences
+  readonly promotionEvidence?: PromotionEvidence;
 }
 
 // --- Scoring constants ---
@@ -45,77 +71,272 @@ const DEFAULT_BUDGET = 6000;
 
 const METADATA_RE =
   /^<!--\s*(\w+)\s*\|\s*cwd:\s*(.+?)\s*\|\s*exposures:\s*(.+?)(?:\s*\|\s*nonglobal)?\s*-->$/;
+const TITLE_CANDIDATE_RE = /^###(?:\s|$)/;
+const PRIMARY_METADATA_CATEGORY_RE = /^<!--\s*(?:correction|preference|pattern|fact)\b/;
+const PRIMARY_METADATA_SHAPE_RE = /^<!--\s*\w+\s*\|/;
+const PRIMARY_METADATA_FIELD_RE = /\b(?:cwd|exposures)\s*:/;
+const PROMOTION_CANDIDATE_RE = /^<!--\s*promotion\b/i;
+const PROMOTION_PREFIX = "<!-- promotion: ";
+const PROMOTION_SUFFIX = " -->";
+const PROMOTION_REASON_ORDER: readonly PromotionReason[] = [
+  "automatic-cross-project-threshold",
+  "manual-cross-project-review",
+];
+const PROMOTION_REASONS = new Set<PromotionReason>(PROMOTION_REASON_ORDER);
+const PROMOTION_EVIDENCE_KEYS = new Set(["sourceCwds", "exposures", "reasons"]);
 
 function isNonglobal(line: string): boolean {
   return /\|\s*nonglobal\s*-->$/.test(line);
 }
 
-function parseExposures(raw: string): Exposure[] {
-  return raw.split(",").reduce<Exposure[]>((acc, part) => {
+function isPrimaryMetadataCandidate(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("<!--")) return false;
+  return (
+    PRIMARY_METADATA_CATEGORY_RE.test(trimmed) ||
+    PRIMARY_METADATA_SHAPE_RE.test(trimmed) ||
+    PRIMARY_METADATA_FIELD_RE.test(trimmed)
+  );
+}
+
+function isPromotionMetadataCandidate(line: string): boolean {
+  return PROMOTION_CANDIDATE_RE.test(line.trim());
+}
+
+function parseExposures(raw: string): Exposure[] | undefined {
+  const exposures: Exposure[] = [];
+  for (const part of raw.split(",")) {
     const trimmed = part.trim();
     const atIndex = trimmed.indexOf("@");
-    if (atIndex === -1) return acc;
+    if (atIndex <= 0 || atIndex === trimmed.length - 1) return undefined;
 
     const date = trimmed.slice(0, atIndex);
     const sessionHash = trimmed.slice(atIndex + 1);
-    if (date && sessionHash) {
-      acc.push({ date, sessionHash });
-    }
-    return acc;
-  }, []);
+    exposures.push({ date, sessionHash });
+  }
+  return exposures;
 }
 
-function parseCwds(raw: string): string[] {
-  return raw
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+function parseCwds(raw: string): string[] | undefined {
+  const cwds = raw.split(",").map((cwd) => cwd.trim());
+  return cwds.every(Boolean) ? cwds : undefined;
 }
 
-function parseBlock(block: string): LearningEntry | null {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function isExposure(value: unknown): value is Exposure {
+  return (
+    isRecord(value) &&
+    typeof value.date === "string" &&
+    value.date.length > 0 &&
+    typeof value.sessionHash === "string" &&
+    value.sessionHash.length > 0
+  );
+}
+
+function isPromotionReason(value: unknown): value is PromotionReason {
+  return typeof value === "string" && PROMOTION_REASONS.has(value as PromotionReason);
+}
+
+function toPromotionEvidence(value: unknown): PromotionEvidence | undefined {
+  if (!isRecord(value)) return undefined;
+  if (Object.keys(value).some((key) => !PROMOTION_EVIDENCE_KEYS.has(key))) return undefined;
+
+  const { sourceCwds, exposures, reasons } = value;
+  if (
+    !Array.isArray(sourceCwds) ||
+    sourceCwds.length === 0 ||
+    !sourceCwds.every((cwd) => typeof cwd === "string" && cwd.length > 0) ||
+    !Array.isArray(exposures) ||
+    exposures.length === 0 ||
+    !exposures.every(isExposure) ||
+    !Array.isArray(reasons) ||
+    reasons.length === 0 ||
+    !reasons.every(isPromotionReason)
+  ) {
+    return undefined;
+  }
+
+  return {
+    sourceCwds: [...sourceCwds],
+    exposures: exposures.map((exposure) => ({ ...exposure })),
+    reasons: [...reasons],
+  };
+}
+
+interface ParsedPromotionEvidence {
+  readonly evidence?: PromotionEvidence;
+  readonly diagnosticCode?: LearningDiagnosticCode;
+}
+
+function parsePromotionEvidence(lines: string[]): ParsedPromotionEvidence {
+  const comments = lines
+    .map((line) => line.trim())
+    .filter((line) => PROMOTION_CANDIDATE_RE.test(line));
+  if (comments.length === 0) return {};
+  if (comments.length > 1) return { diagnosticCode: "duplicate-promotion-metadata" };
+
+  const comment = comments[0];
+  if (!comment?.startsWith(PROMOTION_PREFIX) || !comment.endsWith(PROMOTION_SUFFIX)) {
+    return { diagnosticCode: "malformed-promotion-metadata" };
+  }
+
+  try {
+    const evidence = toPromotionEvidence(
+      JSON.parse(comment.slice(PROMOTION_PREFIX.length, -PROMOTION_SUFFIX.length)),
+    );
+    return evidence ? { evidence } : { diagnosticCode: "malformed-promotion-metadata" };
+  } catch {
+    return { diagnosticCode: "malformed-promotion-metadata" };
+  }
+}
+
+function renderPromotionEvidence(evidence: PromotionEvidence): string {
+  const json = JSON.stringify(evidence).replaceAll("--", "\\u002d\\u002d");
+  return `${PROMOTION_PREFIX}${json}${PROMOTION_SUFFIX}`;
+}
+
+interface ParsedLearningBlock {
+  readonly entry?: LearningEntry;
+  readonly diagnostics: LearningDiagnostic[];
+}
+
+function malformedLearningRecord(title?: string): ParsedLearningBlock {
+  return {
+    diagnostics: [
+      {
+        code: "malformed-learning-record",
+        ...(title ? { title } : {}),
+        message: title
+          ? `Learning "${title}" has malformed primary metadata.`
+          : "Learning record has malformed primary metadata or title.",
+      },
+    ],
+  };
+}
+
+function orphanedLearningContent(): LearningDiagnostic {
+  return {
+    code: "malformed-learning-record",
+    message: "Learning storage contains content outside a complete learning record.",
+  };
+}
+
+function isLearningsPreamble(block: string): boolean {
+  return block.trim().split("\n")[0]?.trim() === "# Learnings";
+}
+
+interface ParsedPrimaryMetadata {
+  readonly category: LearningCategory;
+  readonly cwds: string[];
+  readonly exposures: Exposure[];
+  readonly nonglobal: boolean;
+}
+
+function parsePrimaryMetadata(lines: string[]): ParsedPrimaryMetadata | undefined {
+  const candidates = lines.filter(isPrimaryMetadataCandidate);
+  if (candidates.length !== 1) return undefined;
+
+  const line = candidates[0];
+  const match = line?.trim().match(METADATA_RE);
+  if (!line || !match) return undefined;
+
+  const [, category, rawCwds, rawExposures] = match;
+  if (!category || !rawCwds || !rawExposures || !VALID_CATEGORIES.has(category)) return undefined;
+
+  const cwds = parseCwds(rawCwds);
+  const exposures = parseExposures(rawExposures);
+  if (!cwds || !exposures) return undefined;
+
+  return {
+    category: category as LearningCategory,
+    cwds,
+    exposures,
+    nonglobal: isNonglobal(line.trim()),
+  };
+}
+
+function parseBlock(block: string): ParsedLearningBlock | null {
   const lines = block.trim().split("\n");
   if (lines.length === 0) return null;
 
-  const metaLine = lines.find((l) => l.trim().startsWith("<!--") && l.trim().endsWith("-->"));
-  if (!metaLine) return null;
+  const titleIndex = lines.findIndex((line) => TITLE_CANDIDATE_RE.test(line.trim()));
+  const metadataLines = lines.slice(0, titleIndex === -1 ? lines.length : titleIndex);
+  const entryLike =
+    titleIndex !== -1 ||
+    metadataLines.some(isPrimaryMetadataCandidate) ||
+    metadataLines.some(isPromotionMetadataCandidate);
+  if (!entryLike) return null;
+  if (titleIndex === -1) return malformedLearningRecord();
 
-  const match = metaLine.trim().match(METADATA_RE);
-  if (!match) return null;
+  const title = lines[titleIndex]?.trim().slice(4).trim();
+  const metadata = parsePrimaryMetadata(metadataLines);
+  if (!title || !metadata) return malformedLearningRecord(title || undefined);
 
-  const [, categoryStr, cwdStr, exposuresStr] = match;
-  if (!categoryStr || !cwdStr || !exposuresStr) return null;
-  if (!VALID_CATEGORIES.has(categoryStr)) return null;
-
-  const titleLine = lines.find((l) => l.trim().startsWith("### "));
-  if (!titleLine) return null;
-  const title = titleLine.trim().slice(4).trim();
-  if (!title) return null;
-
-  const titleIndex = lines.indexOf(titleLine);
   const body = lines
     .slice(titleIndex + 1)
     .filter((l) => l.trim() !== "")
     .join("\n")
     .trim();
+  const promotion = parsePromotionEvidence(metadataLines);
+  const diagnostics: LearningDiagnostic[] = promotion.diagnosticCode
+    ? [
+        {
+          code: promotion.diagnosticCode,
+          title,
+          message:
+            promotion.diagnosticCode === "duplicate-promotion-metadata"
+              ? `Learning "${title}" contains more than one promotion metadata record.`
+              : `Learning "${title}" contains malformed promotion metadata.`,
+        },
+      ]
+    : [];
 
   return {
-    category: categoryStr as LearningCategory,
-    cwds: parseCwds(cwdStr),
-    exposures: parseExposures(exposuresStr),
-    nonglobal: isNonglobal(metaLine.trim()),
-    title,
-    body,
+    entry: {
+      category: metadata.category,
+      cwds: metadata.cwds,
+      exposures: metadata.exposures,
+      nonglobal: metadata.nonglobal,
+      title,
+      body,
+      ...(promotion.evidence ? { promotionEvidence: promotion.evidence } : {}),
+    },
+    diagnostics,
   };
 }
 
-/** Parse learnings.md content into structured entries. */
-export function parseLearnings(content: string): LearningEntry[] {
-  if (!content.trim()) return [];
+/** Parse learnings storage into tolerant domain entries plus loss-bearing diagnostics. */
+export function parseLearningsDocument(content: string): ParsedLearningsDocument {
+  if (!content.trim()) return { entries: [], diagnostics: [] };
 
-  return content
-    .split(/^---$/m)
-    .map(parseBlock)
-    .filter((e): e is LearningEntry => e !== null);
+  const entries: LearningEntry[] = [];
+  const diagnostics: LearningDiagnostic[] = [];
+  let seenNonEmptyBlock = false;
+
+  for (const block of content.split(/^---$/m)) {
+    if (!block.trim()) continue;
+
+    const isFirstNonEmptyBlock = !seenNonEmptyBlock;
+    seenNonEmptyBlock = true;
+    const parsed = parseBlock(block);
+    if (!parsed) {
+      if (isFirstNonEmptyBlock && isLearningsPreamble(block)) continue;
+      diagnostics.push(orphanedLearningContent());
+      continue;
+    }
+    if (parsed.entry) entries.push(parsed.entry);
+    diagnostics.push(...parsed.diagnostics);
+  }
+
+  return { entries, diagnostics };
+}
+
+/** Parse learnings.md content into structured entries for tolerant read-only use. */
+export function parseLearnings(content: string): LearningEntry[] {
+  return parseLearningsDocument(content).entries;
 }
 
 // --- Rendering ---
@@ -141,7 +362,10 @@ export function renderEntry(entry: LearningEntry): string {
   const nonglobalStr = entry.nonglobal ? " | nonglobal" : "";
 
   const meta = `<!-- ${entry.category} | cwd: ${cwdStr} | exposures: ${exposuresStr}${nonglobalStr} -->`;
-  return `${meta}\n\n${renderEntryForContext(entry)}`;
+  const promotionMeta = entry.promotionEvidence
+    ? `\n${renderPromotionEvidence(entry.promotionEvidence)}`
+    : "";
+  return `${meta}${promotionMeta}\n\n${renderEntryForContext(entry)}`;
 }
 
 /** Render entries into a complete learnings.md file. */
@@ -158,16 +382,106 @@ export function renderLearnings(entries: LearningEntry[]): string {
 
 const LEARNINGS_FILE = "learnings.md";
 
+export interface LoadedLearningsDocument extends ParsedLearningsDocument {
+  readonly sourceText: string;
+}
+
+export class LearningsIntegrityError extends Error {
+  readonly filePath: string;
+  readonly diagnostics: readonly LearningDiagnostic[];
+
+  constructor(filePath: string, diagnostics: readonly LearningDiagnostic[]) {
+    const details = diagnostics.map((diagnostic) => diagnostic.message).join(" ");
+    super(`Cannot rewrite ${filePath}: invalid learning storage. ${details}`);
+    this.name = "LearningsIntegrityError";
+    this.filePath = filePath;
+    this.diagnostics = diagnostics;
+  }
+}
+
+export class LearningsStoragePathError extends Error {
+  readonly filePath: string;
+
+  constructor(filePath: string, message: string) {
+    super(`Cannot rewrite ${filePath}: ${message}`);
+    this.name = "LearningsStoragePathError";
+    this.filePath = filePath;
+  }
+}
+
+function learningEntriesEqual(left: LearningEntry[], right: LearningEntry[]): boolean {
+  return left.length === right.length && Bun.deepEquals(left, right);
+}
+
+function renderValidatedLearnings(filePath: string, entries: LearningEntry[]): string {
+  const content = renderLearnings(entries);
+  const parsed = parseLearningsDocument(content);
+  if (parsed.diagnostics.length > 0) {
+    throw new LearningsIntegrityError(filePath, parsed.diagnostics);
+  }
+  if (!learningEntriesEqual(parsed.entries, entries)) {
+    throw new LearningsIntegrityError(filePath, [
+      {
+        code: "malformed-learning-record",
+        message: "Replacement learning records cannot be represented without data loss.",
+      },
+    ]);
+  }
+  return content;
+}
+
+/** Reject entries that the Markdown storage format cannot round-trip losslessly. */
+export function assertLearningsRepresentable(filePath: string, entries: LearningEntry[]): void {
+  renderValidatedLearnings(filePath, entries);
+}
+
+async function writeLearningFileAtomically(filePath: string, content: string): Promise<void> {
+  const tmpPath = join(dirname(filePath), `.${basename(filePath)}.tmp.${process.pid}`);
+  await Bun.write(tmpPath, content);
+  await rename(tmpPath, filePath);
+}
+
+async function loadLearningsDocument(filePath: string): Promise<LoadedLearningsDocument> {
+  const file = Bun.file(filePath);
+  if (!(await file.exists())) return { sourceText: "", entries: [], diagnostics: [] };
+
+  const sourceText = await file.text();
+  return { sourceText, ...parseLearningsDocument(sourceText) };
+}
+
+async function loadDocumentForMutation(filePath: string): Promise<LoadedLearningsDocument> {
+  const status = await inspectLearningFileStatus(filePath);
+  if (status.kind === "missing") return { sourceText: "", entries: [], diagnostics: [] };
+  if (status.kind === "invalid") throw new LearningsStoragePathError(filePath, status.message);
+
+  let sourceText: string;
+  try {
+    sourceText = await Bun.file(filePath).text();
+  } catch {
+    throw new LearningsStoragePathError(filePath, "Learning storage file could not be read.");
+  }
+
+  const document = { sourceText, ...parseLearningsDocument(sourceText) };
+  if (document.diagnostics.length > 0) {
+    throw new LearningsIntegrityError(filePath, document.diagnostics);
+  }
+  return document;
+}
+
+/**
+ * Load a lossless, validated snapshot for a mutation workflow.
+ * Callers performing read-modify-write must hold the learnings lock.
+ */
+export async function loadLearningsForMutation(
+  memoryDir: string,
+): Promise<LoadedLearningsDocument> {
+  return await loadDocumentForMutation(join(memoryDir, LEARNINGS_FILE));
+}
+
 /** Read and parse learnings from disk. Returns empty array if file missing. */
 export async function loadLearnings(memoryDir: string): Promise<LearningEntry[]> {
-  const filePath = join(memoryDir, LEARNINGS_FILE);
-  const file = Bun.file(filePath);
-
-  if (!(await file.exists())) return [];
-
   try {
-    const content = await file.text();
-    return parseLearnings(content);
+    return (await loadLearningsDocument(join(memoryDir, LEARNINGS_FILE))).entries;
   } catch {
     return [];
   }
@@ -178,14 +492,12 @@ export async function loadLearnings(memoryDir: string): Promise<LearningEntry[]>
  * Prevents data loss from crashes during write.
  */
 export async function writeLearnings(memoryDir: string, entries: LearningEntry[]): Promise<void> {
+  await loadLearningsForMutation(memoryDir);
   await mkdir(memoryDir, { recursive: true });
 
   const filePath = join(memoryDir, LEARNINGS_FILE);
-  const tmpPath = join(memoryDir, `.${LEARNINGS_FILE}.tmp.${process.pid}`);
-  const content = renderLearnings(entries);
-
-  await Bun.write(tmpPath, content);
-  await rename(tmpPath, filePath);
+  const content = renderValidatedLearnings(filePath, entries);
+  await writeLearningFileAtomically(filePath, content);
 }
 
 /** Run an operation while holding the process-shared learnings lock. */
@@ -207,7 +519,7 @@ export async function mutateLearnings(
   return await withLearningsLock(
     memoryDir,
     async () => {
-      const entries = await loadLearnings(memoryDir);
+      const { entries } = await loadLearningsForMutation(memoryDir);
       const updated = await mutation(entries);
       await writeLearnings(memoryDir, updated);
       return updated;
@@ -224,11 +536,14 @@ export async function replaceLearningsIfUnchanged(
   beforeWrite?: () => Promise<void>,
 ): Promise<boolean> {
   return await withLearningsLock(memoryDir, async () => {
-    const current = await loadLearnings(memoryDir);
-    if (renderLearnings(current) !== renderLearnings(expected)) return false;
+    const { entries: current } = await loadLearningsForMutation(memoryDir);
+    if (!learningEntriesEqual(current, expected)) return false;
 
+    const filePath = join(memoryDir, LEARNINGS_FILE);
+    const content = renderValidatedLearnings(filePath, replacement);
     await beforeWrite?.();
-    await writeLearnings(memoryDir, replacement);
+    await loadDocumentForMutation(filePath);
+    await writeLearningFileAtomically(filePath, content);
     return true;
   });
 }
@@ -349,6 +664,42 @@ export function undoSessionLearnings(
 
 // --- Reinforcement ---
 
+/** Merge learning scopes while preserving global scope as the canonical form. */
+export function mergeLearningCwds(...groups: readonly (readonly string[])[]): string[] {
+  const merged = [...new Set(groups.flat())];
+  return merged.includes("*") ? ["*"] : merged;
+}
+
+/** Combine the evidence supporting a global learning into one deterministic snapshot. */
+export function mergePromotionEvidence(
+  ...items: readonly (PromotionEvidence | undefined)[]
+): PromotionEvidence | undefined {
+  const evidence = items.filter((item): item is PromotionEvidence => item !== undefined);
+  if (evidence.length === 0) return undefined;
+  if (evidence.length === 1) {
+    const [item] = evidence;
+    if (!item) return undefined;
+    return {
+      sourceCwds: [...item.sourceCwds],
+      exposures: item.exposures.map((exposure) => ({ ...exposure })),
+      reasons: [...item.reasons],
+    };
+  }
+
+  const sourceCwds = [...new Set(evidence.flatMap((item) => item.sourceCwds))].sort();
+  const exposuresByKey = new Map<string, Exposure>();
+  for (const exposure of evidence.flatMap((item) => item.exposures)) {
+    exposuresByKey.set(`${exposure.date}@${exposure.sessionHash}`, { ...exposure });
+  }
+  const exposures = [...exposuresByKey.values()].sort(
+    (a, b) => a.date.localeCompare(b.date) || a.sessionHash.localeCompare(b.sessionHash),
+  );
+  const presentReasons = new Set(evidence.flatMap((item) => item.reasons));
+  const reasons = PROMOTION_REASON_ORDER.filter((reason) => presentReasons.has(reason));
+
+  return { sourceCwds, exposures, reasons };
+}
+
 /**
  * Merge new learnings into existing ones.
  * Exact title match -> reinforce (add exposure, union CWDs).
@@ -371,13 +722,18 @@ export function mergeNewLearnings(
     const match = result[matchIndex];
     if (!match) continue;
 
-    const mergedCwds = [...new Set([...match.cwds, ...newEntry.cwds])];
+    const mergedCwds = mergeLearningCwds(match.cwds, newEntry.cwds);
     const mergedExposures = [...match.exposures, ...newEntry.exposures];
+    const promotionEvidence = mergePromotionEvidence(
+      match.promotionEvidence,
+      newEntry.promotionEvidence,
+    );
 
     result[matchIndex] = {
       ...match,
       cwds: mergedCwds,
       exposures: mergedExposures,
+      ...(promotionEvidence ? { promotionEvidence } : {}),
     };
   }
 
@@ -518,9 +874,18 @@ export function findPromotionCandidates(entries: LearningEntry[]): LearningEntry
   );
 }
 
-/** Promote an entry to global. */
-export function promoteToGlobal(entry: LearningEntry): LearningEntry {
-  return { ...entry, cwds: ["*"] };
+/** Promote an entry to global while preserving the evidence for its former scope. */
+export function promoteToGlobal(
+  entry: LearningEntry,
+  reason: PromotionReason,
+): LearningEntry & { readonly promotionEvidence: PromotionEvidence } {
+  const promotionEvidence = entry.promotionEvidence ?? {
+    sourceCwds: [...entry.cwds],
+    exposures: entry.exposures.map((exposure) => ({ ...exposure })),
+    reasons: [reason],
+  };
+
+  return { ...entry, cwds: ["*"], promotionEvidence };
 }
 
 /** Mark an entry as nonglobal to prevent future promotion prompts. */
@@ -701,18 +1066,11 @@ export async function appendToArchive(memoryDir: string, entries: LearningEntry[
   if (entries.length === 0) return;
 
   const archivePath = join(memoryDir, ARCHIVE_FILE);
-  const file = Bun.file(archivePath);
-
-  let existing: LearningEntry[] = [];
-  if (await file.exists()) {
-    const content = await file.text();
-    existing = parseLearnings(content);
-  }
+  const { entries: existing } = await loadDocumentForMutation(archivePath);
 
   const merged = [...existing, ...entries];
-  const tmpPath = join(memoryDir, `.${ARCHIVE_FILE}.tmp.${process.pid}`);
-  await Bun.write(tmpPath, renderLearnings(merged));
-  await rename(tmpPath, archivePath);
+  const content = renderValidatedLearnings(archivePath, merged);
+  await writeLearningFileAtomically(archivePath, content);
 }
 
 // Re-export for hooks

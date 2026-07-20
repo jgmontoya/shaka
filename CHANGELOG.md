@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+### Changed
+
+- **Global promotion evidence is retained** - automatic promotions now preserve the source projects, exposure snapshot, and promotion reason on the global learning, so this evidence survives maintenance-log failures. The three-project threshold is unchanged.
+- **Invalid learning storage is protected** - read-only memory remains available when possible, while malformed records, damaged or duplicated promotion evidence, and unsafe learning-file paths are rejected before mutation. Replacement values the Markdown format cannot round-trip are rejected instead of being written. `shaka memory check` reports existing storage damage with the affected file and learning when available, and maintenance and consolidation backups preserve the original source text.
+
 ## [0.14.0] - 2026-07-17
 
 ### Added

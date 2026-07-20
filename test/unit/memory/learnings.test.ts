@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, rm, utimes } from "node:fs/promises";
+import { lstat, mkdir, rm, symlink, utimes } from "node:fs/promises";
 import {
   type LearningEntry,
   buildExtractionPromptSection,
@@ -12,6 +12,7 @@ import {
   mutateLearnings,
   parseExtractedLearnings,
   parseLearnings,
+  parseLearningsDocument,
   parseQualityAssessmentOutput,
   promoteToGlobal,
   removeLearningIfUnchanged,
@@ -189,6 +190,333 @@ Body.
     expect(entries[0]?.title).toBe("Good entry");
   });
 
+  test("reports an entry-like block with malformed primary metadata", () => {
+    const content = `# Learnings
+
+Automatically captured.
+
+---
+
+<!-- correction | cwd: /projects/a | broken -->
+
+### Lost learning
+
+Body.
+
+---`;
+
+    expect(parseLearningsDocument(content)).toEqual({
+      entries: [],
+      diagnostics: [
+        {
+          code: "malformed-learning-record",
+          title: "Lost learning",
+          message: 'Learning "Lost learning" has malformed primary metadata.',
+        },
+      ],
+    });
+  });
+
+  test("reports non-record content after a learning record", () => {
+    const content = `# Learnings
+
+Automatically captured.
+
+---
+
+<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+
+### Legacy delimiter body
+
+Keep before.
+
+---
+
+Keep after.`;
+
+    const document = parseLearningsDocument(content);
+
+    expect(document.entries).toHaveLength(1);
+    expect(document.entries[0]?.body).toBe("Keep before.");
+    expect(document.diagnostics).toEqual([
+      {
+        code: "malformed-learning-record",
+        message: "Learning storage contains content outside a complete learning record.",
+      },
+    ]);
+  });
+
+  test("does not treat arbitrary leading content as a learnings preamble", () => {
+    expect(parseLearningsDocument("orphaned content").diagnostics).toEqual([
+      {
+        code: "malformed-learning-record",
+        message: "Learning storage contains content outside a complete learning record.",
+      },
+    ]);
+  });
+
+  test("reports malformed primary metadata even when the title is missing", () => {
+    const content = `# Learnings
+
+Automatically captured.
+
+---
+
+<!-- correction | cwd: /projects/a | broken -->
+
+Body without a title.
+
+---`;
+
+    expect(parseLearningsDocument(content)).toEqual({
+      entries: [],
+      diagnostics: [
+        {
+          code: "malformed-learning-record",
+          message: "Learning record has malformed primary metadata or title.",
+        },
+      ],
+    });
+  });
+
+  test("reports orphaned promotion metadata as a malformed learning record", () => {
+    const content = `---
+
+<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-07-18","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->
+
+---`;
+
+    expect(parseLearningsDocument(content)).toEqual({
+      entries: [],
+      diagnostics: [
+        {
+          code: "malformed-learning-record",
+          message: "Learning record has malformed primary metadata or title.",
+        },
+      ],
+    });
+  });
+
+  test("reports primary metadata containing fields that cannot round-trip", () => {
+    const metadataVariants = [
+      "<!-- correction | cwd: /projects/a | exposures: missing-session-hash -->",
+      "<!-- correction | cwd: /projects/a, | exposures: 2026-07-18@aaaa0000 -->",
+    ];
+
+    for (const metadata of metadataVariants) {
+      const content = `---
+
+${metadata}
+
+### Lossy metadata
+
+Body.
+
+---`;
+
+      expect(parseLearningsDocument(content)).toEqual({
+        entries: [],
+        diagnostics: [
+          {
+            code: "malformed-learning-record",
+            title: "Lossy metadata",
+            message: 'Learning "Lossy metadata" has malformed primary metadata.',
+          },
+        ],
+      });
+    }
+  });
+
+  test("reports duplicate primary metadata instead of silently discarding it", () => {
+    const metadataPairs = [
+      [
+        "<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->",
+        "<!-- preference | cwd: /projects/b | exposures: 2026-07-18@bbbb0000 -->",
+      ],
+      [
+        "<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->",
+        "<!-- correction | cwd: /projects/b | broken -->",
+      ],
+    ];
+
+    for (const metadata of metadataPairs) {
+      const content = `---
+
+${metadata.join("\n")}
+
+### Ambiguous metadata
+
+Body.
+
+---`;
+
+      expect(parseLearningsDocument(content)).toEqual({
+        entries: [],
+        diagnostics: [
+          {
+            code: "malformed-learning-record",
+            title: "Ambiguous metadata",
+            message: 'Learning "Ambiguous metadata" has malformed primary metadata.',
+          },
+        ],
+      });
+    }
+  });
+
+  test("reports invalid promotion metadata while keeping the learning readable", () => {
+    const validPromotion =
+      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const variants = [
+      ["<!-- promotion: invalid-json -->", "malformed-promotion-metadata"],
+      [`${validPromotion}\n${validPromotion}`, "duplicate-promotion-metadata"],
+    ] as const;
+
+    for (const [promotionMetadata, diagnosticCode] of variants) {
+      const content = `---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+${promotionMetadata}
+
+### Global entry
+
+Body.
+
+---`;
+
+      const { entries, diagnostics } = parseLearningsDocument(content);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.title).toBe("Global entry");
+      expect(entries[0]?.promotionEvidence).toBeUndefined();
+      expect(diagnostics).toEqual([
+        {
+          code: diagnosticCode,
+          title: "Global entry",
+          message:
+            diagnosticCode === "duplicate-promotion-metadata"
+              ? 'Learning "Global entry" contains more than one promotion metadata record.'
+              : 'Learning "Global entry" contains malformed promotion metadata.',
+        },
+      ]);
+    }
+  });
+
+  test("reports noncanonical promotion-looking metadata", () => {
+    const malformedMarkers = [
+      "<!-- Promotion: {bad-json} -->",
+      "<!-- promotion{bad-json} -->",
+      "<!-- promotion:{bad-json} -->",
+      "<!--  promotion: {bad-json} -->",
+      "<!-- promotion : {bad-json} -->",
+      "<!-- promotion:\t{bad-json} -->",
+      "<!-- promotion: {bad-json}",
+    ];
+
+    for (const marker of malformedMarkers) {
+      const content = `---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+${marker}
+
+### Damaged promotion
+
+Body.
+
+---`;
+
+      expect(parseLearningsDocument(content).diagnostics).toEqual([
+        {
+          code: "malformed-promotion-metadata",
+          title: "Damaged promotion",
+          message: 'Learning "Damaged promotion" contains malformed promotion metadata.',
+        },
+      ]);
+    }
+  });
+
+  test("rejects unknown promotion fields that a rewrite could not preserve", () => {
+    const content = `---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"],"reviewer":"human"} -->
+
+### Extended promotion
+
+Body.
+
+---`;
+
+    const document = parseLearningsDocument(content);
+
+    expect(document.entries[0]?.title).toBe("Extended promotion");
+    expect(document.entries[0]?.promotionEvidence).toBeUndefined();
+    expect(document.diagnostics).toEqual([
+      {
+        code: "malformed-promotion-metadata",
+        title: "Extended promotion",
+        message: 'Learning "Extended promotion" contains malformed promotion metadata.',
+      },
+    ]);
+  });
+
+  test("reports a canonical promotion paired with a mixed-case duplicate", () => {
+    const canonical =
+      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const content = `---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+${canonical}
+<!-- Promotion: {bad-json} -->
+
+### Duplicated promotion
+
+Body.
+
+---`;
+
+    expect(parseLearningsDocument(content).diagnostics).toEqual([
+      {
+        code: "duplicate-promotion-metadata",
+        title: "Duplicated promotion",
+        message: 'Learning "Duplicated promotion" contains more than one promotion metadata record.',
+      },
+    ]);
+  });
+
+  test("reads promotion metadata only from the region before the title", () => {
+    const promotion =
+      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const primary = "<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->";
+
+    const bodyOnlyDocument = parseLearningsDocument(`---
+
+${primary}
+
+### Body comment
+
+${promotion}
+
+---`);
+    const metadataAndBodyDocument = parseLearningsDocument(`---
+
+${primary}
+${promotion}
+
+### Real metadata
+
+${promotion}
+
+---`);
+    const [bodyOnly] = bodyOnlyDocument.entries;
+    const [metadataAndBody] = metadataAndBodyDocument.entries;
+
+    expect(bodyOnly?.promotionEvidence).toBeUndefined();
+    expect(bodyOnly?.body).toBe(promotion);
+    expect(bodyOnlyDocument.diagnostics).toEqual([]);
+    expect(metadataAndBody?.promotionEvidence?.sourceCwds).toEqual(["/a", "/b", "/c"]);
+    expect(metadataAndBody?.body).toBe(promotion);
+    expect(metadataAndBodyDocument.diagnostics).toEqual([]);
+  });
+
   test("entry without body has empty body string", () => {
     const content = `---
 
@@ -247,10 +575,16 @@ describe("renderEntryForContext", () => {
   });
 
   test("omits metadata comment", () => {
-    const rendered = renderEntryForContext(makeEntry());
+    const rendered = renderEntryForContext(
+      promoteToGlobal(
+        makeEntry({ cwds: ["/a", "/b", "/c"] }),
+        "automatic-cross-project-threshold",
+      ),
+    );
     expect(rendered).not.toContain("<!--");
     expect(rendered).not.toContain("exposures:");
     expect(rendered).not.toContain("cwd:");
+    expect(rendered).not.toContain("promotion");
   });
 
   test("entry without body renders just the title", () => {
@@ -300,6 +634,27 @@ describe("renderLearnings", () => {
       expect(parsed[i]?.exposures).toEqual(entries[i]?.exposures);
       expect(parsed[i]?.nonglobal).toBe(entries[i]?.nonglobal);
     }
+  });
+
+  test("round-trips promotion evidence without exposing an HTML comment terminator", () => {
+    const entry: LearningEntry = {
+      ...makeEntry({ cwds: ["*"] }),
+      promotionEvidence: {
+        sourceCwds: ["/projects/alpha-->archive", "/projects/beta", "/projects/gamma"],
+        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+        reasons: ["automatic-cross-project-threshold"],
+      },
+    };
+
+    const rendered = renderLearnings([entry]);
+    const promotionLine = rendered
+      .split("\n")
+      .find((line) => line.startsWith("<!-- promotion: "));
+    const payload = promotionLine?.slice("<!-- promotion: ".length, -" -->".length);
+
+    expect(payload).toBeDefined();
+    expect(payload).not.toContain("--");
+    expect(parseLearnings(rendered)).toEqual([entry]);
   });
 });
 
@@ -551,6 +906,251 @@ describe("loadLearnings / writeLearnings", () => {
     expect(tmpFiles).toHaveLength(0);
   });
 
+  test("mutation rejects malformed promotion metadata without changing the file", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Global entry
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await Bun.write(filePath, raw);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => [
+        ...entries,
+        makeEntry({ title: "New learning" }),
+      ]),
+    ).rejects.toThrow("promotion metadata");
+
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("mutation rejects mixed-case promotion metadata without changing the file", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- Promotion: invalid-json -->
+
+### Global entry
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await Bun.write(filePath, raw);
+
+    await expect(mutateLearnings(testMemoryDir, (entries) => entries)).rejects.toThrow(
+      "promotion metadata",
+    );
+
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("mutation rejects a malformed learning record before invoking the callback", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: /projects/a | broken -->
+
+### Lost learning
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    let callbackInvoked = false;
+    await Bun.write(filePath, raw);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => {
+        callbackInvoked = true;
+        return entries;
+      }),
+    ).rejects.toThrow("invalid learning storage");
+
+    expect(callbackInvoked).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("mutation rejects legacy orphan content without changing the file", async () => {
+    const raw = `# Learnings
+
+Automatically captured.
+
+---
+
+<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+
+### Legacy delimiter body
+
+Keep before.
+
+---
+
+Keep after.`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    let callbackInvoked = false;
+    await Bun.write(filePath, raw);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => {
+        callbackInvoked = true;
+        return entries;
+      }),
+    ).rejects.toThrow("outside a complete learning record");
+
+    expect(callbackInvoked).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("mutation rejects duplicate primary metadata without changing the file", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+<!-- correction | cwd: /projects/b | broken -->
+
+### Ambiguous metadata
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await Bun.write(filePath, raw);
+
+    await expect(mutateLearnings(testMemoryDir, (entries) => entries)).rejects.toThrow(
+      "invalid learning storage",
+    );
+
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("mutation rejects a symlinked learnings file without replacing it", async () => {
+    const filePath = `${testMemoryDir}/learnings.md`;
+    const targetPath = `${testMemoryDir}/linked-learnings.md`;
+    const raw = renderLearnings([makeEntry({ title: "Linked learning" })]);
+    let callbackInvoked = false;
+    await Bun.write(targetPath, raw);
+    await symlink(targetPath, filePath);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => {
+        callbackInvoked = true;
+        return entries;
+      }),
+    ).rejects.toThrow("regular file");
+
+    expect(callbackInvoked).toBe(false);
+    expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(targetPath).text()).toBe(raw);
+  });
+
+  test("mutation rejects a dangling learnings symlink without replacing it", async () => {
+    const filePath = `${testMemoryDir}/learnings.md`;
+    const missingTarget = `${testMemoryDir}/missing-learnings.md`;
+    let callbackInvoked = false;
+    await symlink(missingTarget, filePath);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => {
+        callbackInvoked = true;
+        return entries;
+      }),
+    ).rejects.toThrow("regular file");
+
+    expect(callbackInvoked).toBe(false);
+    expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(missingTarget).exists()).toBe(false);
+  });
+
+  test("direct write rejects duplicate promotion metadata without changing the file", async () => {
+    const promotion =
+      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+${promotion}
+${promotion}
+
+### Global entry
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await Bun.write(filePath, raw);
+
+    await expect(writeLearnings(testMemoryDir, [makeEntry()])).rejects.toThrow(
+      "promotion metadata",
+    );
+
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
+  test("direct write rejects replacement entries with invalid storage metadata", async () => {
+    const original = [makeEntry({ title: "Existing learning" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+
+    await expect(
+      writeLearnings(testMemoryDir, [makeEntry({ title: "Invalid learning", exposures: [] })]),
+    ).rejects.toThrow("invalid learning storage");
+
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
+  test("direct write rejects a body containing a learning record delimiter", async () => {
+    const original = [makeEntry({ title: "Existing learning" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+
+    await expect(
+      writeLearnings(testMemoryDir, [
+        makeEntry({ body: "Keep before.\n---\nKeep after." }),
+      ]),
+    ).rejects.toThrow("outside a complete learning record");
+
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
+  test("direct write rejects a CWD containing the storage delimiter", async () => {
+    const original = [makeEntry({ title: "Existing learning" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+
+    await expect(
+      writeLearnings(testMemoryDir, [makeEntry({ cwds: ["/projects/team,alpha"] })]),
+    ).rejects.toThrow("cannot be represented without data loss");
+
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
+  test("direct write rejects sparse replacement arrays", async () => {
+    const original = [makeEntry({ title: "Existing learning" })];
+    const replacement = [makeEntry({ title: "Sparse replacement" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    replacement.length = 2;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+
+    await expect(writeLearnings(testMemoryDir, replacement)).rejects.toThrow(
+      "cannot be represented without data loss",
+    );
+
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
   test("concurrent mutations preserve both updates", async () => {
     const first = makeEntry({ title: "First concurrent update" });
     const second = makeEntry({ title: "Second concurrent update" });
@@ -609,6 +1209,37 @@ describe("loadLearnings / writeLearnings", () => {
     ]);
   });
 
+  test("conditional replacement compares the expected snapshot structurally", async () => {
+    const current = [makeEntry({ cwds: ["/projects/team", "alpha"] })];
+    const expected = [makeEntry({ cwds: ["/projects/team, alpha"] })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    await writeLearnings(testMemoryDir, current);
+    const source = await Bun.file(filePath).text();
+
+    const replaced = await replaceLearningsIfUnchanged(testMemoryDir, expected, [
+      makeEntry({ title: "Replacement" }),
+    ]);
+
+    expect(replaced).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
+  test("conditional replacement compares the expected snapshot cardinality", async () => {
+    const current = [makeEntry({ title: "Current" })];
+    const expected = [makeEntry({ title: "Current" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    expected.length = 2;
+    await writeLearnings(testMemoryDir, current);
+    const source = await Bun.file(filePath).text();
+
+    const replaced = await replaceLearningsIfUnchanged(testMemoryDir, expected, [
+      makeEntry({ title: "Replacement" }),
+    ]);
+
+    expect(replaced).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
   test("conditional replacement keeps active learnings when its prerequisite fails", async () => {
     const original = [makeEntry({ title: "Original" })];
     await writeLearnings(testMemoryDir, original);
@@ -625,6 +1256,83 @@ describe("loadLearnings / writeLearnings", () => {
     ).rejects.toThrow("archive unavailable");
 
     expect(await loadLearnings(testMemoryDir)).toEqual(original);
+  });
+
+  test("conditional replacement validates its replacement before prerequisite side effects", async () => {
+    const original = [makeEntry({ title: "Original" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    let prerequisiteInvoked = false;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+
+    await expect(
+      replaceLearningsIfUnchanged(
+        testMemoryDir,
+        original,
+        [makeEntry({ body: "Keep before.\n---\nKeep after." })],
+        async () => {
+          prerequisiteInvoked = true;
+        },
+      ),
+    ).rejects.toThrow("outside a complete learning record");
+
+    expect(prerequisiteInvoked).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(source);
+  });
+
+  test("conditional replacement reinspects storage after prerequisite side effects", async () => {
+    const original = [makeEntry({ title: "Original" })];
+    const filePath = `${testMemoryDir}/learnings.md`;
+    const targetPath = `${testMemoryDir}/replacement-target.md`;
+    await writeLearnings(testMemoryDir, original);
+    const source = await Bun.file(filePath).text();
+    await Bun.write(targetPath, source);
+
+    await expect(
+      replaceLearningsIfUnchanged(
+        testMemoryDir,
+        original,
+        [makeEntry({ title: "Replacement" })],
+        async () => {
+          await rm(filePath);
+          await symlink(targetPath, filePath);
+        },
+      ),
+    ).rejects.toThrow("regular file");
+
+    expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
+    expect(await Bun.file(targetPath).text()).toBe(source);
+  });
+
+  test("conditional replacement rejects corrupt provenance before prerequisite side effects", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+<!-- promotion: invalid-json -->
+
+### Global entry
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    const sideEffectPath = `${testMemoryDir}/archive-started`;
+    await Bun.write(filePath, raw);
+
+    await expect(
+      replaceLearningsIfUnchanged(
+        testMemoryDir,
+        parseLearnings(raw),
+        [makeEntry({ title: "Replacement" })],
+        async () => {
+          await Bun.write(sideEffectPath, "started");
+        },
+      ),
+    ).rejects.toThrow("promotion metadata");
+
+    expect(await Bun.file(sideEffectPath).exists()).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(raw);
   });
 
   test("conditional removal deletes only the selected duplicate title", async () => {
@@ -692,6 +1400,24 @@ describe("mergeNewLearnings", () => {
     expect(result[0]?.cwds).toContain("/a");
     expect(result[0]?.cwds).toContain("/b");
   });
+
+  test("reinforcing a global learning preserves its scope and promotion evidence", () => {
+    const promoted = promoteToGlobal(
+      makeEntry({ title: "Shared rule", cwds: ["/c", "/a", "/b"] }),
+      "automatic-cross-project-threshold",
+    );
+    const reinforcement = makeEntry({
+      title: "Shared rule",
+      cwds: ["/d"],
+      exposures: [{ date: "2026-02-12", sessionHash: "dddd0000" }],
+    });
+
+    const result = mergeNewLearnings([promoted], [reinforcement]);
+
+    expect(result[0]?.cwds).toEqual(["*"]);
+    expect(result[0]?.promotionEvidence).toEqual(promoted.promotionEvidence);
+    expect(result[0]?.exposures).toHaveLength(2);
+  });
 });
 
 // --- findPromotionCandidates ---
@@ -722,8 +1448,34 @@ describe("findPromotionCandidates", () => {
 
 describe("promoteToGlobal", () => {
   test("sets cwds to [*]", () => {
-    const result = promoteToGlobal(makeEntry({ cwds: ["/a", "/b", "/c"] }));
+    const result = promoteToGlobal(
+      makeEntry({ cwds: ["/a", "/b", "/c"] }),
+      "automatic-cross-project-threshold",
+    );
     expect(result.cwds).toEqual(["*"]);
+  });
+
+  test("snapshots the evidence that justified global scope", () => {
+    const source = makeEntry({
+      cwds: ["/a", "/b", "/c"],
+      exposures: [
+        { date: "2026-02-09", sessionHash: "aaaa0000" },
+        { date: "2026-02-11", sessionHash: "bbbb0000" },
+      ],
+    });
+
+    const result = promoteToGlobal(source, "automatic-cross-project-threshold");
+    source.cwds.push("/d");
+    source.exposures.push({ date: "2026-02-12", sessionHash: "cccc0000" });
+
+    expect(result.promotionEvidence).toEqual({
+      sourceCwds: ["/a", "/b", "/c"],
+      exposures: [
+        { date: "2026-02-09", sessionHash: "aaaa0000" },
+        { date: "2026-02-11", sessionHash: "bbbb0000" },
+      ],
+      reasons: ["automatic-cross-project-threshold"],
+    });
   });
 });
 
