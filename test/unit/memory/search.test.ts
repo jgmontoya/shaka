@@ -2,11 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeLearnings } from "../../../src/memory/learnings";
+import { writeLearnings } from "../../../src/memory/learning-store";
 import { projectSlug } from "../../../src/memory/rollups";
 import { type SearchFilter, type SearchResult, searchMemory } from "../../../src/memory/search";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-search");
 
@@ -80,7 +81,7 @@ describe("searchMemory", () => {
     await writeSummary(
       testMemoryDir,
       makeSummary({
-        cwd: "/projects/unrelated",
+        cwd: testCwd("/projects/unrelated"),
         title: "Unrelated project scope",
         sessionId: "ses-scope002",
       }),
@@ -289,7 +290,8 @@ describe("searchMemory", () => {
         title: "Searchable global rule",
         body: "Use the shared rule everywhere.",
         promotionEvidence: {
-          sourceCwds: ["/a", "/b", "/c"],
+          sourceCwds: testCwds("/a", "/b", "/c"),
+          excludedCwds: [],
           exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
           reasons: ["automatic-cross-project-threshold"],
         },
@@ -303,7 +305,36 @@ describe("searchMemory", () => {
     expect(results[0]?.snippet).not.toContain("automatic-cross-project-threshold");
   });
 
-  test("malformed promotion metadata does not hide the learning from search", async () => {
+  test("corrected scope is absent from an excluded project but remains searchable with --all", async () => {
+    await writeLearnings(testMemoryDir, [
+      {
+        category: "correction",
+        cwds: testCwds("/projects/a"),
+        exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+        nonglobal: true,
+        title: "Corrected applicability needle",
+        body: "This rule does not apply to project B.",
+        promotionEvidence: {
+          sourceCwds: testCwds("/projects/a", "/projects/b"),
+          excludedCwds: testCwds("/projects/b"),
+          exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
+          reasons: ["manual-scope-correction"],
+        },
+      },
+    ]);
+
+    const scoped = await searchMemory("applicability needle", testMemoryDir, {
+      cwd: testCwd("/projects/b"),
+    });
+    const allProjects = await searchMemory("applicability needle", testMemoryDir, {
+      allProjects: true,
+    });
+
+    expect(scoped).toEqual([]);
+    expect(allProjects.map((result) => result.title)).toEqual(["Corrected applicability needle"]);
+  });
+
+  test("malformed promotion metadata withholds the learning from search", async () => {
     await Bun.write(
       `${testMemoryDir}/learnings.md`,
       `# Learnings
@@ -321,9 +352,7 @@ The learning remains available for read-only recall.
 
     const results = await searchMemory("damaged provenance", testMemoryDir);
 
-    expect(results).toHaveLength(1);
-    expect(results[0]?.title).toBe("Searchable damaged provenance");
-    expect(results[0]?.snippet).not.toContain("promotion");
+    expect(results).toEqual([]);
   });
 
   test("learning results use last exposure date", async () => {
@@ -482,7 +511,7 @@ The learning remains available for read-only recall.
       makeSummary({
         title: "Session in myapp",
         body: "## Summary\nWork on refactoring.",
-        cwd: "/projects/myapp",
+        cwd: testCwd("/projects/myapp"),
         sessionId: "ses-cwd00001",
       }),
     );
@@ -491,12 +520,14 @@ The learning remains available for read-only recall.
       makeSummary({
         title: "Session in other",
         body: "## Summary\nRefactoring elsewhere.",
-        cwd: "/projects/other",
+        cwd: testCwd("/projects/other"),
         sessionId: "ses-cwd00002",
       }),
     );
 
-    const results = await searchMemory("refactoring", testMemoryDir, { cwd: "/projects/myapp" });
+    const results = await searchMemory("refactoring", testMemoryDir, {
+      cwd: testCwd("/projects/myapp"),
+    });
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("Session in myapp");
   });
@@ -505,7 +536,7 @@ The learning remains available for read-only recall.
     await writeLearnings(testMemoryDir, [
       {
         category: "pattern",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
         nonglobal: false,
         title: "App-specific pattern",
@@ -513,7 +544,7 @@ The learning remains available for read-only recall.
       },
       {
         category: "pattern",
-        cwds: ["/projects/other"],
+        cwds: testCwds("/projects/other"),
         exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
         nonglobal: false,
         title: "Other-specific pattern",
@@ -521,7 +552,9 @@ The learning remains available for read-only recall.
       },
     ]);
 
-    const results = await searchMemory("insight", testMemoryDir, { cwd: "/projects/myapp" });
+    const results = await searchMemory("insight", testMemoryDir, {
+      cwd: testCwd("/projects/myapp"),
+    });
     expect(results).toHaveLength(1);
     expect(results[0]?.title).toBe("App-specific pattern");
   });
@@ -622,7 +655,7 @@ Nested scope lookup token.
     await mkdir(knowledgeDir, { recursive: true });
     await Bun.write(
       join(knowledgeDir, ".project.json"),
-      JSON.stringify({ cwd: "/projects/unrelated" }),
+      JSON.stringify({ cwd: testCwd("/projects/unrelated") }),
     );
     await Bun.write(
       join(knowledgeDir, "remote-decision.md"),

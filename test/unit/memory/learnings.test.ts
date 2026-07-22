@@ -1,44 +1,58 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { lstat, mkdir, rm, symlink, utimes } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  mutateLearnings,
+  removeLearningIfUnchanged,
+  replaceLearningsIfUnchanged,
+  updateLearningIfUnchanged,
+  writeLearnings,
+} from "../../../src/memory/learning-store";
 import {
   type LearningEntry,
   buildExtractionPromptSection,
   buildQualityAssessmentPrompt,
   filterLearnings,
-  findPromotionCandidates,
+  findScopeReviewCandidates,
+  generalizeLearningScopes,
   loadLearnings,
   markNonglobal,
-  mergeNewLearnings,
-  mutateLearnings,
+  matchesCwd,
+  mergePromotionEvidence,
   parseExtractedLearnings,
   parseLearnings,
   parseLearningsDocument,
   parseQualityAssessmentOutput,
   promoteToGlobal,
-  removeLearningIfUnchanged,
   renderEntry,
   renderEntryForContext,
   renderLearnings,
-  replaceLearningsIfUnchanged,
   scoreEntry,
   selectLearnings,
   sortByExposures,
-  undoSessionLearnings,
-  writeLearnings,
 } from "../../../src/memory/learnings";
 import { hashSessionId } from "../../../src/memory/utils";
+import { testCwd, testCwdInput, testCwds } from "../../helpers/memory-path";
 
-const testMemoryDir = "/tmp/shaka-test-learnings";
+const testMemoryDir = join(tmpdir(), "shaka-test-learnings");
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
     category: overrides.category ?? "correction",
-    cwds: overrides.cwds ?? ["/projects/myapp"],
+    cwds: overrides.cwds ?? testCwds("/projects/myapp"),
     exposures: overrides.exposures ?? [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
     nonglobal: overrides.nonglobal ?? false,
     title: overrides.title ?? "Use Bun.file() instead of fs.readFile()",
     body: overrides.body ?? "This project uses Bun runtime.",
+    ...(overrides.promotionEvidence === undefined
+      ? {}
+      : { promotionEvidence: overrides.promotionEvidence }),
   };
+}
+
+function promotionComment(value: unknown): string {
+  return `<!-- promotion: ${JSON.stringify(value)} -->`;
 }
 
 // --- parseLearnings ---
@@ -59,7 +73,7 @@ Automatically captured.
 
 ---
 
-<!-- correction | cwd: /projects/myapp | exposures: 2026-02-09@a1b2c3d4 -->
+<!-- correction | cwd: ${testCwd("/projects/myapp")} | exposures: 2026-02-09@a1b2c3d4 -->
 
 ### Use Bun.file() instead of fs.readFile()
 
@@ -70,7 +84,7 @@ This project uses Bun runtime.
     const entries = parseLearnings(content);
     expect(entries).toHaveLength(1);
     expect(entries[0]?.category).toBe("correction");
-    expect(entries[0]?.cwds).toEqual(["/projects/myapp"]);
+    expect(entries[0]?.cwds).toEqual(testCwds("/projects/myapp"));
     expect(entries[0]?.exposures).toEqual([{ date: "2026-02-09", sessionHash: "a1b2c3d4" }]);
     expect(entries[0]?.nonglobal).toBe(false);
     expect(entries[0]?.title).toBe("Use Bun.file() instead of fs.readFile()");
@@ -82,7 +96,7 @@ This project uses Bun runtime.
 
 ---
 
-<!-- correction | cwd: /a | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/a")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Title A
 
@@ -90,7 +104,7 @@ Body A.
 
 ---
 
-<!-- preference | cwd: /b | exposures: 2026-02-10@bbbb0000 -->
+<!-- preference | cwd: ${testCwd("/b")} | exposures: 2026-02-10@bbbb0000 -->
 
 ### Title B
 
@@ -107,7 +121,7 @@ Body B.
   test("multiple exposures parse in order", () => {
     const content = `---
 
-<!-- pattern | cwd: /a | exposures: 2026-02-09@aaaa0000,2026-02-11@bbbb0000,2026-02-14@cccc0000 -->
+<!-- pattern | cwd: ${testCwd("/a")} | exposures: 2026-02-09@aaaa0000,2026-02-11@bbbb0000,2026-02-14@cccc0000 -->
 
 ### Multi exposure
 
@@ -124,7 +138,7 @@ Body.
   test("multiple CWDs parse correctly", () => {
     const content = `---
 
-<!-- correction | cwd: /a,/b,/c | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwds("/a", "/b", "/c").join(",")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Multi CWD
 
@@ -133,13 +147,13 @@ Body.
 ---`;
 
     const entries = parseLearnings(content);
-    expect(entries[0]?.cwds).toEqual(["/a", "/b", "/c"]);
+    expect(entries[0]?.cwds).toEqual(testCwds("/a", "/b", "/c"));
   });
 
   test("nonglobal flag parses correctly", () => {
     const content = `---
 
-<!-- fact | cwd: /a | exposures: 2026-02-09@aaaa0000 | nonglobal -->
+<!-- fact | cwd: ${testCwd("/a")} | exposures: 2026-02-09@aaaa0000 | nonglobal -->
 
 ### Nonglobal entry
 
@@ -166,6 +180,240 @@ Body.
     expect(entries[0]?.cwds).toEqual(["*"]);
   });
 
+  test("legacy promotion metadata defaults missing exclusions to an empty list", () => {
+    const content = `---
+
+<!-- preference | cwd: * | exposures: 2026-02-09@aaaa0000 -->
+${promotionComment({
+  sourceCwds: testCwds("/a", "/b", "/c"),
+  exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+  reasons: ["manual-cross-project-review"],
+})}
+
+### Legacy promoted entry
+
+Body.
+
+---`;
+
+    const [entry] = parseLearnings(content);
+
+    expect(entry?.promotionEvidence).toEqual({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      excludedCwds: [],
+      exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+      reasons: ["manual-cross-project-review"],
+    });
+  });
+
+  test("normalizes the complete promotion schema deterministically", () => {
+    const content = `---
+
+<!-- pattern | cwd: ${testCwds("/a", "/b").join(",")} | exposures: 2026-02-09@aaaa0000 -->
+${promotionComment({
+  sourceCwds: [testCwdInput("/b/"), testCwd("/a"), testCwd("/a")],
+  excludedCwds: [testCwdInput("/z/"), testCwd("/y"), testCwd("/z")],
+  exposures: [],
+  reasons: [
+    "manual-scope-correction",
+    "legacy-source-reconstruction",
+    "manual-scope-correction",
+    "contradiction-scope-subtraction",
+  ],
+})}
+
+### Canonical evidence
+
+Body.
+
+---`;
+
+    const [entry] = parseLearnings(content);
+
+    expect(entry?.promotionEvidence).toEqual({
+      sourceCwds: testCwds("/a", "/b"),
+      excludedCwds: testCwds("/y", "/z"),
+      exposures: [],
+      reasons: [
+        "contradiction-scope-subtraction",
+        "legacy-source-reconstruction",
+        "manual-scope-correction",
+      ],
+    });
+  });
+
+  test("accepts reviewed ancestor and global promotion reasons", () => {
+    const content = `---
+
+<!-- pattern | cwd: ${testCwd("/work")} | exposures: 2026-02-09@aaaa0000 -->
+${promotionComment({
+  sourceCwds: testCwds("/work/project"),
+  excludedCwds: [],
+  exposures: [],
+  reasons: ["manual-global-review", "manual-common-ancestor-review"],
+})}
+
+### Reviewed scope reasons
+
+Body.
+
+---`;
+
+    const [entry] = parseLearnings(content);
+
+    expect(entry?.promotionEvidence?.reasons).toEqual([
+      "manual-common-ancestor-review",
+      "manual-global-review",
+    ]);
+  });
+
+  test("round-trips automatic hierarchical generalization evidence", () => {
+    const entry = makeEntry({
+      cwds: testCwds("/work/company-a"),
+      promotionEvidence: {
+        sourceCwds: testCwds(
+          "/work/company-a/project-1",
+          "/work/company-a/project-2",
+          "/work/company-a/project-3",
+        ),
+        excludedCwds: [],
+        exposures: [{ date: "2026-07-22", sessionHash: "abcd1234" }],
+        reasons: ["automatic-hierarchical-generalization"],
+      },
+    });
+
+    expect(parseLearnings(renderLearnings([entry]))).toEqual([entry]);
+  });
+
+  test("withholds a scope that can still match an excluded CWD", () => {
+    const content = `---
+
+<!-- pattern | cwd: ${testCwd("/work/company")} | exposures: 2026-02-09@aaaa0000 -->
+${promotionComment({
+  sourceCwds: testCwds("/work/company/project"),
+  excludedCwds: testCwds("/work/company/legacy"),
+  exposures: [],
+  reasons: ["manual-scope-correction"],
+})}
+
+### Invalid corrected scope
+
+Body.
+
+---
+
+<!-- fact | cwd: ${testCwd("/work/other")} | exposures: 2026-02-10@bbbb0000 -->
+
+### Valid sibling after scope error
+
+Body.
+
+---`;
+
+    const document = parseLearningsDocument(content);
+
+    expect(document.entries.map((entry) => entry.title)).toEqual([
+      "Valid sibling after scope error",
+    ]);
+    expect(document.diagnostics).toEqual([
+      {
+        code: "invalid-learning-scope",
+        title: "Invalid corrected scope",
+        message:
+          'Learning "Invalid corrected scope" has an invalid applicability scope. An active learning scope cannot be related to an excluded CWD.',
+      },
+    ]);
+  });
+
+  test("round-trips a reviewed entry with no primary exposures", () => {
+    const entry: LearningEntry = {
+      ...makeEntry({ cwds: testCwds("/work/project"), exposures: [] }),
+      promotionEvidence: {
+        sourceCwds: testCwds("/work/project"),
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["manual-scope-correction"],
+      },
+    };
+
+    const rendered = renderLearnings([entry]);
+
+    expect(rendered).toContain("exposures: none");
+    expect(parseLearnings(rendered)).toEqual([entry]);
+  });
+
+  test("round-trips a nonglobal entry with no primary exposures", () => {
+    const entry = makeEntry({ exposures: [], nonglobal: true });
+
+    expect(parseLearnings(renderLearnings([entry]))).toEqual([entry]);
+  });
+
+  test("rejects a zero-exposure global marked nonglobal without evidence", () => {
+    const entry = makeEntry({ cwds: ["*"], exposures: [], nonglobal: true });
+
+    const document = parseLearningsDocument(renderLearnings([entry]));
+
+    expect(document.entries).toEqual([]);
+    expect(document.diagnostics[0]).toMatchObject({
+      code: "invalid-learning-scope",
+      title: entry.title,
+    });
+  });
+
+  test("withholds an ordinary entry with no primary exposures", () => {
+    const content = `---
+
+<!-- correction | cwd: ${testCwd("/work/project")} | exposures: none -->
+
+### Ordinary orphan
+
+Body.
+
+---`;
+
+    expect(parseLearningsDocument(content)).toEqual({
+      entries: [],
+      diagnostics: [
+        {
+          code: "invalid-learning-scope",
+          title: "Ordinary orphan",
+          message:
+            'Learning "Ordinary orphan" has an invalid applicability scope. A learning without primary exposures must retain durable reviewed state.',
+        },
+      ],
+    });
+  });
+
+  test("rejects none mixed with dated primary exposures", () => {
+    const content = `---
+
+<!-- correction | cwd: ${testCwd("/work/project")} | exposures: none,2026-02-09@aaaa0000 | nonglobal -->
+
+### Mixed empty sentinel
+
+Body.
+
+---`;
+
+    expect(parseLearningsDocument(content).entries).toEqual([]);
+    expect(parseLearningsDocument(content).diagnostics[0]?.code).toBe("malformed-learning-record");
+  });
+
+  test("rejects noncanonical empty exposure sentinels", () => {
+    const content = `---
+
+<!-- correction | cwd: ${testCwd("/work/project")} | exposures: empty | nonglobal -->
+
+### Wrong empty sentinel
+
+Body.
+
+---`;
+
+    expect(parseLearningsDocument(content).entries).toEqual([]);
+    expect(parseLearningsDocument(content).diagnostics[0]?.code).toBe("malformed-learning-record");
+  });
+
   test("malformed metadata is skipped gracefully", () => {
     const content = `---
 
@@ -177,7 +425,7 @@ Body.
 
 ---
 
-<!-- correction | cwd: /a | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/a")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Good entry
 
@@ -197,7 +445,7 @@ Automatically captured.
 
 ---
 
-<!-- correction | cwd: /projects/a | broken -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | broken -->
 
 ### Lost learning
 
@@ -224,7 +472,7 @@ Automatically captured.
 
 ---
 
-<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->
 
 ### Legacy delimiter body
 
@@ -262,7 +510,7 @@ Automatically captured.
 
 ---
 
-<!-- correction | cwd: /projects/a | broken -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | broken -->
 
 Body without a title.
 
@@ -282,7 +530,11 @@ Body without a title.
   test("reports orphaned promotion metadata as a malformed learning record", () => {
     const content = `---
 
-<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-07-18","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->
+${promotionComment({
+  sourceCwds: testCwds("/a", "/b", "/c"),
+  exposures: [{ date: "2026-07-18", sessionHash: "aaaa0000" }],
+  reasons: ["automatic-cross-project-threshold"],
+})}
 
 ---`;
 
@@ -299,8 +551,8 @@ Body without a title.
 
   test("reports primary metadata containing fields that cannot round-trip", () => {
     const metadataVariants = [
-      "<!-- correction | cwd: /projects/a | exposures: missing-session-hash -->",
-      "<!-- correction | cwd: /projects/a, | exposures: 2026-07-18@aaaa0000 -->",
+      `<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: missing-session-hash -->`,
+      `<!-- correction | cwd: ${testCwd("/projects/a")}, | exposures: 2026-07-18@aaaa0000 -->`,
     ];
 
     for (const metadata of metadataVariants) {
@@ -330,12 +582,12 @@ Body.
   test("reports duplicate primary metadata instead of silently discarding it", () => {
     const metadataPairs = [
       [
-        "<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->",
-        "<!-- preference | cwd: /projects/b | exposures: 2026-07-18@bbbb0000 -->",
+        `<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->`,
+        `<!-- preference | cwd: ${testCwd("/projects/b")} | exposures: 2026-07-18@bbbb0000 -->`,
       ],
       [
-        "<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->",
-        "<!-- correction | cwd: /projects/b | broken -->",
+        `<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->`,
+        `<!-- correction | cwd: ${testCwd("/projects/b")} | broken -->`,
       ],
     ];
 
@@ -363,9 +615,12 @@ Body.
     }
   });
 
-  test("reports invalid promotion metadata while keeping the learning readable", () => {
-    const validPromotion =
-      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+  test("withholds invalid promotion metadata while keeping valid siblings readable", () => {
+    const validPromotion = promotionComment({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+      reasons: ["automatic-cross-project-threshold"],
+    });
     const variants = [
       ["<!-- promotion: invalid-json -->", "malformed-promotion-metadata"],
       [`${validPromotion}\n${validPromotion}`, "duplicate-promotion-metadata"],
@@ -381,12 +636,19 @@ ${promotionMetadata}
 
 Body.
 
+---
+
+<!-- pattern | cwd: ${testCwd("/work/valid")} | exposures: 2026-02-10@bbbb0000 -->
+
+### Valid sibling
+
+Sibling body.
+
 ---`;
 
       const { entries, diagnostics } = parseLearningsDocument(content);
       expect(entries).toHaveLength(1);
-      expect(entries[0]?.title).toBe("Global entry");
-      expect(entries[0]?.promotionEvidence).toBeUndefined();
+      expect(entries[0]?.title).toBe("Valid sibling");
       expect(diagnostics).toEqual([
         {
           code: diagnosticCode,
@@ -437,7 +699,12 @@ Body.
     const content = `---
 
 <!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
-<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"],"reviewer":"human"} -->
+${promotionComment({
+  sourceCwds: testCwds("/a", "/b", "/c"),
+  exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+  reasons: ["automatic-cross-project-threshold"],
+  reviewer: "human",
+})}
 
 ### Extended promotion
 
@@ -447,8 +714,7 @@ Body.
 
     const document = parseLearningsDocument(content);
 
-    expect(document.entries[0]?.title).toBe("Extended promotion");
-    expect(document.entries[0]?.promotionEvidence).toBeUndefined();
+    expect(document.entries).toEqual([]);
     expect(document.diagnostics).toEqual([
       {
         code: "malformed-promotion-metadata",
@@ -459,8 +725,11 @@ Body.
   });
 
   test("reports a canonical promotion paired with a mixed-case duplicate", () => {
-    const canonical =
-      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const canonical = promotionComment({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+      reasons: ["automatic-cross-project-threshold"],
+    });
     const content = `---
 
 <!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
@@ -477,14 +746,18 @@ Body.
       {
         code: "duplicate-promotion-metadata",
         title: "Duplicated promotion",
-        message: 'Learning "Duplicated promotion" contains more than one promotion metadata record.',
+        message:
+          'Learning "Duplicated promotion" contains more than one promotion metadata record.',
       },
     ]);
   });
 
   test("reads promotion metadata only from the region before the title", () => {
-    const promotion =
-      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const promotion = promotionComment({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+      reasons: ["automatic-cross-project-threshold"],
+    });
     const primary = "<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->";
 
     const bodyOnlyDocument = parseLearningsDocument(`---
@@ -512,7 +785,7 @@ ${promotion}
     expect(bodyOnly?.promotionEvidence).toBeUndefined();
     expect(bodyOnly?.body).toBe(promotion);
     expect(bodyOnlyDocument.diagnostics).toEqual([]);
-    expect(metadataAndBody?.promotionEvidence?.sourceCwds).toEqual(["/a", "/b", "/c"]);
+    expect(metadataAndBody?.promotionEvidence?.sourceCwds).toEqual(testCwds("/a", "/b", "/c"));
     expect(metadataAndBody?.body).toBe(promotion);
     expect(metadataAndBodyDocument.diagnostics).toEqual([]);
   });
@@ -520,7 +793,7 @@ ${promotion}
   test("entry without body has empty body string", () => {
     const content = `---
 
-<!-- correction | cwd: /a | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/a")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Title only
 
@@ -540,7 +813,7 @@ describe("renderEntry", () => {
     const rendered = renderEntry(entry);
 
     expect(rendered).toContain(
-      "<!-- correction | cwd: /projects/myapp | exposures: 2026-02-09@a1b2c3d4 -->",
+      `<!-- correction | cwd: ${testCwd("/projects/myapp")} | exposures: 2026-02-09@a1b2c3d4 -->`,
     );
     expect(rendered).toContain("### Use Bun.file() instead of fs.readFile()");
     expect(rendered).toContain("This project uses Bun runtime.");
@@ -552,8 +825,8 @@ describe("renderEntry", () => {
   });
 
   test("renders multiple CWDs as comma-separated", () => {
-    const entry = makeEntry({ cwds: ["/a", "/b", "/c"] });
-    expect(renderEntry(entry)).toContain("cwd: /a, /b, /c");
+    const entry = makeEntry({ cwds: testCwds("/a", "/b", "/c") });
+    expect(renderEntry(entry)).toContain(`cwd: ${testCwds("/a", "/b", "/c").join(", ")}`);
   });
 
   test("renders multiple exposures as comma-separated", () => {
@@ -577,7 +850,7 @@ describe("renderEntryForContext", () => {
   test("omits metadata comment", () => {
     const rendered = renderEntryForContext(
       promoteToGlobal(
-        makeEntry({ cwds: ["/a", "/b", "/c"] }),
+        makeEntry({ cwds: testCwds("/a", "/b", "/c") }),
         "automatic-cross-project-threshold",
       ),
     );
@@ -618,7 +891,7 @@ describe("renderLearnings", () => {
         title: "Entry C",
         body: "Body C.",
         nonglobal: true,
-        cwds: ["/x", "/y", "/z"],
+        cwds: testCwds("/x", "/y", "/z"),
       }),
     ];
 
@@ -640,21 +913,38 @@ describe("renderLearnings", () => {
     const entry: LearningEntry = {
       ...makeEntry({ cwds: ["*"] }),
       promotionEvidence: {
-        sourceCwds: ["/projects/alpha-->archive", "/projects/beta", "/projects/gamma"],
+        sourceCwds: testCwds("/projects/alpha-->archive", "/projects/beta", "/projects/gamma"),
+        excludedCwds: [],
         exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
         reasons: ["automatic-cross-project-threshold"],
       },
     };
 
     const rendered = renderLearnings([entry]);
-    const promotionLine = rendered
-      .split("\n")
-      .find((line) => line.startsWith("<!-- promotion: "));
+    const promotionLine = rendered.split("\n").find((line) => line.startsWith("<!-- promotion: "));
     const payload = promotionLine?.slice("<!-- promotion: ".length, -" -->".length);
 
     expect(payload).toBeDefined();
     expect(payload).not.toContain("--");
+    expect(payload).toContain('"excludedCwds":[]');
     expect(parseLearnings(rendered)).toEqual([entry]);
+  });
+});
+
+// --- matchesCwd ---
+
+describe("matchesCwd", () => {
+  test("uses equal, ancestor, and descendant path relationships but not siblings", () => {
+    const entry = makeEntry({ cwds: testCwds("/work/company/project") });
+
+    expect(matchesCwd(entry, testCwd("/work/company/project"))).toBe(true);
+    expect(matchesCwd(entry, testCwd("/work/company"))).toBe(true);
+    expect(matchesCwd(entry, testCwd("/work/company/project/packages/api"))).toBe(true);
+    expect(matchesCwd(entry, testCwd("/work/company/other-project"))).toBe(false);
+    expect(matchesCwd(entry, testCwd("/other/company/project"))).toBe(false);
+    expect(matchesCwd(makeEntry({ cwds: testCwds("/") }), testCwd("/work/company/project"))).toBe(
+      true,
+    );
   });
 });
 
@@ -662,6 +952,10 @@ describe("renderLearnings", () => {
 
 describe("scoreEntry", () => {
   const now = new Date("2026-02-12");
+
+  test("returns zero recency and reinforcement for no primary exposures", () => {
+    expect(scoreEntry(makeEntry({ exposures: [] }), now)).toBe(0);
+  });
 
   test("recency: 1 day ago is close to 1.0", () => {
     const entry = makeEntry({
@@ -743,7 +1037,7 @@ describe("scoreEntry", () => {
 
 describe("selectLearnings", () => {
   test("empty entries returns empty result", () => {
-    expect(selectLearnings([], "/x")).toEqual([]);
+    expect(selectLearnings([], testCwd("/x"))).toEqual([]);
   });
 
   test("respects budget — never truncates mid-entry", () => {
@@ -753,7 +1047,7 @@ describe("selectLearnings", () => {
       makeEntry({ title: "Third", body: "C." }),
     ];
     // Tiny budget — should include at least the first entry
-    const selected = selectLearnings(entries, "/projects/myapp", 50);
+    const selected = selectLearnings(entries, testCwd("/projects/myapp"), 50);
     expect(selected.length).toBeGreaterThanOrEqual(1);
 
     // Each selected entry should be a complete entry
@@ -765,14 +1059,14 @@ describe("selectLearnings", () => {
   test("first entry always included even if over budget", () => {
     const longBody = "x".repeat(5000);
     const entries = [makeEntry({ body: longBody })];
-    const selected = selectLearnings(entries, "/projects/myapp", 100);
+    const selected = selectLearnings(entries, testCwd("/projects/myapp"), 100);
     expect(selected).toHaveLength(1);
   });
 
   test("higher-scored entries selected first", () => {
     const cwdMatch = makeEntry({
       title: "CWD match",
-      cwds: ["/projects/myapp"],
+      cwds: testCwds("/projects/myapp"),
       exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
     });
     const globalEntry = makeEntry({
@@ -782,7 +1076,11 @@ describe("selectLearnings", () => {
     });
     // Give enough budget for only one — CWD match has same base score as global
     const entrySize = renderEntryForContext(cwdMatch).length;
-    const selected = selectLearnings([globalEntry, cwdMatch], "/projects/myapp", entrySize + 10);
+    const selected = selectLearnings(
+      [globalEntry, cwdMatch],
+      testCwd("/projects/myapp"),
+      entrySize + 10,
+    );
     expect(selected).toHaveLength(1);
   });
 
@@ -794,18 +1092,18 @@ describe("selectLearnings", () => {
     // would admit only one entry and under-fill the budget.
     const budget = renderEntryForContext(a).length + renderEntryForContext(b).length;
 
-    expect(selectLearnings([a, b], "/projects/myapp", budget)).toHaveLength(2);
+    expect(selectLearnings([a, b], testCwd("/projects/myapp"), budget)).toHaveLength(2);
   });
 
   test("excludes non-matching CWD entries before scoring", () => {
     const relevant = makeEntry({
       title: "Relevant",
-      cwds: ["/projects/myapp"],
+      cwds: testCwds("/projects/myapp"),
       exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
     });
     const irrelevant = makeEntry({
       title: "Irrelevant",
-      cwds: ["/projects/other"],
+      cwds: testCwds("/projects/other"),
       // Heavily reinforced — would outscore relevant entry without pre-filtering
       exposures: [
         { date: "2026-02-11", sessionHash: "b0000000" },
@@ -815,7 +1113,7 @@ describe("selectLearnings", () => {
         { date: "2026-02-11", sessionHash: "f0000000" },
       ],
     });
-    const selected = selectLearnings([irrelevant, relevant], "/projects/myapp", 10000);
+    const selected = selectLearnings([irrelevant, relevant], testCwd("/projects/myapp"), 10000);
     expect(selected).toHaveLength(1);
     expect(selected[0]?.title).toBe("Relevant");
   });
@@ -826,44 +1124,9 @@ describe("selectLearnings", () => {
       cwds: ["*"],
       exposures: [{ date: "2026-02-11", sessionHash: "aaaa0000" }],
     });
-    const selected = selectLearnings([global], "/any/path", 10000);
+    const selected = selectLearnings([global], testCwd("/any/path"), 10000);
     expect(selected).toHaveLength(1);
     expect(selected[0]?.title).toBe("Global");
-  });
-});
-
-// --- undoSessionLearnings ---
-
-describe("undoSessionLearnings", () => {
-  test("removes entry when session is the only exposure", () => {
-    const entries = [makeEntry({ exposures: [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }] })];
-    const result = undoSessionLearnings(entries, "a1b2c3d4");
-    expect(result).toHaveLength(0);
-  });
-
-  test("removes only session exposure when entry has multiple", () => {
-    const entries = [
-      makeEntry({
-        exposures: [
-          { date: "2026-02-09", sessionHash: "a1b2c3d4" },
-          { date: "2026-02-11", sessionHash: "e5f6g7h8" },
-        ],
-      }),
-    ];
-    const result = undoSessionLearnings(entries, "a1b2c3d4");
-    expect(result).toHaveLength(1);
-    expect(result[0]?.exposures).toHaveLength(1);
-    expect(result[0]?.exposures[0]?.sessionHash).toBe("e5f6g7h8");
-  });
-
-  test("leaves entries without matching session unchanged", () => {
-    const entries = [makeEntry({ exposures: [{ date: "2026-02-09", sessionHash: "other000" }] })];
-    const result = undoSessionLearnings(entries, "a1b2c3d4");
-    expect(result).toHaveLength(1);
-  });
-
-  test("empty entries returns empty result", () => {
-    expect(undoSessionLearnings([], "a1b2c3d4")).toEqual([]);
   });
 });
 
@@ -931,6 +1194,38 @@ Body.
     expect(await Bun.file(filePath).text()).toBe(raw);
   });
 
+  test("mutation rejects invalid applicability evidence without changing the file", async () => {
+    const raw = `# Learnings
+
+---
+
+<!-- correction | cwd: ${testCwd("/work/company")} | exposures: 2026-02-09@aaaa0000 -->
+${promotionComment({
+  sourceCwds: testCwds("/work/company/project"),
+  excludedCwds: testCwds("/work/company/legacy"),
+  exposures: [],
+  reasons: ["manual-scope-correction"],
+})}
+
+### Invalid corrected scope
+
+Body.
+`;
+    const filePath = `${testMemoryDir}/learnings.md`;
+    let callbackInvoked = false;
+    await Bun.write(filePath, raw);
+
+    await expect(
+      mutateLearnings(testMemoryDir, (entries) => {
+        callbackInvoked = true;
+        return entries;
+      }),
+    ).rejects.toThrow("invalid applicability scope");
+
+    expect(callbackInvoked).toBe(false);
+    expect(await Bun.file(filePath).text()).toBe(raw);
+  });
+
   test("mutation rejects mixed-case promotion metadata without changing the file", async () => {
     const raw = `# Learnings
 
@@ -958,7 +1253,7 @@ Body.
 
 ---
 
-<!-- correction | cwd: /projects/a | broken -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | broken -->
 
 ### Lost learning
 
@@ -986,7 +1281,7 @@ Automatically captured.
 
 ---
 
-<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->
 
 ### Legacy delimiter body
 
@@ -1015,8 +1310,8 @@ Keep after.`;
 
 ---
 
-<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
-<!-- correction | cwd: /projects/b | broken -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/projects/b")} | broken -->
 
 ### Ambiguous metadata
 
@@ -1071,8 +1366,11 @@ Body.
   });
 
   test("direct write rejects duplicate promotion metadata without changing the file", async () => {
-    const promotion =
-      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-02-09","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const promotion = promotionComment({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+      reasons: ["automatic-cross-project-threshold"],
+    });
     const raw = `# Learnings
 
 ---
@@ -1115,9 +1413,7 @@ Body.
     const source = await Bun.file(filePath).text();
 
     await expect(
-      writeLearnings(testMemoryDir, [
-        makeEntry({ body: "Keep before.\n---\nKeep after." }),
-      ]),
+      writeLearnings(testMemoryDir, [makeEntry({ body: "Keep before.\n---\nKeep after." })]),
     ).rejects.toThrow("outside a complete learning record");
 
     expect(await Bun.file(filePath).text()).toBe(source);
@@ -1130,8 +1426,8 @@ Body.
     const source = await Bun.file(filePath).text();
 
     await expect(
-      writeLearnings(testMemoryDir, [makeEntry({ cwds: ["/projects/team,alpha"] })]),
-    ).rejects.toThrow("cannot be represented without data loss");
+      writeLearnings(testMemoryDir, [makeEntry({ cwds: testCwds("/projects/team,alpha") })]),
+    ).rejects.toThrow("invalid applicability scope");
 
     expect(await Bun.file(filePath).text()).toBe(source);
   });
@@ -1173,6 +1469,20 @@ Body.
     ]);
   });
 
+  test("exported mutation establishes migration readiness before rewriting a canonical global", async () => {
+    await writeLearnings(testMemoryDir, [makeEntry({ cwds: ["*"] })]);
+
+    await mutateLearnings(testMemoryDir, (entries) => [
+      ...entries,
+      makeEntry({ title: "Added", cwds: testCwds("/work/project") }),
+    ]);
+
+    expect(await Bun.file(`${testMemoryDir}/.learning-scope-migration-v1.json`).exists()).toBe(
+      true,
+    );
+    expect((await loadLearnings(testMemoryDir)).map((entry) => entry.title)).toContain("Added");
+  });
+
   test("stale locks are recovered before applying a mutation", async () => {
     const lockPath = `${testMemoryDir}/.learnings.lock`;
     await mkdir(lockPath);
@@ -1209,9 +1519,31 @@ Body.
     ]);
   });
 
+  test("conditional replacement rejects the removed before-write callback at runtime", async () => {
+    const original = [makeEntry({ title: "Original" })];
+    const replacement = [makeEntry({ title: "Replacement" })];
+    await writeLearnings(testMemoryDir, original);
+    let callbackCalled = false;
+    const legacyCall = replaceLearningsIfUnchanged as unknown as (
+      memoryDir: string,
+      expected: readonly LearningEntry[],
+      replacement: readonly LearningEntry[],
+      beforeWrite: () => Promise<void>,
+    ) => Promise<boolean>;
+
+    await expect(
+      legacyCall(testMemoryDir, original, replacement, async () => {
+        callbackCalled = true;
+      }),
+    ).rejects.toThrow("replaceLearningsIfUnchanged no longer accepts a before-write callback");
+
+    expect(callbackCalled).toBe(false);
+    expect(await loadLearnings(testMemoryDir)).toEqual(original);
+  });
+
   test("conditional replacement compares the expected snapshot structurally", async () => {
-    const current = [makeEntry({ cwds: ["/projects/team", "alpha"] })];
-    const expected = [makeEntry({ cwds: ["/projects/team, alpha"] })];
+    const current = [makeEntry({ cwds: testCwds("/projects/team", "/projects/alpha") })];
+    const expected = [makeEntry({ cwds: testCwds("/projects/team, /projects/alpha") })];
     const filePath = `${testMemoryDir}/learnings.md`;
     await writeLearnings(testMemoryDir, current);
     const source = await Bun.file(filePath).text();
@@ -1240,99 +1572,16 @@ Body.
     expect(await Bun.file(filePath).text()).toBe(source);
   });
 
-  test("conditional replacement keeps active learnings when its prerequisite fails", async () => {
+  test("direct write currently rejects a zero-primary-exposure entry", async () => {
+    const filePath = `${testMemoryDir}/learnings.md`;
     const original = [makeEntry({ title: "Original" })];
     await writeLearnings(testMemoryDir, original);
 
     await expect(
-      replaceLearningsIfUnchanged(
-        testMemoryDir,
-        original,
-        [makeEntry({ title: "Replacement" })],
-        async () => {
-          throw new Error("archive unavailable");
-        },
-      ),
-    ).rejects.toThrow("archive unavailable");
+      writeLearnings(testMemoryDir, [makeEntry({ title: "Durable", exposures: [] })]),
+    ).rejects.toThrow("invalid learning storage");
 
-    expect(await loadLearnings(testMemoryDir)).toEqual(original);
-  });
-
-  test("conditional replacement validates its replacement before prerequisite side effects", async () => {
-    const original = [makeEntry({ title: "Original" })];
-    const filePath = `${testMemoryDir}/learnings.md`;
-    let prerequisiteInvoked = false;
-    await writeLearnings(testMemoryDir, original);
-    const source = await Bun.file(filePath).text();
-
-    await expect(
-      replaceLearningsIfUnchanged(
-        testMemoryDir,
-        original,
-        [makeEntry({ body: "Keep before.\n---\nKeep after." })],
-        async () => {
-          prerequisiteInvoked = true;
-        },
-      ),
-    ).rejects.toThrow("outside a complete learning record");
-
-    expect(prerequisiteInvoked).toBe(false);
-    expect(await Bun.file(filePath).text()).toBe(source);
-  });
-
-  test("conditional replacement reinspects storage after prerequisite side effects", async () => {
-    const original = [makeEntry({ title: "Original" })];
-    const filePath = `${testMemoryDir}/learnings.md`;
-    const targetPath = `${testMemoryDir}/replacement-target.md`;
-    await writeLearnings(testMemoryDir, original);
-    const source = await Bun.file(filePath).text();
-    await Bun.write(targetPath, source);
-
-    await expect(
-      replaceLearningsIfUnchanged(
-        testMemoryDir,
-        original,
-        [makeEntry({ title: "Replacement" })],
-        async () => {
-          await rm(filePath);
-          await symlink(targetPath, filePath);
-        },
-      ),
-    ).rejects.toThrow("regular file");
-
-    expect((await lstat(filePath)).isSymbolicLink()).toBe(true);
-    expect(await Bun.file(targetPath).text()).toBe(source);
-  });
-
-  test("conditional replacement rejects corrupt provenance before prerequisite side effects", async () => {
-    const raw = `# Learnings
-
----
-
-<!-- correction | cwd: * | exposures: 2026-02-09@aaaa0000 -->
-<!-- promotion: invalid-json -->
-
-### Global entry
-
-Body.
-`;
-    const filePath = `${testMemoryDir}/learnings.md`;
-    const sideEffectPath = `${testMemoryDir}/archive-started`;
-    await Bun.write(filePath, raw);
-
-    await expect(
-      replaceLearningsIfUnchanged(
-        testMemoryDir,
-        parseLearnings(raw),
-        [makeEntry({ title: "Replacement" })],
-        async () => {
-          await Bun.write(sideEffectPath, "started");
-        },
-      ),
-    ).rejects.toThrow("promotion metadata");
-
-    expect(await Bun.file(sideEffectPath).exists()).toBe(false);
-    expect(await Bun.file(filePath).text()).toBe(raw);
+    expect(await Bun.file(filePath).text()).toBe(renderLearnings(original));
   });
 
   test("conditional removal deletes only the selected duplicate title", async () => {
@@ -1342,7 +1591,7 @@ Body.
 
     const result = await removeLearningIfUnchanged(testMemoryDir, selected);
 
-    expect(result.removed).toBe(true);
+    expect(result.status).toBe("removed");
     expect(result.entries).toEqual([sameTitle]);
   });
 
@@ -1360,87 +1609,217 @@ Body.
 
     const result = await removeLearningIfUnchanged(testMemoryDir, selected);
 
-    expect(result.removed).toBe(false);
+    expect(result.status).toBe("stale");
     expect(result.entries).toEqual([changed]);
   });
-});
 
-// --- mergeNewLearnings ---
+  test("conditional update derives the replacement from the fresh unique match", async () => {
+    const selected = makeEntry({ title: "Scoped learning", nonglobal: false });
+    await writeLearnings(testMemoryDir, [selected]);
 
-describe("mergeNewLearnings", () => {
-  test("new entry appended when no title match", () => {
-    const existing = [makeEntry({ title: "A" })];
-    const extracted = [makeEntry({ title: "B" })];
-    const result = mergeNewLearnings(existing, extracted);
-    expect(result).toHaveLength(2);
+    const result = await updateLearningIfUnchanged(testMemoryDir, selected, (fresh) => ({
+      ...fresh,
+      nonglobal: true,
+    }));
+
+    expect(result.status).toBe("updated");
+    expect(result.entries[0]).toEqual({ ...selected, nonglobal: true });
+    expect(await loadLearnings(testMemoryDir)).toEqual(result.entries);
   });
 
-  test("exact title match reinforces existing entry", () => {
-    const existing = [
-      makeEntry({
-        title: "Same title",
-        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
-      }),
-    ];
-    const extracted = [
-      makeEntry({
-        title: "Same title",
-        exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
-      }),
-    ];
-    const result = mergeNewLearnings(existing, extracted);
-    expect(result).toHaveLength(1);
-    expect(result[0]?.exposures).toHaveLength(2);
-  });
+  test("conditional update reports stale without invoking its update", async () => {
+    const selected = makeEntry({ title: "Scoped learning", body: "Reviewed body." });
+    const changed = { ...selected, body: "Concurrent body." };
+    await writeLearnings(testMemoryDir, [changed]);
+    let invoked = false;
 
-  test("title match merges CWDs", () => {
-    const existing = [makeEntry({ title: "Same", cwds: ["/a"] })];
-    const extracted = [makeEntry({ title: "Same", cwds: ["/b"] })];
-    const result = mergeNewLearnings(existing, extracted);
-    expect(result[0]?.cwds).toContain("/a");
-    expect(result[0]?.cwds).toContain("/b");
-  });
-
-  test("reinforcing a global learning preserves its scope and promotion evidence", () => {
-    const promoted = promoteToGlobal(
-      makeEntry({ title: "Shared rule", cwds: ["/c", "/a", "/b"] }),
-      "automatic-cross-project-threshold",
-    );
-    const reinforcement = makeEntry({
-      title: "Shared rule",
-      cwds: ["/d"],
-      exposures: [{ date: "2026-02-12", sessionHash: "dddd0000" }],
+    const result = await updateLearningIfUnchanged(testMemoryDir, selected, (fresh) => {
+      invoked = true;
+      return fresh;
     });
 
-    const result = mergeNewLearnings([promoted], [reinforcement]);
+    expect(result.status).toBe("stale");
+    expect(invoked).toBe(false);
+    expect(result.entries).toEqual([changed]);
+  });
 
-    expect(result[0]?.cwds).toEqual(["*"]);
-    expect(result[0]?.promotionEvidence).toEqual(promoted.promotionEvidence);
-    expect(result[0]?.exposures).toHaveLength(2);
+  test("conditional update and removal report ambiguous for identical persisted entries", async () => {
+    const duplicate = makeEntry({ title: "Exact duplicate" });
+    await writeLearnings(testMemoryDir, [duplicate, duplicate]);
+
+    const update = await updateLearningIfUnchanged(testMemoryDir, duplicate, (fresh) => ({
+      ...fresh,
+      nonglobal: true,
+    }));
+    const removal = await removeLearningIfUnchanged(testMemoryDir, duplicate);
+
+    expect(update.status).toBe("ambiguous");
+    expect(removal.status).toBe("ambiguous");
+    expect(await loadLearnings(testMemoryDir)).toEqual([duplicate, duplicate]);
+  });
+
+  test("conditional update rejects an invalid fresh replacement without changing storage", async () => {
+    const selected = makeEntry({ title: "Valid persisted scope" });
+    const filePath = join(testMemoryDir, "learnings.md");
+    await writeLearnings(testMemoryDir, [selected]);
+    const source = await Bun.file(filePath).text();
+
+    await expect(
+      updateLearningIfUnchanged(testMemoryDir, selected, (fresh) => ({
+        ...fresh,
+        cwds: ["*"],
+        nonglobal: true,
+      })),
+    ).rejects.toThrow("invalid applicability scope");
+
+    expect(await Bun.file(filePath).text()).toBe(source);
   });
 });
 
-// --- findPromotionCandidates ---
+describe("mergePromotionEvidence", () => {
+  test("unions every evidence field deterministically", () => {
+    const merged = mergePromotionEvidence(
+      {
+        sourceCwds: testCwds("/b"),
+        excludedCwds: testCwds("/z"),
+        exposures: [{ date: "2026-02-11", sessionHash: "bbbb0000" }],
+        reasons: ["manual-scope-correction"],
+      },
+      {
+        sourceCwds: testCwds("/a"),
+        excludedCwds: testCwds("/y"),
+        exposures: [{ date: "2026-02-09", sessionHash: "aaaa0000" }],
+        reasons: ["contradiction-scope-subtraction"],
+      },
+    );
 
-describe("findPromotionCandidates", () => {
+    expect(merged).toEqual({
+      sourceCwds: testCwds("/a", "/b"),
+      excludedCwds: testCwds("/y", "/z"),
+      exposures: [
+        { date: "2026-02-09", sessionHash: "aaaa0000" },
+        { date: "2026-02-11", sessionHash: "bbbb0000" },
+      ],
+      reasons: ["contradiction-scope-subtraction", "manual-scope-correction"],
+    });
+  });
+});
+
+// --- automatic scope generalization ---
+
+describe("generalizeLearningScopes", () => {
+  test("generalizes every eligible entry and counts changed scopes once", () => {
+    const qualifying = makeEntry({
+      title: "Company pattern",
+      cwds: testCwds(
+        "/work/company-a/project-1",
+        "/work/company-a/project-2",
+        "/work/company-a/project-3",
+      ),
+    });
+    const unchanged = makeEntry({
+      title: "Project pattern",
+      cwds: testCwds("/work/company-b/project-1"),
+    });
+
+    const result = generalizeLearningScopes([qualifying, unchanged], []);
+
+    expect(result.generalized).toBe(1);
+    expect(result.entries[0]?.cwds).toEqual(testCwds("/work/company-a"));
+    expect(result.entries[1]).toBe(unchanged);
+  });
+
+  test("rejects the whole transition when any persisted scope is invalid", () => {
+    const valid = makeEntry({
+      title: "Valid pattern",
+      cwds: testCwds("/work/company-a/project-1", "/work/company-a/project-2"),
+    });
+    const invalid = makeEntry({
+      title: "Invalid pattern",
+      cwds: testCwds("/work/company-b"),
+      promotionEvidence: {
+        sourceCwds: testCwds("/work/company-c/project-1"),
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["manual-common-ancestor-review"],
+      },
+    });
+
+    expect(() => generalizeLearningScopes([valid, invalid], [])).toThrow(
+      'Cannot generalize learning "Invalid pattern"',
+    );
+    expect(valid.cwds).toEqual(testCwds("/work/company-a/project-1", "/work/company-a/project-2"));
+  });
+});
+
+// --- findScopeReviewCandidates ---
+
+describe("findScopeReviewCandidates", () => {
   test("entry with 3+ CWDs and not nonglobal is returned", () => {
-    const entry = makeEntry({ cwds: ["/a", "/b", "/c"] });
-    expect(findPromotionCandidates([entry])).toHaveLength(1);
+    const entry = makeEntry({ cwds: testCwds("/a", "/b", "/c") });
+    expect(findScopeReviewCandidates([entry])).toHaveLength(1);
   });
 
   test("entry with 2 CWDs is not returned", () => {
-    const entry = makeEntry({ cwds: ["/a", "/b"] });
-    expect(findPromotionCandidates([entry])).toHaveLength(0);
+    const entry = makeEntry({ cwds: testCwds("/a", "/b") });
+    expect(findScopeReviewCandidates([entry])).toHaveLength(0);
   });
 
   test("nonglobal entry is not returned", () => {
-    const entry = makeEntry({ cwds: ["/a", "/b", "/c"], nonglobal: true });
-    expect(findPromotionCandidates([entry])).toHaveLength(0);
+    const entry = makeEntry({ cwds: testCwds("/a", "/b", "/c"), nonglobal: true });
+    expect(findScopeReviewCandidates([entry])).toHaveLength(0);
   });
 
   test("already global entry is not returned", () => {
     const entry = makeEntry({ cwds: ["*"] });
-    expect(findPromotionCandidates([entry])).toHaveLength(0);
+    expect(findScopeReviewCandidates([entry])).toHaveLength(0);
+  });
+
+  test("ancestor-scoped entry uses independent effective source evidence", () => {
+    const entry = makeEntry({
+      cwds: testCwds("/company-a"),
+      promotionEvidence: {
+        sourceCwds: testCwds("/company-a/a", "/company-a/b", "/company-a/c"),
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["manual-common-ancestor-review"],
+      },
+    });
+
+    expect(findScopeReviewCandidates([entry])).toEqual([entry]);
+  });
+
+  test("nested and excluded sources do not satisfy the independent-root threshold", () => {
+    const entry = makeEntry({
+      cwds: testCwds("/company-a/a"),
+      promotionEvidence: {
+        sourceCwds: testCwds(
+          "/company-a/a",
+          "/company-a/a/package",
+          "/company-a/b",
+          "/company-a/c",
+        ),
+        excludedCwds: testCwds("/company-a/b", "/company-a/c"),
+        exposures: [],
+        reasons: ["manual-scope-correction"],
+      },
+    });
+
+    expect(findScopeReviewCandidates([entry])).toEqual([]);
+  });
+
+  test("entries with any exclusion are never widening candidates", () => {
+    const entry = makeEntry({
+      cwds: testCwds("/a", "/b", "/c"),
+      promotionEvidence: {
+        sourceCwds: testCwds("/a", "/b", "/c", "/d"),
+        excludedCwds: testCwds("/d"),
+        exposures: [],
+        reasons: ["manual-scope-correction"],
+      },
+    });
+
+    expect(findScopeReviewCandidates([entry])).toEqual([]);
   });
 });
 
@@ -1449,7 +1828,7 @@ describe("findPromotionCandidates", () => {
 describe("promoteToGlobal", () => {
   test("sets cwds to [*]", () => {
     const result = promoteToGlobal(
-      makeEntry({ cwds: ["/a", "/b", "/c"] }),
+      makeEntry({ cwds: testCwds("/a", "/b", "/c") }),
       "automatic-cross-project-threshold",
     );
     expect(result.cwds).toEqual(["*"]);
@@ -1457,7 +1836,7 @@ describe("promoteToGlobal", () => {
 
   test("snapshots the evidence that justified global scope", () => {
     const source = makeEntry({
-      cwds: ["/a", "/b", "/c"],
+      cwds: testCwds("/a", "/b", "/c"),
       exposures: [
         { date: "2026-02-09", sessionHash: "aaaa0000" },
         { date: "2026-02-11", sessionHash: "bbbb0000" },
@@ -1465,17 +1844,38 @@ describe("promoteToGlobal", () => {
     });
 
     const result = promoteToGlobal(source, "automatic-cross-project-threshold");
-    source.cwds.push("/d");
+    source.cwds.push(testCwd("/d"));
     source.exposures.push({ date: "2026-02-12", sessionHash: "cccc0000" });
 
     expect(result.promotionEvidence).toEqual({
-      sourceCwds: ["/a", "/b", "/c"],
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      excludedCwds: [],
       exposures: [
         { date: "2026-02-09", sessionHash: "aaaa0000" },
         { date: "2026-02-11", sessionHash: "bbbb0000" },
       ],
       reasons: ["automatic-cross-project-threshold"],
     });
+  });
+
+  test("records the reviewed reason when evidence already exists", () => {
+    const result = promoteToGlobal(
+      makeEntry({
+        cwds: testCwds("/company-a"),
+        promotionEvidence: {
+          sourceCwds: testCwds("/company-a/a", "/company-a/b", "/company-a/c"),
+          excludedCwds: [],
+          exposures: [],
+          reasons: ["manual-common-ancestor-review"],
+        },
+      }),
+      "manual-global-review",
+    );
+
+    expect(result.promotionEvidence.reasons).toEqual([
+      "manual-common-ancestor-review",
+      "manual-global-review",
+    ]);
   });
 });
 
@@ -1511,6 +1911,7 @@ describe("buildExtractionPromptSection", () => {
     expect(prompt).toContain("Do NOT extract");
     expect(prompt).toContain("DO extract");
     expect(prompt).toContain("0-2 learnings");
+    expect(prompt).toContain("return exactly `None.`");
   });
 
   test("includes existing titles when provided", () => {
@@ -1528,8 +1929,6 @@ describe("buildExtractionPromptSection", () => {
 // --- parseExtractedLearnings ---
 
 describe("parseExtractedLearnings", () => {
-  const metadata = { date: "2026-02-12", cwd: "/projects/myapp", sessionHash: "abcd1234" };
-
   test("parses valid entries", () => {
     const raw = `## Summary
 
@@ -1545,20 +1944,30 @@ This project uses Bun runtime.
 
 User prefers no emojis.`;
 
-    const entries = parseExtractedLearnings(raw, metadata);
-    expect(entries).toHaveLength(2);
-    expect(entries[0]?.category).toBe("correction");
-    expect(entries[0]?.title).toBe("Use Bun.file() instead of fs.readFile()");
-    expect(entries[0]?.cwds).toEqual(["/projects/myapp"]);
-    expect(entries[0]?.exposures[0]?.sessionHash).toBe("abcd1234");
+    const result = parseExtractedLearnings(raw);
+    expect(result.status).toBe("valid");
+    if (result.status !== "valid") throw new Error("Expected valid extraction");
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries[0]).toEqual({
+      category: "correction",
+      title: "Use Bun.file() instead of fs.readFile()",
+      body: "This project uses Bun runtime.",
+    });
   });
 
-  test("empty or missing Learnings section returns empty array", () => {
-    expect(parseExtractedLearnings("## Summary\nDone.", metadata)).toEqual([]);
-    expect(parseExtractedLearnings("No sections here.", metadata)).toEqual([]);
+  test("distinguishes missing and valid empty Learnings sections", () => {
+    expect(parseExtractedLearnings("## Summary\nDone.")).toEqual({ status: "missing" });
+    expect(parseExtractedLearnings("## Learnings\n\n")).toEqual({
+      status: "valid",
+      entries: [],
+    });
+    expect(parseExtractedLearnings("## Learnings\n\nNone.\n")).toEqual({
+      status: "valid",
+      entries: [],
+    });
   });
 
-  test("malformed entries are skipped", () => {
+  test("one malformed block rejects the entire section", () => {
     const raw = `## Learnings
 
 ### Not a valid format
@@ -1569,19 +1978,118 @@ Some text.
 
 Body.`;
 
-    const entries = parseExtractedLearnings(raw, metadata);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.title).toBe("Valid entry");
+    const result = parseExtractedLearnings(raw);
+    expect(result.status).toBe("malformed");
+    if (result.status !== "malformed") throw new Error("Expected malformed extraction");
+    expect(result.issues).toContain("Invalid learning heading: Not a valid format");
   });
 
-  test("invalid category is skipped", () => {
+  test("a bare level-three heading after a valid draft rejects the entire section", () => {
+    const result = parseExtractedLearnings(`## Learnings
+
+### (fact) Valid learning
+
+Learning body.
+
+###
+
+Malformed body.`);
+
+    expect(result.status).toBe("malformed");
+  });
+
+  test("a level-three heading without a separator after a valid draft rejects the section", () => {
+    const result = parseExtractedLearnings(`## Learnings
+
+### (fact) Valid learning
+
+Learning body.
+
+###(pattern) Missing space
+
+Malformed body.`);
+
+    expect(result.status).toBe("malformed");
+  });
+
+  test("invalid category makes the section malformed", () => {
     const raw = `## Learnings
 
 ### (invalid) Bad category
 
 Body.`;
 
-    expect(parseExtractedLearnings(raw, metadata)).toEqual([]);
+    expect(parseExtractedLearnings(raw).status).toBe("malformed");
+  });
+
+  test("bounds Learnings at the next level-two heading", () => {
+    const result = parseExtractedLearnings(`## Learnings
+
+### (fact) Valid learning
+
+Learning body.
+
+## Knowledge
+
+### This is not a learning
+
+Knowledge body.`);
+
+    expect(result).toEqual({
+      status: "valid",
+      entries: [{ category: "fact", title: "Valid learning", body: "Learning body." }],
+    });
+  });
+
+  test("rejects duplicate Learnings headings regardless of section contents", () => {
+    expect(
+      parseExtractedLearnings(`## Learnings
+
+## Summary
+
+Done.
+
+## Learnings
+
+### (fact) Later learning
+
+Body.`).status,
+    ).toBe("malformed");
+    expect(
+      parseExtractedLearnings(`## Learnings
+
+### (fact) First learning
+
+Body.
+
+## Learnings
+
+### malformed`).status,
+    ).toBe("malformed");
+  });
+
+  test("rejects None sentinel combined with learning blocks", () => {
+    expect(
+      parseExtractedLearnings(`## Learnings
+
+None.
+
+### (fact) Contradictory learning
+
+Body.`).status,
+    ).toBe("malformed");
+  });
+
+  test("rejects unknown text outside a learning block", () => {
+    expect(
+      parseExtractedLearnings(`## Learnings
+
+Unexpected prose.
+
+### (fact) Valid learning
+
+Body.`).status,
+    ).toBe("malformed");
   });
 });
 
@@ -1641,12 +2149,20 @@ LOW [] — Missing index`;
 
 describe("filterLearnings", () => {
   const entries = [
-    makeEntry({ title: "Path check", cwds: ["/Users/j/Documents/shaka"], body: "Use relative" }),
-    makeEntry({ title: "USD cents", cwds: ["/Users/j/Documents/arbitrage/sasori"], body: "Mills" }),
+    makeEntry({
+      title: "Path check",
+      cwds: testCwds("/Users/j/Documents/shaka"),
+      body: "Use relative",
+    }),
+    makeEntry({
+      title: "USD cents",
+      cwds: testCwds("/Users/j/Documents/arbitrage/sasori"),
+      body: "Mills",
+    }),
     makeEntry({ title: "Global rule", cwds: ["*"], body: "Always do this" }),
     makeEntry({
       title: "Whitenoise pattern",
-      cwds: ["/Users/j/Documents/whitenoise/whitenoise-rs"],
+      cwds: testCwds("/Users/j/Documents/whitenoise/whitenoise-rs"),
       body: "Interior mutability",
     }),
   ];

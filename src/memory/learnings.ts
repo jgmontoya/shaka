@@ -10,11 +10,24 @@
  * See also: consolidation.ts for duplicate/contradiction detection.
  */
 
-import { mkdir, rename } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import { inspectLearningFileStatus } from "./learning-file";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { inspectLearningFileStatus, replaceFileAtomically } from "./learning-file";
+import {
+  type Exposure,
+  type LearningScopeState,
+  type PromotionEvidence,
+  type PromotionReason,
+  effectiveSourceCwds,
+  generalizeLearningScope,
+  independentPositiveRoots,
+  normalizeCwdPath,
+  validateLearningScope,
+} from "./learning-scope";
 import { type DirectoryLockOptions, withDirectoryLock } from "./lock";
 import { arePathsRelated, hashSessionId } from "./utils";
+
+export type { Exposure, PromotionEvidence, PromotionReason } from "./learning-scope";
 
 // --- Types ---
 
@@ -22,23 +35,11 @@ export type LearningCategory = "correction" | "preference" | "pattern" | "fact";
 
 const VALID_CATEGORIES = new Set<string>(["correction", "preference", "pattern", "fact"]);
 
-export interface Exposure {
-  readonly date: string; // YYYY-MM-DD
-  readonly sessionHash: string; // first 8 chars of SHA-256(sessionId)
-}
-
-export type PromotionReason = "automatic-cross-project-threshold" | "manual-cross-project-review";
-
-export interface PromotionEvidence {
-  readonly sourceCwds: readonly string[];
-  readonly exposures: readonly Exposure[];
-  readonly reasons: readonly PromotionReason[];
-}
-
 export type LearningDiagnosticCode =
   | "malformed-learning-record"
   | "malformed-promotion-metadata"
-  | "duplicate-promotion-metadata";
+  | "duplicate-promotion-metadata"
+  | "invalid-learning-scope";
 
 export interface LearningDiagnostic {
   readonly code: LearningDiagnosticCode;
@@ -80,10 +81,16 @@ const PROMOTION_PREFIX = "<!-- promotion: ";
 const PROMOTION_SUFFIX = " -->";
 const PROMOTION_REASON_ORDER: readonly PromotionReason[] = [
   "automatic-cross-project-threshold",
+  "automatic-hierarchical-generalization",
+  "contradiction-scope-subtraction",
+  "legacy-source-reconstruction",
+  "manual-common-ancestor-review",
   "manual-cross-project-review",
+  "manual-global-review",
+  "manual-scope-correction",
 ];
 const PROMOTION_REASONS = new Set<PromotionReason>(PROMOTION_REASON_ORDER);
-const PROMOTION_EVIDENCE_KEYS = new Set(["sourceCwds", "exposures", "reasons"]);
+const PROMOTION_EVIDENCE_KEYS = new Set(["sourceCwds", "excludedCwds", "exposures", "reasons"]);
 
 function isNonglobal(line: string): boolean {
   return /\|\s*nonglobal\s*-->$/.test(line);
@@ -104,6 +111,8 @@ function isPromotionMetadataCandidate(line: string): boolean {
 }
 
 function parseExposures(raw: string): Exposure[] | undefined {
+  if (raw.trim() === "none") return [];
+
   const exposures: Exposure[] = [];
   for (const part of raw.split(",")) {
     const trimmed = part.trim();
@@ -140,17 +149,36 @@ function isPromotionReason(value: unknown): value is PromotionReason {
   return typeof value === "string" && PROMOTION_REASONS.has(value as PromotionReason);
 }
 
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function normalizePersistedPaths(cwds: readonly string[]): string[] {
+  return [...new Set(cwds.map((cwd) => normalizeCwdPath(cwd) ?? cwd))].sort(compareCodeUnits);
+}
+
+function normalizePromotionEvidence(evidence: PromotionEvidence): PromotionEvidence {
+  return {
+    sourceCwds: normalizePersistedPaths(evidence.sourceCwds),
+    excludedCwds: normalizePersistedPaths(evidence.excludedCwds),
+    exposures: evidence.exposures.map((exposure) => ({ ...exposure })),
+    reasons: [...new Set(evidence.reasons)].sort(compareCodeUnits),
+  };
+}
+
 function toPromotionEvidence(value: unknown): PromotionEvidence | undefined {
   if (!isRecord(value)) return undefined;
   if (Object.keys(value).some((key) => !PROMOTION_EVIDENCE_KEYS.has(key))) return undefined;
 
-  const { sourceCwds, exposures, reasons } = value;
+  const { sourceCwds, excludedCwds, exposures, reasons } = value;
+  const normalizedExcludedCwds = excludedCwds ?? [];
   if (
     !Array.isArray(sourceCwds) ||
     sourceCwds.length === 0 ||
     !sourceCwds.every((cwd) => typeof cwd === "string" && cwd.length > 0) ||
+    !Array.isArray(normalizedExcludedCwds) ||
+    !normalizedExcludedCwds.every((cwd) => typeof cwd === "string" && cwd.length > 0) ||
     !Array.isArray(exposures) ||
-    exposures.length === 0 ||
     !exposures.every(isExposure) ||
     !Array.isArray(reasons) ||
     reasons.length === 0 ||
@@ -159,11 +187,12 @@ function toPromotionEvidence(value: unknown): PromotionEvidence | undefined {
     return undefined;
   }
 
-  return {
+  return normalizePromotionEvidence({
     sourceCwds: [...sourceCwds],
+    excludedCwds: [...normalizedExcludedCwds],
     exposures: exposures.map((exposure) => ({ ...exposure })),
     reasons: [...reasons],
-  };
+  });
 }
 
 interface ParsedPromotionEvidence {
@@ -194,7 +223,13 @@ function parsePromotionEvidence(lines: string[]): ParsedPromotionEvidence {
 }
 
 function renderPromotionEvidence(evidence: PromotionEvidence): string {
-  const json = JSON.stringify(evidence).replaceAll("--", "\\u002d\\u002d");
+  const normalized = normalizePromotionEvidence(evidence);
+  const json = JSON.stringify({
+    sourceCwds: normalized.sourceCwds,
+    excludedCwds: normalized.excludedCwds,
+    exposures: normalized.exposures,
+    reasons: normalized.reasons,
+  }).replaceAll("--", "\\u002d\\u002d");
   return `${PROMOTION_PREFIX}${json}${PROMOTION_SUFFIX}`;
 }
 
@@ -258,58 +293,138 @@ function parsePrimaryMetadata(lines: string[]): ParsedPrimaryMetadata | undefine
   };
 }
 
-function parseBlock(block: string): ParsedLearningBlock | null {
-  const lines = block.trim().split("\n");
-  if (lines.length === 0) return null;
+function validateCurrentStorageScope(entry: LearningEntry, allowLegacyGlobalShape: boolean) {
+  if (allowLegacyGlobalShape) {
+    const wildcardCount = entry.cwds.filter((cwd) => cwd === "*").length;
+    if (wildcardCount > 1) return validateLearningScope(entry);
+    const exactCompanions = entry.cwds.filter((cwd) => cwd !== "*");
+    if (entry.cwds.includes("*") && exactCompanions.length > 0) {
+      const companions = validateLearningScope({ cwds: exactCompanions, nonglobal: false });
+      if (!companions.ok) return companions;
+    }
+    const hasLegacyGlobalShape =
+      entry.cwds.includes("*") && (entry.cwds.length !== 1 || entry.nonglobal);
+    const state: LearningScopeState = hasLegacyGlobalShape
+      ? { cwds: ["*"], promotionEvidence: entry.promotionEvidence, nonglobal: false }
+      : entry;
+    return validateLearningScope(state);
+  }
+  return validateLearningScope(entry);
+}
 
-  const titleIndex = lines.findIndex((line) => TITLE_CANDIDATE_RE.test(line.trim()));
-  const metadataLines = lines.slice(0, titleIndex === -1 ? lines.length : titleIndex);
-  const entryLike =
-    titleIndex !== -1 ||
+function invalidLearningScope(title: string, message: string): LearningDiagnostic {
+  return {
+    code: "invalid-learning-scope",
+    title,
+    message: `Learning "${title}" has an invalid applicability scope. ${message}`,
+  };
+}
+
+function promotionDiagnostic(title: string, code: LearningDiagnosticCode): LearningDiagnostic {
+  return {
+    code,
+    title,
+    message:
+      code === "duplicate-promotion-metadata"
+        ? `Learning "${title}" contains more than one promotion metadata record.`
+        : `Learning "${title}" contains malformed promotion metadata.`,
+  };
+}
+
+function scopeDiagnostic(
+  entry: LearningEntry,
+  allowLegacyGlobalShape: boolean,
+): LearningDiagnostic | undefined {
+  if (
+    entry.exposures.length === 0 &&
+    entry.cwds.includes("*") &&
+    entry.nonglobal &&
+    !entry.promotionEvidence
+  ) {
+    return invalidLearningScope(
+      entry.title,
+      "A legacy global learning cannot rely on nonglobal as its only durable state.",
+    );
+  }
+  if (entry.exposures.length === 0 && !entry.promotionEvidence && !entry.nonglobal) {
+    return invalidLearningScope(
+      entry.title,
+      "A learning without primary exposures must retain durable reviewed state.",
+    );
+  }
+
+  const scope = validateCurrentStorageScope(entry, allowLegacyGlobalShape);
+  return scope.ok ? undefined : invalidLearningScope(entry.title, scope.issue.message);
+}
+
+function entryDiagnostics(
+  entry: LearningEntry,
+  promotion: ParsedPromotionEvidence,
+  allowLegacyGlobalShape: boolean,
+): LearningDiagnostic[] {
+  if (promotion.diagnosticCode) {
+    return [promotionDiagnostic(entry.title, promotion.diagnosticCode)];
+  }
+  const diagnostic = scopeDiagnostic(entry, allowLegacyGlobalShape);
+  return diagnostic ? [diagnostic] : [];
+}
+
+function isLearningBlockCandidate(titleIndex: number, metadataLines: readonly string[]): boolean {
+  if (titleIndex !== -1) return true;
+  return (
     metadataLines.some(isPrimaryMetadataCandidate) ||
-    metadataLines.some(isPromotionMetadataCandidate);
-  if (!entryLike) return null;
-  if (titleIndex === -1) return malformedLearningRecord();
+    metadataLines.some(isPromotionMetadataCandidate)
+  );
+}
 
+function parseTitledLearningBlock(
+  lines: readonly string[],
+  titleIndex: number,
+  metadataLines: string[],
+  allowLegacyGlobalShape: boolean,
+): ParsedLearningBlock {
   const title = lines[titleIndex]?.trim().slice(4).trim();
   const metadata = parsePrimaryMetadata(metadataLines);
   if (!title || !metadata) return malformedLearningRecord(title || undefined);
 
   const body = lines
     .slice(titleIndex + 1)
-    .filter((l) => l.trim() !== "")
+    .filter((line) => line.trim() !== "")
     .join("\n")
     .trim();
   const promotion = parsePromotionEvidence(metadataLines);
-  const diagnostics: LearningDiagnostic[] = promotion.diagnosticCode
-    ? [
-        {
-          code: promotion.diagnosticCode,
-          title,
-          message:
-            promotion.diagnosticCode === "duplicate-promotion-metadata"
-              ? `Learning "${title}" contains more than one promotion metadata record.`
-              : `Learning "${title}" contains malformed promotion metadata.`,
-        },
-      ]
-    : [];
+  const entry: LearningEntry = {
+    category: metadata.category,
+    cwds: metadata.cwds,
+    exposures: metadata.exposures,
+    nonglobal: metadata.nonglobal,
+    title,
+    body,
+    ...(promotion.evidence ? { promotionEvidence: promotion.evidence } : {}),
+  };
+  const diagnostics = entryDiagnostics(entry, promotion, allowLegacyGlobalShape);
 
   return {
-    entry: {
-      category: metadata.category,
-      cwds: metadata.cwds,
-      exposures: metadata.exposures,
-      nonglobal: metadata.nonglobal,
-      title,
-      body,
-      ...(promotion.evidence ? { promotionEvidence: promotion.evidence } : {}),
-    },
+    ...(diagnostics.length === 0 ? { entry } : {}),
     diagnostics,
   };
 }
 
-/** Parse learnings storage into tolerant domain entries plus loss-bearing diagnostics. */
-export function parseLearningsDocument(content: string): ParsedLearningsDocument {
+function parseBlock(block: string, allowLegacyGlobalShape: boolean): ParsedLearningBlock | null {
+  const lines = block.trim().split("\n");
+  if (lines.length === 0) return null;
+
+  const titleIndex = lines.findIndex((line) => TITLE_CANDIDATE_RE.test(line.trim()));
+  const metadataLines = lines.slice(0, titleIndex === -1 ? lines.length : titleIndex);
+  if (!isLearningBlockCandidate(titleIndex, metadataLines)) return null;
+  if (titleIndex === -1) return malformedLearningRecord();
+  return parseTitledLearningBlock(lines, titleIndex, metadataLines, allowLegacyGlobalShape);
+}
+
+function parseLearningsDocumentWithMode(
+  content: string,
+  allowLegacyGlobalShape: boolean,
+): ParsedLearningsDocument {
   if (!content.trim()) return { entries: [], diagnostics: [] };
 
   const entries: LearningEntry[] = [];
@@ -321,7 +436,7 @@ export function parseLearningsDocument(content: string): ParsedLearningsDocument
 
     const isFirstNonEmptyBlock = !seenNonEmptyBlock;
     seenNonEmptyBlock = true;
-    const parsed = parseBlock(block);
+    const parsed = parseBlock(block, allowLegacyGlobalShape);
     if (!parsed) {
       if (isFirstNonEmptyBlock && isLearningsPreamble(block)) continue;
       diagnostics.push(orphanedLearningContent());
@@ -332,6 +447,16 @@ export function parseLearningsDocument(content: string): ParsedLearningsDocument
   }
 
   return { entries, diagnostics };
+}
+
+/** Parse canonical learnings storage into tolerant entries plus loss-bearing diagnostics. */
+export function parseLearningsDocument(content: string): ParsedLearningsDocument {
+  return parseLearningsDocumentWithMode(content, false);
+}
+
+/** Parse the legacy wildcard shapes accepted only during the v1 scope migration. */
+export function parseLegacyScopeMigrationDocument(content: string): ParsedLearningsDocument {
+  return parseLearningsDocumentWithMode(content, true);
 }
 
 /** Parse learnings.md content into structured entries for tolerant read-only use. */
@@ -358,7 +483,10 @@ export function renderEntryForContext(entry: LearningEntry): string {
  */
 export function renderEntry(entry: LearningEntry): string {
   const cwdStr = entry.cwds.join(", ");
-  const exposuresStr = entry.exposures.map((e) => `${e.date}@${e.sessionHash}`).join(",");
+  const exposuresStr =
+    entry.exposures.length === 0
+      ? "none"
+      : entry.exposures.map((e) => `${e.date}@${e.sessionHash}`).join(",");
   const nonglobalStr = entry.nonglobal ? " | nonglobal" : "";
 
   const meta = `<!-- ${entry.category} | cwd: ${cwdStr} | exposures: ${exposuresStr}${nonglobalStr} -->`;
@@ -380,7 +508,7 @@ export function renderLearnings(entries: LearningEntry[]): string {
 
 // --- Storage ---
 
-const LEARNINGS_FILE = "learnings.md";
+export const LEARNINGS_FILE = "learnings.md";
 
 export interface LoadedLearningsDocument extends ParsedLearningsDocument {
   readonly sourceText: string;
@@ -409,17 +537,52 @@ export class LearningsStoragePathError extends Error {
   }
 }
 
-function learningEntriesEqual(left: LearningEntry[], right: LearningEntry[]): boolean {
+export function learningEntriesEqual(
+  left: readonly LearningEntry[],
+  right: readonly LearningEntry[],
+): boolean {
   return left.length === right.length && Bun.deepEquals(left, right);
 }
 
-function renderValidatedLearnings(filePath: string, entries: LearningEntry[]): string {
-  const content = renderLearnings(entries);
+export type UniqueLearningMatch =
+  | { readonly status: "matched"; readonly index: number; readonly entry: LearningEntry }
+  | { readonly status: "stale" }
+  | { readonly status: "ambiguous" };
+
+/** Find one full persisted representation without selecting an arbitrary duplicate. */
+export function findUniqueLearningMatch(
+  entries: readonly LearningEntry[],
+  expected: LearningEntry,
+): UniqueLearningMatch {
+  const expectedContent = renderEntry(expected);
+  const matches = entries.flatMap((entry, index) =>
+    renderEntry(entry) === expectedContent ? [{ index, entry }] : [],
+  );
+  if (matches.length === 0) return { status: "stale" };
+  if (matches.length !== 1) return { status: "ambiguous" };
+  const match = matches[0];
+  return match ? { status: "matched", ...match } : { status: "stale" };
+}
+
+export function renderValidatedLearnings(
+  filePath: string,
+  entries: readonly LearningEntry[],
+): string {
+  const mutableEntries = [...entries];
+  if (mutableEntries.some((entry) => typeof entry !== "object" || entry === null)) {
+    throw new LearningsIntegrityError(filePath, [
+      {
+        code: "malformed-learning-record",
+        message: "Replacement learning records cannot be represented without data loss.",
+      },
+    ]);
+  }
+  const content = renderLearnings(mutableEntries);
   const parsed = parseLearningsDocument(content);
   if (parsed.diagnostics.length > 0) {
     throw new LearningsIntegrityError(filePath, parsed.diagnostics);
   }
-  if (!learningEntriesEqual(parsed.entries, entries)) {
+  if (!learningEntriesEqual(parsed.entries, mutableEntries)) {
     throw new LearningsIntegrityError(filePath, [
       {
         code: "malformed-learning-record",
@@ -435,12 +598,6 @@ export function assertLearningsRepresentable(filePath: string, entries: Learning
   renderValidatedLearnings(filePath, entries);
 }
 
-async function writeLearningFileAtomically(filePath: string, content: string): Promise<void> {
-  const tmpPath = join(dirname(filePath), `.${basename(filePath)}.tmp.${process.pid}`);
-  await Bun.write(tmpPath, content);
-  await rename(tmpPath, filePath);
-}
-
 async function loadLearningsDocument(filePath: string): Promise<LoadedLearningsDocument> {
   const file = Bun.file(filePath);
   if (!(await file.exists())) return { sourceText: "", entries: [], diagnostics: [] };
@@ -449,9 +606,16 @@ async function loadLearningsDocument(filePath: string): Promise<LoadedLearningsD
   return { sourceText, ...parseLearningsDocument(sourceText) };
 }
 
-async function loadDocumentForMutation(filePath: string): Promise<LoadedLearningsDocument> {
+export interface LoadedLearningSource {
+  readonly exists: boolean;
+  readonly sourceText: string;
+}
+
+export async function loadLearningSourceForMutation(
+  filePath: string,
+): Promise<LoadedLearningSource> {
   const status = await inspectLearningFileStatus(filePath);
-  if (status.kind === "missing") return { sourceText: "", entries: [], diagnostics: [] };
+  if (status.kind === "missing") return { exists: false, sourceText: "" };
   if (status.kind === "invalid") throw new LearningsStoragePathError(filePath, status.message);
 
   let sourceText: string;
@@ -461,11 +625,27 @@ async function loadDocumentForMutation(filePath: string): Promise<LoadedLearning
     throw new LearningsStoragePathError(filePath, "Learning storage file could not be read.");
   }
 
-  const document = { sourceText, ...parseLearningsDocument(sourceText) };
+  return { exists: true, sourceText };
+}
+
+export async function loadDocumentForMutation(filePath: string): Promise<LoadedLearningsDocument> {
+  const source = await loadLearningSourceForMutation(filePath);
+  if (!source.exists) return { sourceText: "", entries: [], diagnostics: [] };
+
+  const document = { sourceText: source.sourceText, ...parseLearningsDocument(source.sourceText) };
   if (document.diagnostics.length > 0) {
     throw new LearningsIntegrityError(filePath, document.diagnostics);
   }
   return document;
+}
+
+export async function writeLearningsUnderLock(
+  memoryDir: string,
+  entries: readonly LearningEntry[],
+): Promise<void> {
+  await mkdir(memoryDir, { recursive: true });
+  const filePath = join(memoryDir, LEARNINGS_FILE);
+  await replaceFileAtomically(filePath, renderValidatedLearnings(filePath, entries));
 }
 
 /**
@@ -487,19 +667,6 @@ export async function loadLearnings(memoryDir: string): Promise<LearningEntry[]>
   }
 }
 
-/**
- * Write the full learnings file atomically (temp file + rename).
- * Prevents data loss from crashes during write.
- */
-export async function writeLearnings(memoryDir: string, entries: LearningEntry[]): Promise<void> {
-  await loadLearningsForMutation(memoryDir);
-  await mkdir(memoryDir, { recursive: true });
-
-  const filePath = join(memoryDir, LEARNINGS_FILE);
-  const content = renderValidatedLearnings(filePath, entries);
-  await writeLearningFileAtomically(filePath, content);
-}
-
 /** Run an operation while holding the process-shared learnings lock. */
 export async function withLearningsLock<T>(
   memoryDir: string,
@@ -508,65 +675,6 @@ export async function withLearningsLock<T>(
 ): Promise<T> {
   await mkdir(memoryDir, { recursive: true });
   return await withDirectoryLock(join(memoryDir, ".learnings.lock"), operation, lockOptions);
-}
-
-/** Serialize a complete learnings read-modify-write transaction. */
-export async function mutateLearnings(
-  memoryDir: string,
-  mutation: (entries: LearningEntry[]) => LearningEntry[] | Promise<LearningEntry[]>,
-  lockOptions?: DirectoryLockOptions,
-): Promise<LearningEntry[]> {
-  return await withLearningsLock(
-    memoryDir,
-    async () => {
-      const { entries } = await loadLearningsForMutation(memoryDir);
-      const updated = await mutation(entries);
-      await writeLearnings(memoryDir, updated);
-      return updated;
-    },
-    lockOptions,
-  );
-}
-
-/** Replace a previously read snapshot only if no concurrent mutation changed it. */
-export async function replaceLearningsIfUnchanged(
-  memoryDir: string,
-  expected: LearningEntry[],
-  replacement: LearningEntry[],
-  beforeWrite?: () => Promise<void>,
-): Promise<boolean> {
-  return await withLearningsLock(memoryDir, async () => {
-    const { entries: current } = await loadLearningsForMutation(memoryDir);
-    if (!learningEntriesEqual(current, expected)) return false;
-
-    const filePath = join(memoryDir, LEARNINGS_FILE);
-    const content = renderValidatedLearnings(filePath, replacement);
-    await beforeWrite?.();
-    await loadDocumentForMutation(filePath);
-    await writeLearningFileAtomically(filePath, content);
-    return true;
-  });
-}
-
-export interface LearningRemovalResult {
-  readonly removed: boolean;
-  readonly entries: LearningEntry[];
-}
-
-/** Remove exactly one reviewed entry, provided its persisted representation has not changed. */
-export async function removeLearningIfUnchanged(
-  memoryDir: string,
-  expected: LearningEntry,
-): Promise<LearningRemovalResult> {
-  const expectedContent = renderEntry(expected);
-  let removed = false;
-  const entries = await mutateLearnings(memoryDir, (current) => {
-    const index = current.findIndex((entry) => renderEntry(entry) === expectedContent);
-    if (index === -1) return current;
-    removed = true;
-    return current.toSpliced(index, 1);
-  });
-  return { removed, entries };
 }
 
 // --- Scoring ---
@@ -588,7 +696,7 @@ function recencyScore(entry: LearningEntry, now: Date, windowDays: number): numb
 }
 
 function reinforcementScore(entry: LearningEntry): number {
-  return Math.min((entry.exposures.length - 1) / REINFORCEMENT_SATURATE, 1.0);
+  return Math.max(0, Math.min((entry.exposures.length - 1) / REINFORCEMENT_SATURATE, 1.0));
 }
 
 export function matchesCwd(entry: LearningEntry, cwd: string): boolean {
@@ -636,32 +744,6 @@ export function selectLearnings(
   return selected;
 }
 
-// --- Undo-and-Rewrite (opencode dedup) ---
-
-/**
- * Remove all contributions from a specific session hash.
- * - Entries where this session is the ONLY exposure -> removed entirely
- * - Entries with multiple exposures -> this session's exposure removed
- */
-export function undoSessionLearnings(
-  entries: LearningEntry[],
-  sessionHash: string,
-): LearningEntry[] {
-  return entries.reduce<LearningEntry[]>((acc, entry) => {
-    const hasSession = entry.exposures.some((e) => e.sessionHash === sessionHash);
-    if (!hasSession) {
-      acc.push(entry);
-      return acc;
-    }
-
-    const remaining = entry.exposures.filter((e) => e.sessionHash !== sessionHash);
-    if (remaining.length === 0) return acc;
-
-    acc.push({ ...entry, exposures: remaining });
-    return acc;
-  }, []);
-}
-
 // --- Reinforcement ---
 
 /** Merge learning scopes while preserving global scope as the canonical form. */
@@ -679,65 +761,24 @@ export function mergePromotionEvidence(
   if (evidence.length === 1) {
     const [item] = evidence;
     if (!item) return undefined;
-    return {
-      sourceCwds: [...item.sourceCwds],
-      exposures: item.exposures.map((exposure) => ({ ...exposure })),
-      reasons: [...item.reasons],
-    };
+    return normalizePromotionEvidence(item);
   }
 
-  const sourceCwds = [...new Set(evidence.flatMap((item) => item.sourceCwds))].sort();
+  const sourceCwds = normalizePersistedPaths(evidence.flatMap((item) => item.sourceCwds));
+  const excludedCwds = normalizePersistedPaths(evidence.flatMap((item) => item.excludedCwds));
   const exposuresByKey = new Map<string, Exposure>();
   for (const exposure of evidence.flatMap((item) => item.exposures)) {
     exposuresByKey.set(`${exposure.date}@${exposure.sessionHash}`, { ...exposure });
   }
   const exposures = [...exposuresByKey.values()].sort(
-    (a, b) => a.date.localeCompare(b.date) || a.sessionHash.localeCompare(b.sessionHash),
+    (a, b) => compareCodeUnits(a.date, b.date) || compareCodeUnits(a.sessionHash, b.sessionHash),
   );
   const presentReasons = new Set(evidence.flatMap((item) => item.reasons));
-  const reasons = PROMOTION_REASON_ORDER.filter((reason) => presentReasons.has(reason));
+  const reasons = PROMOTION_REASON_ORDER.filter((reason) => presentReasons.has(reason)).sort(
+    compareCodeUnits,
+  );
 
-  return { sourceCwds, exposures, reasons };
-}
-
-/**
- * Merge new learnings into existing ones.
- * Exact title match -> reinforce (add exposure, union CWDs).
- * No match -> append as new entry.
- */
-export function mergeNewLearnings(
-  existing: LearningEntry[],
-  extracted: LearningEntry[],
-): LearningEntry[] {
-  const result = [...existing];
-
-  for (const newEntry of extracted) {
-    const matchIndex = result.findIndex((e) => e.title === newEntry.title);
-
-    if (matchIndex === -1) {
-      result.push(newEntry);
-      continue;
-    }
-
-    const match = result[matchIndex];
-    if (!match) continue;
-
-    const mergedCwds = mergeLearningCwds(match.cwds, newEntry.cwds);
-    const mergedExposures = [...match.exposures, ...newEntry.exposures];
-    const promotionEvidence = mergePromotionEvidence(
-      match.promotionEvidence,
-      newEntry.promotionEvidence,
-    );
-
-    result[matchIndex] = {
-      ...match,
-      cwds: mergedCwds,
-      exposures: mergedExposures,
-      ...(promotionEvidence ? { promotionEvidence } : {}),
-    };
-  }
-
-  return result;
+  return { sourceCwds, excludedCwds, exposures, reasons };
 }
 
 // --- Shared quality criteria ---
@@ -776,7 +817,7 @@ const HIGH_QUALITY_PATTERNS = `\
  * Build the learnings extraction section for the summarization prompt.
  * Includes existing titles for exact-match reuse instruction.
  */
-export function buildExtractionPromptSection(existingTitles: string[]): string {
+export function buildExtractionPromptSection(existingTitles: readonly string[]): string {
   const titlesBlock =
     existingTitles.length > 0
       ? existingTitles.map((t) => `- ${t}`).join("\n")
@@ -802,7 +843,7 @@ character-for-character (this enables automatic reinforcement tracking):
 
 ${titlesBlock}
 
-If nothing in the transcript is worth persisting, return an empty Learnings section.
+If nothing in the transcript is worth persisting, return exactly \`None.\` under Learnings.
 The default is 0 learnings. Extract only when something genuinely surprising was learned.
 
 Format learnings as:
@@ -813,65 +854,165 @@ Format learnings as:
 
 Body text (1-3 sentences).
 
+Or, when there are no learnings:
+
+## Learnings
+
+None.
+
 Where category is one of: correction, preference, pattern, fact`;
 }
 
-/**
- * Parse learnings from the inference output's ## Learnings section.
- * Attaches session metadata to each extracted entry.
- */
-export function parseExtractedLearnings(
-  raw: string,
-  metadata: { date: string; cwd: string; sessionHash: string },
-): LearningEntry[] {
-  // Find the ## Learnings section
-  const learningsMatch = raw.match(/^## Learnings\s*$/m);
-  if (!learningsMatch || learningsMatch.index === undefined) return [];
+export interface SessionLearningDraft {
+  readonly category: LearningCategory;
+  readonly title: string;
+  readonly body: string;
+}
 
-  const learningsSection = raw.slice(learningsMatch.index + learningsMatch[0].length);
+export type ExtractedLearningsResult =
+  | { readonly status: "valid"; readonly entries: readonly SessionLearningDraft[] }
+  | { readonly status: "missing" }
+  | { readonly status: "malformed"; readonly issues: readonly string[] };
 
-  // Split on ### headings
-  const entryBlocks = learningsSection.split(/^### /m).filter((b) => b.trim());
+type LearningsSectionResult =
+  | { readonly status: "found"; readonly section: string }
+  | Extract<ExtractedLearningsResult, { readonly status: "missing" | "malformed" }>;
 
-  const entries: LearningEntry[] = [];
-
-  for (const block of entryBlocks) {
-    const lines = block.trim().split("\n");
-    const headerLine = lines[0];
-    if (!headerLine) continue;
-
-    // Parse (category) title
-    const headerMatch = headerLine.match(/^\((\w+)\)\s+(.+)$/);
-    if (!headerMatch) continue;
-
-    const [, categoryStr, title] = headerMatch;
-    if (!categoryStr || !title) continue;
-    if (!VALID_CATEGORIES.has(categoryStr)) continue;
-
-    const body = lines.slice(1).join("\n").trim();
-
-    entries.push({
-      category: categoryStr as LearningCategory,
-      cwds: [metadata.cwd],
-      exposures: [{ date: metadata.date, sessionHash: metadata.sessionHash }],
-      nonglobal: false,
-      title: title.trim(),
-      body,
-    });
+function extractLearningsSection(raw: string): LearningsSectionResult {
+  const headings = [...raw.matchAll(/^## Learnings[ \t]*$/gm)];
+  if (headings.length === 0) return { status: "missing" };
+  if (headings.length !== 1) {
+    return { status: "malformed", issues: ["Expected exactly one Learnings section."] };
   }
 
-  return entries;
+  const heading = headings[0];
+  if (!heading || heading.index === undefined) {
+    return { status: "malformed", issues: ["Learnings section position is unavailable."] };
+  }
+  const remainder = raw.slice(heading.index + heading[0].length);
+  const nextSectionOffset = remainder.search(/^##(?!#)(?:[ \t]+.*)?$/m);
+  return {
+    status: "found",
+    section: (nextSectionOffset === -1 ? remainder : remainder.slice(0, nextSectionOffset)).trim(),
+  };
+}
+
+type ParsedDraft =
+  | { readonly ok: true; readonly entry: SessionLearningDraft }
+  | { readonly ok: false; readonly issue: string };
+
+function parseLearningDraft(
+  section: string,
+  headings: readonly RegExpMatchArray[],
+  index: number,
+): ParsedDraft {
+  const heading = headings[index];
+  const headingText = heading?.[0].slice(3).trim() ?? "";
+  const parsedHeading = heading?.[0].match(/^###[ \t]+\((\w+)\)[ \t]+(.+?)[ \t]*$/);
+  if (!heading || !parsedHeading || !VALID_CATEGORIES.has(parsedHeading[1] ?? "")) {
+    return {
+      ok: false,
+      issue: `Invalid learning heading: ${headingText || heading?.[0] || "unknown"}`,
+    };
+  }
+  const title = parsedHeading[2]?.trim() ?? "";
+  if (!title) return { ok: false, issue: `Invalid learning heading: ${headingText}` };
+
+  const bodyStart = (heading.index ?? 0) + heading[0].length;
+  const bodyEnd = headings[index + 1]?.index ?? section.length;
+  return {
+    ok: true,
+    entry: {
+      category: parsedHeading[1] as LearningCategory,
+      title,
+      body: section.slice(bodyStart, bodyEnd).trim(),
+    },
+  };
+}
+
+function parseLearningDrafts(section: string): ExtractedLearningsResult {
+  if (section === "" || section === "None.") return { status: "valid", entries: [] };
+  const headings = [...section.matchAll(/^###(?!#)[^\r\n]*/gm)];
+  const firstHeading = headings[0];
+  if (
+    !firstHeading ||
+    firstHeading.index === undefined ||
+    section.slice(0, firstHeading.index).trim()
+  ) {
+    return { status: "malformed", issues: ["Learnings section contains unknown text."] };
+  }
+
+  const parsed = headings.map((_, index) => parseLearningDraft(section, headings, index));
+  const issues = parsed.flatMap((result) => (result.ok ? [] : [result.issue]));
+  if (issues.length > 0) return { status: "malformed", issues };
+  return {
+    status: "valid",
+    entries: parsed.flatMap((result) => (result.ok ? [result.entry] : [])),
+  };
+}
+
+/** Parse the complete, bounded ## Learnings section without keeping a valid subset. */
+export function parseExtractedLearnings(raw: string): ExtractedLearningsResult {
+  const section = extractLearningsSection(raw);
+  return section.status === "found" ? parseLearningDrafts(section.section) : section;
 }
 
 // --- Promotion ---
 
-const PROMOTION_CWD_THRESHOLD = 3;
+const SCOPE_REVIEW_SOURCE_THRESHOLD = 3;
 
-/** Find entries eligible for CWD-to-global promotion. */
-export function findPromotionCandidates(entries: LearningEntry[]): LearningEntry[] {
-  return entries.filter(
-    (e) => !e.nonglobal && !e.cwds.includes("*") && e.cwds.length >= PROMOTION_CWD_THRESHOLD,
-  );
+export interface LearningScopeGeneralizationResult {
+  readonly entries: LearningEntry[];
+  readonly generalized: number;
+}
+
+/** Apply the pure hierarchy transition to every entry without mutating the input array. */
+export function generalizeLearningScopes(
+  entries: readonly LearningEntry[],
+  forbiddenRoots: readonly string[],
+): LearningScopeGeneralizationResult {
+  let generalized = 0;
+  const nextEntries = entries.map((entry) => {
+    const transition = generalizeLearningScope(
+      {
+        cwds: entry.cwds,
+        nonglobal: entry.nonglobal,
+        ...(entry.promotionEvidence ? { promotionEvidence: entry.promotionEvidence } : {}),
+      },
+      entry.exposures,
+      forbiddenRoots,
+    );
+    if (!transition.ok) {
+      throw new Error(`Cannot generalize learning "${entry.title}": ${transition.issue.message}`);
+    }
+    if (!transition.changed) return entry;
+
+    generalized++;
+    const { promotionEvidence: _previousEvidence, ...entryWithoutEvidence } = entry;
+    return {
+      ...entryWithoutEvidence,
+      cwds: [...transition.state.cwds],
+      nonglobal: transition.state.nonglobal,
+      ...(transition.state.promotionEvidence
+        ? { promotionEvidence: transition.state.promotionEvidence }
+        : {}),
+    };
+  });
+
+  return { entries: nextEntries, generalized };
+}
+
+/** Find entries eligible for interactive ancestor or global scope review. */
+export function findScopeReviewCandidates(entries: LearningEntry[]): LearningEntry[] {
+  return entries.filter((entry) => {
+    if (entry.nonglobal || entry.cwds.includes("*")) return false;
+    if ((entry.promotionEvidence?.excludedCwds.length ?? 0) > 0) return false;
+
+    const positiveCwds = entry.promotionEvidence
+      ? effectiveSourceCwds(entry.promotionEvidence)
+      : entry.cwds;
+    return independentPositiveRoots(positiveCwds).length >= SCOPE_REVIEW_SOURCE_THRESHOLD;
+  });
 }
 
 /** Promote an entry to global while preserving the evidence for its former scope. */
@@ -879,11 +1020,13 @@ export function promoteToGlobal(
   entry: LearningEntry,
   reason: PromotionReason,
 ): LearningEntry & { readonly promotionEvidence: PromotionEvidence } {
-  const promotionEvidence = entry.promotionEvidence ?? {
-    sourceCwds: [...entry.cwds],
-    exposures: entry.exposures.map((exposure) => ({ ...exposure })),
-    reasons: [reason],
-  };
+  const existing = entry.promotionEvidence;
+  const promotionEvidence = normalizePromotionEvidence({
+    sourceCwds: existing?.sourceCwds ?? [...entry.cwds],
+    excludedCwds: existing?.excludedCwds ?? [],
+    exposures: existing?.exposures ?? entry.exposures.map((exposure) => ({ ...exposure })),
+    reasons: [...(existing?.reasons ?? []), reason],
+  });
 
   return { ...entry, cwds: ["*"], promotionEvidence };
 }
@@ -1061,16 +1204,15 @@ export function sortByExposures(entries: LearningEntry[]): LearningEntry[] {
 
 export const ARCHIVE_FILE = "learnings-archive.md";
 
-/** Append archived entries to learnings-archive.md. Atomic write via temp + rename. */
-export async function appendToArchive(memoryDir: string, entries: LearningEntry[]): Promise<void> {
+export async function appendToArchiveUnderLock(
+  memoryDir: string,
+  existing: readonly LearningEntry[],
+  entries: readonly LearningEntry[],
+): Promise<void> {
   if (entries.length === 0) return;
-
   const archivePath = join(memoryDir, ARCHIVE_FILE);
-  const { entries: existing } = await loadDocumentForMutation(archivePath);
-
   const merged = [...existing, ...entries];
-  const content = renderValidatedLearnings(archivePath, merged);
-  await writeLearningFileAtomically(archivePath, content);
+  await replaceFileAtomically(archivePath, renderValidatedLearnings(archivePath, merged));
 }
 
 // Re-export for hooks

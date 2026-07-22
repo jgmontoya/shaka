@@ -4,30 +4,29 @@
  *
  * Pure decision function determines when to run consolidation + pruning.
  * Orchestration function (`runMaintenance`) runs as a sequential step
- * in the session-end worker while holding the shared learnings lock.
+ * in the session-end worker and publishes against its prepared snapshot.
  *
  * State tracked in .last-maintenance JSON file; audit trail in JSONL log.
  */
 
 import { appendFile, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { inference } from "../inference";
 import type { ProviderName } from "../providers/types";
 import { runFullConsolidation } from "./consolidation";
+import { normalizeCwdPath } from "./learning-scope";
+import { commitConsolidationIfUnchanged, prepareLearningStoreForMutation } from "./learning-store";
 import {
   type LearningEntry,
-  appendToArchive,
   assertLearningsRepresentable,
   buildRankingPrompt,
-  findPromotionCandidates,
-  loadLearningsForMutation,
+  generalizeLearningScopes,
   matchesCwd,
   parseRankingOutput,
-  promoteToGlobal,
   selectLearnings,
-  withLearningsLock,
-  writeLearnings,
 } from "./learnings";
+import { withDirectoryLock } from "./lock";
 
 // --- Types ---
 
@@ -46,8 +45,8 @@ export interface MaintenanceLogEntry {
   readonly trigger: string;
   readonly cwd: string;
   readonly condensed: number;
+  readonly generalized: number;
   readonly pruned: number;
-  readonly promoted: number;
   readonly before: number;
   readonly after: number;
 }
@@ -59,6 +58,7 @@ const VOLUME_TRIGGER = 10;
 const AUTO_PRUNE_MAX = 3;
 const AUTO_PRUNE_EXPOSURE_FLOOR = 2;
 const AUTO_PRUNE_AGE_DAYS = 7;
+const MAINTENANCE_LOCK = ".maintenance.lock";
 
 // --- Decision logic ---
 
@@ -134,7 +134,7 @@ export interface MaintenanceResult {
   readonly skipped: boolean;
   readonly reason?: string;
   readonly condensed?: number;
-  readonly promoted?: number;
+  readonly generalized?: number;
   readonly pruned?: number;
   readonly before?: number;
   readonly after?: number;
@@ -160,31 +160,14 @@ async function consolidate(
   entries: LearningEntry[],
   memoryDir: string,
   provider?: ProviderName,
-): Promise<{ entries: LearningEntry[]; condensed: number }> {
+): Promise<{ entries: LearningEntry[]; archived: LearningEntry[]; condensed: number }> {
   const result = await runFullConsolidation(entries, provider);
   assertLearningsRepresentable(join(memoryDir, "learnings.md"), result.entries);
-
-  if (result.archived.length > 0) {
-    await appendToArchive(memoryDir, result.archived);
-  }
-
-  return { entries: result.entries, condensed: result.compoundsCreated };
-}
-
-/** Promote entries appearing in 3+ CWDs to global and retain their prior scope evidence. */
-function autoPromote(entries: LearningEntry[]): { entries: LearningEntry[]; promoted: number } {
-  const candidates = findPromotionCandidates(entries);
-  const result = [...entries];
-  let promoted = 0;
-
-  for (const candidate of candidates) {
-    const idx = result.findIndex((e) => e === candidate);
-    if (idx === -1) continue;
-    result[idx] = promoteToGlobal(candidate, "automatic-cross-project-threshold");
-    promoted++;
-  }
-
-  return { entries: result, promoted };
+  return {
+    entries: result.entries,
+    archived: result.archived,
+    condensed: result.compoundsCreated,
+  };
 }
 
 /** Filter entries eligible for auto-prune ranking. */
@@ -192,6 +175,7 @@ function findPruneEligible(entries: LearningEntry[], cwd: string, now: Date): Le
   const ageThreshold = AUTO_PRUNE_AGE_DAYS * 24 * 60 * 60 * 1000;
 
   return entries.filter((e) => {
+    if (e.promotionEvidence || e.nonglobal) return false;
     if (!matchesCwd(e, cwd)) return false;
     if (e.exposures.length >= AUTO_PRUNE_EXPOSURE_FLOOR) return false;
 
@@ -241,11 +225,11 @@ async function findPruneTargets(
 // --- Orchestration ---
 
 /**
- * Run the maintenance pipeline: consolidation, auto-promote, auto-prune.
+ * Run the maintenance pipeline: consolidation and scope-safe auto-prune.
  * Called by the session-end worker after learnings extraction.
  *
  * Fail-open: inference failures are caught and logged, never crash.
- * Single write: all mutations are applied in-memory, written once at the end.
+ * Single commit: all mutations are applied in memory and published together at the end.
  */
 export async function runMaintenance(
   memoryDir: string,
@@ -253,8 +237,11 @@ export async function runMaintenance(
   newLearningsExtracted: number,
   opts?: { now?: Date; provider?: ProviderName },
 ): Promise<MaintenanceResult> {
-  return await withLearningsLock(memoryDir, () =>
-    runMaintenanceTransaction(memoryDir, cwd, newLearningsExtracted, opts),
+  const home = normalizeCwdPath(homedir());
+  const forbiddenRoots = home ? [home] : [];
+  await mkdir(memoryDir, { recursive: true });
+  return await withDirectoryLock(join(memoryDir, MAINTENANCE_LOCK), () =>
+    runMaintenanceTransaction(memoryDir, cwd, newLearningsExtracted, forbiddenRoots, opts),
   );
 }
 
@@ -262,11 +249,14 @@ async function runMaintenanceTransaction(
   memoryDir: string,
   cwd: string,
   newLearningsExtracted: number,
+  forbiddenRoots: readonly string[],
   opts?: { now?: Date; provider?: ProviderName },
 ): Promise<MaintenanceResult> {
   const { now, provider } = opts ?? {};
   const currentTime = now ?? new Date();
-  const document = await loadLearningsForMutation(memoryDir);
+  const readiness = await prepareLearningStoreForMutation(memoryDir, ["active", "archive"]);
+  const document = readiness.active?.document;
+  if (!document) throw new Error("Active learning readiness was not established");
   let entries = document.entries;
   const state = await readMaintenanceState(memoryDir);
   const decision = shouldRunMaintenance(entries, cwd, state, newLearningsExtracted, currentTime);
@@ -286,17 +276,15 @@ async function runMaintenanceTransaction(
     () => consolidate(entries, memoryDir, provider),
     {
       entries,
+      archived: [],
       condensed: 0,
     },
   );
   entries = condensation.entries;
 
-  // Step 2: Auto-promote
-  const promotion = await failOpen("auto-promote", async () => autoPromote(entries), {
-    entries,
-    promoted: 0,
-  });
-  entries = promotion.entries;
+  // Step 2: Deterministic hierarchical generalization
+  const generalization = generalizeLearningScopes(entries, forbiddenRoots);
+  entries = generalization.entries;
 
   // Step 3: Auto-prune (only when budget pressure exists)
   let prunedCount = 0;
@@ -312,8 +300,14 @@ async function runMaintenanceTransaction(
     }
   }
 
-  // Single write point for all mutations
-  await writeLearnings(memoryDir, entries);
+  const committed = await commitConsolidationIfUnchanged(memoryDir, {
+    expectedActive: document.entries,
+    activeReplacement: entries,
+    archiveEntries: condensation.archived,
+  });
+  if (!committed) {
+    return { skipped: true, reason: "learnings changed during maintenance" };
+  }
 
   const afterCount = entries.length;
   const trigger = decision.action === "consolidate-and-prune" ? "budget-pressure" : "routine";
@@ -329,8 +323,8 @@ async function runMaintenanceTransaction(
     trigger,
     cwd,
     condensed: condensation.condensed,
+    generalized: generalization.generalized,
     pruned: prunedCount,
-    promoted: promotion.promoted,
     before: beforeCount,
     after: afterCount,
   });
@@ -338,7 +332,7 @@ async function runMaintenanceTransaction(
   return {
     skipped: false,
     condensed: condensation.condensed,
-    promoted: promotion.promoted,
+    generalized: generalization.generalized,
     pruned: prunedCount,
     before: beforeCount,
     after: afterCount,

@@ -195,6 +195,7 @@ shaka memory search <query>   # Search this project's summaries, learnings, and 
 shaka memory search <query> --all # Search memory across every project
 shaka memory stats            # Show learnings count, exposures, and category breakdown
 shaka memory review           # Browse and manage learnings interactively
+shaka memory review --cwd ..  # Correct a learning's project applicability
 shaka memory review --prune   # AI-assisted quality assessment of learnings
 shaka memory consolidate      # Deduplicate, resolve contradictions, and condense related learnings
 shaka memory compile          # Compile session knowledge into topic pages
@@ -562,10 +563,14 @@ Persistent context that survives sessions. The memory system captures what happe
 - **Rolling summaries** — Daily, weekly, and monthly rollups compress session history into persistent per-project digests, loaded into context at session start
 - **Search** - `shaka memory search <query>` searches the current project's summaries, active and archived learnings, and compiled knowledge. Global learnings remain visible. Pass `--all` for an explicit cross-project search. The same scope rules apply to the MCP tool, which accepts `all_projects: true`.
 - **Knowledge compilation** — `shaka memory compile` extracts reusable project knowledge from session summaries into topic pages and a loadable index
-- **Review** — `shaka memory review` provides an interactive TUI for browsing, filtering, and deleting learnings. `--prune` adds AI-assisted quality scoring to flag low-value entries
-- **Consolidation** — `shaka memory consolidate` runs three passes: deduplication, contradiction resolution, and condensation. Condensation merges related high-exposure learnings into compound entries, freeing context budget. Source entries are archived (searchable, recoverable)
-- **Automatic maintenance** — After each session, the system checks time (24h) and volume (10+ new learnings) gates. When triggered, it runs consolidation, auto-promotes cross-project learnings to global scope, and conditionally prunes lowest-quality entries under budget pressure (capped at 3 per run, with exposure and age safety floors). Configurable via `memory.maintenance.enabled`
+- **Review** - `shaka memory review` provides an interactive TUI for browsing, deleting, and correcting learning scope. Excluding a CWD rewrites the active `cwds`; including it reverses the stored exclusion. Use `--cwd <path>` to review another project. `--prune` adds AI-assisted quality scoring to flag low-value entries.
+- **Consolidation** - `shaka memory consolidate` runs duplicate, contradiction, and condensation passes, then applies deterministic scope generalization. Interactive runs may offer a broader ancestor or global scope after the automatic step. Unattended runs apply the deterministic step and skip the prompts. Condensation archives its source entries so they remain searchable and recoverable.
+- **Automatic maintenance** - After each session, the system checks time (24h) and volume (10+ new learnings) gates. When triggered, it runs consolidation, applies deterministic scope generalization, and may prune low-quality entries under budget pressure (capped at 3 per run, with exposure and age safety floors). Learnings with scope evidence or `nonglobal: true` are excluded from lossy pruning and condensation. Configurable via `memory.maintenance.enabled`.
 - **Security event logging** — The security validator writes logs to `memory/security/`
+
+Active `cwds` is the only runtime applicability rule. Promotion metadata records positive source CWDs and exclusions for review and deterministic consolidation; readers do not interpret it as a second filter. Legacy global learnings stay global while migration backfills every source CWD that can be recovered without guessing.
+
+Automatic generalization requires positive evidence in three distinct immediate child branches. Three repositories under one project select the project ancestor; three projects under one company select the company ancestor. A qualifying filesystem root becomes global (`cwds: ["*"]`). Separate qualifying clusters remain a forest beside exact outliers, and repeated evidence inside one branch does not widen the scope. Shaka does not select the user's home directory automatically.
 
 **Retrieval policy:** Shaka keeps substring search and the complete knowledge index as the baseline. A candidate retrieval backend must retrieve the corpus's known zero-overlap paraphrase or reduce separately measured production context cost without weakening exact lookup, project scope, archive visibility, evidence paths, result limits, or read-only behavior.
 

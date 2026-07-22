@@ -109,27 +109,42 @@ export {
 export {
   type LearningEntry,
   type LearningCategory,
+  type ExtractedLearningsResult,
   type Exposure,
+  type SessionLearningDraft,
   ARCHIVE_FILE,
   parseLearnings,
   renderEntry,
   renderEntryForContext,
   renderLearnings,
   loadLearnings,
-  writeLearnings,
-  mutateLearnings,
-  removeLearningIfUnchanged,
-  replaceLearningsIfUnchanged,
   withLearningsLock,
-  appendToArchive,
   scoreEntry,
   selectLearnings,
-  undoSessionLearnings,
-  mergeNewLearnings,
   buildExtractionPromptSection,
   parseExtractedLearnings,
   hashSessionId,
 } from "./memory/learnings";
+
+export {
+  type LearningRemovalResult,
+  type LearningUpdateResult,
+  prepareLearningStoreForMutation,
+  writeLearnings,
+  mutateLearnings,
+  updateLearningIfUnchanged,
+  removeLearningIfUnchanged,
+  replaceLearningsIfUnchanged,
+  appendToArchive,
+} from "./memory/learning-store";
+
+export {
+  type SessionRewriteContext,
+  type SessionRewriteCounts,
+  type SessionRewriteResult,
+  rewriteSessionLearnings,
+  validateSessionRewriteInput,
+} from "./memory/session-rewrite";
 
 export {
   type InferenceOptions,

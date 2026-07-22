@@ -1,14 +1,14 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { mutateLearnings, writeLearnings } from "../../../src/memory/learning-store";
 import type { LearningEntry } from "../../../src/memory/learnings";
 import {
   buildRankingPrompt,
   loadLearnings,
-  mutateLearnings,
   parseRankingOutput,
   renderLearnings,
-  writeLearnings,
 } from "../../../src/memory/learnings";
 import {
   appendMaintenanceLog,
@@ -16,15 +16,17 @@ import {
   shouldRunMaintenance,
   writeMaintenanceState,
 } from "../../../src/memory/maintenance";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
     category: overrides.category ?? "correction",
-    cwds: overrides.cwds ?? ["/projects/myapp"],
+    cwds: overrides.cwds ?? testCwds("/projects/myapp"),
     exposures: overrides.exposures ?? [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
     nonglobal: overrides.nonglobal ?? false,
     title: overrides.title ?? "Use Bun.file() instead of fs.readFile()",
     body: overrides.body ?? "This project uses Bun runtime.",
+    ...(overrides.promotionEvidence ? { promotionEvidence: overrides.promotionEvidence } : {}),
   };
 }
 
@@ -35,7 +37,7 @@ describe("shouldRunMaintenance", () => {
     const entries = [makeEntry()];
     const state = { lastRun: "2026-03-01T00:00:00Z", entryCountAtLastRun: 1 };
 
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", state, 0);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), state, 0);
 
     expect(decision).toEqual({ action: "skip", reason: "no new learnings" });
   });
@@ -52,12 +54,12 @@ describe("shouldRunMaintenance", () => {
         body: `This is a detailed body for entry ${i}. It contains enough text to consume budget. `.repeat(
           3,
         ),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
     );
 
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", state, 2, now);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), state, 2, now);
 
     expect(decision.action).toBe("consolidate-and-prune");
   });
@@ -71,11 +73,11 @@ describe("shouldRunMaintenance", () => {
       makeEntry({
         title: `Short Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     );
 
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", state, 1, now);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), state, 1, now);
 
     expect(decision).toEqual({ action: "consolidate-only" });
   });
@@ -89,11 +91,11 @@ describe("shouldRunMaintenance", () => {
       makeEntry({
         title: `Short Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     );
 
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", state, 3, now);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), state, 3, now);
 
     // Volume gate met (15 - 5 = 10 >= 10), should not skip
     expect(decision.action).not.toBe("skip");
@@ -106,12 +108,12 @@ describe("shouldRunMaintenance", () => {
       makeEntry({
         title: `Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     );
 
     // null state means never run before — time gate passes (hours since epoch >> 24)
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", null, 1, now);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), null, 1, now);
 
     expect(decision.action).not.toBe("skip");
   });
@@ -121,10 +123,10 @@ describe("shouldRunMaintenance", () => {
     const now = new Date("2026-03-30T12:00:00Z");
     const state = { lastRun: "2026-03-30T00:00:00Z", entryCountAtLastRun: 10 };
     const entries = Array.from({ length: 15 }, (_, i) =>
-      makeEntry({ title: `Entry ${i}`, cwds: ["/projects/myapp"] }),
+      makeEntry({ title: `Entry ${i}`, cwds: testCwds("/projects/myapp") }),
     );
 
-    const decision = shouldRunMaintenance(entries, "/projects/myapp", state, 2, now);
+    const decision = shouldRunMaintenance(entries, testCwd("/projects/myapp"), state, 2, now);
 
     expect(decision).toEqual({ action: "skip", reason: "gates not met" });
   });
@@ -132,7 +134,7 @@ describe("shouldRunMaintenance", () => {
 
 // --- State file ---
 
-const testMemoryDir = "/tmp/shaka-test-maintenance";
+const testMemoryDir = join(tmpdir(), "shaka-test-maintenance");
 
 describe("readMaintenanceState", () => {
   beforeEach(async () => {
@@ -195,20 +197,20 @@ describe("appendMaintenanceLog", () => {
     const entry1 = {
       timestamp: "2026-03-30T12:00:00Z",
       trigger: "time",
-      cwd: "/projects/myapp",
+      cwd: testCwd("/projects/myapp"),
       condensed: 4,
+      generalized: 2,
       pruned: 2,
-      promoted: 1,
       before: 45,
       after: 40,
     };
     const entry2 = {
       timestamp: "2026-03-31T12:00:00Z",
       trigger: "volume",
-      cwd: "/projects/myapp",
+      cwd: testCwd("/projects/myapp"),
       condensed: 0,
+      generalized: 0,
       pruned: 0,
-      promoted: 0,
       before: 40,
       after: 40,
     };
@@ -323,7 +325,8 @@ RANK 2 [3] — second worst`;
 
 // --- runMaintenance ---
 
-const maintenanceTestDir = "/tmp/shaka-test-run-maintenance";
+const maintenanceTestDir = join(tmpdir(), "shaka-test-run-maintenance");
+const CONCURRENCY_OBSERVATION_MS = 250;
 
 describe("runMaintenance", () => {
   beforeEach(async () => {
@@ -342,7 +345,7 @@ describe("runMaintenance", () => {
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 0);
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 0);
 
     expect(result).toEqual({ skipped: true, reason: "no new learnings" });
   });
@@ -365,7 +368,7 @@ Body.
     const { runMaintenance } = await import("../../../src/memory/maintenance");
 
     await expect(
-      runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+      runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
         now: new Date("2026-03-30T12:00:00Z"),
       }),
     ).rejects.toThrow("promotion metadata");
@@ -377,14 +380,14 @@ Body.
     expect(await Bun.file(join(maintenanceTestDir, "learnings-archive.md")).exists()).toBe(false);
   });
 
-  test("backs up the original learnings source without canonicalizing it", async () => {
+  test("preserves legacy source bytes before writing the operational backup", async () => {
     const raw = `# Learnings
 
 Custom header retained by the backup.
 
 ---
 
-<!-- correction | cwd: /projects/myapp | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/projects/myapp")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Project entry
 
@@ -393,11 +396,16 @@ Body.
     await Bun.write(join(maintenanceTestDir, "learnings.md"), raw);
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+    await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
       now: new Date("2026-03-30T12:00:00Z"),
     });
 
-    expect(await Bun.file(join(maintenanceTestDir, "learnings.backup.md")).text()).toBe(raw);
+    expect(
+      await Bun.file(join(maintenanceTestDir, ".learning-scope-migration-v1.active.md")).text(),
+    ).toBe(raw);
+    expect(await Bun.file(join(maintenanceTestDir, "learnings.backup.md")).text()).toBe(
+      await Bun.file(join(maintenanceTestDir, "learnings.md")).text(),
+    );
   });
 
   test("runs condensation and writes backup when decision is consolidate-only", async () => {
@@ -413,7 +421,7 @@ Body.
       makeEntry({
         title: `Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${i}a00` },
           { date: "2026-03-05", sessionHash: `hash${i}b00` },
@@ -423,7 +431,7 @@ Body.
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     expect(result.skipped).toBe(false);
     // Backup should exist
@@ -431,7 +439,7 @@ Body.
     expect(await backupFile.exists()).toBe(true);
   });
 
-  test("serializes learning extraction behind an active maintenance run", async () => {
+  test("does not block extraction and skips a stale maintenance proposal", async () => {
     let releaseInference!: () => void;
     const inferenceRelease = new Promise<void>((resolve) => {
       releaseInference = resolve;
@@ -461,25 +469,92 @@ Body.
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const maintenance = runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+    const maintenance = runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
       now: new Date("2026-03-30T12:00:00Z"),
     });
     await inferenceStart;
 
-    let extractionFinished = false;
     const extraction = mutateLearnings(maintenanceTestDir, (current) => {
-      extractionFinished = true;
       return [...current, makeEntry({ title: "Concurrent extraction" })];
     });
-    await Bun.sleep(20);
-    expect(extractionFinished).toBe(false);
+
+    const extractionFinishedWhileInferenceWasPending = await Promise.race([
+      extraction.then(() => true),
+      Bun.sleep(CONCURRENCY_OBSERVATION_MS).then(() => false),
+    ]);
 
     releaseInference();
-    await Promise.all([maintenance, extraction]);
+    const [maintenanceResult] = await Promise.all([maintenance, extraction]);
 
+    expect(extractionFinishedWhileInferenceWasPending).toBe(true);
+    expect(maintenanceResult).toEqual({
+      skipped: true,
+      reason: "learnings changed during maintenance",
+    });
+    expect(await readMaintenanceState(maintenanceTestDir)).toBeNull();
+    expect(await Bun.file(join(maintenanceTestDir, "maintenance.log")).exists()).toBe(false);
     expect((await loadLearnings(maintenanceTestDir)).map((entry) => entry.title)).toContain(
       "Concurrent extraction",
     );
+  });
+
+  test("serializes automatic maintenance attempts without duplicating inference", async () => {
+    let releaseInference!: () => void;
+    const inferenceRelease = new Promise<void>((resolve) => {
+      releaseInference = resolve;
+    });
+    let firstInferenceStarted!: () => void;
+    const firstInferenceStart = new Promise<void>((resolve) => {
+      firstInferenceStarted = resolve;
+    });
+    let secondInferenceStarted!: () => void;
+    const secondInferenceStart = new Promise<void>((resolve) => {
+      secondInferenceStarted = resolve;
+    });
+    let inferenceCalls = 0;
+    mock.module("../../../src/inference", () => ({
+      inference: async () => {
+        inferenceCalls += 1;
+        if (inferenceCalls === 1) firstInferenceStarted();
+        if (inferenceCalls === 2) secondInferenceStarted();
+        await inferenceRelease;
+        return { success: true, text: "NO CLUSTERS" };
+      },
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const entries = Array.from({ length: 5 }, (_, i) =>
+      makeEntry({
+        title: `Entry ${i}`,
+        exposures: [
+          { date: "2026-03-01", sessionHash: `hash${i}a00` },
+          { date: "2026-03-05", sessionHash: `hash${i}b00` },
+        ],
+      }),
+    );
+    await writeLearnings(maintenanceTestDir, entries);
+
+    const first = runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+    await firstInferenceStart;
+
+    const second = runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
+      now: new Date("2026-03-30T12:01:00Z"),
+    });
+    const duplicateInferenceStarted = await Promise.race([
+      secondInferenceStart.then(() => true),
+      Bun.sleep(CONCURRENCY_OBSERVATION_MS).then(() => false),
+    ]);
+
+    releaseInference();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(duplicateInferenceStarted).toBe(false);
+    expect(inferenceCalls).toBe(1);
+    expect(firstResult.skipped).toBe(false);
+    expect(secondResult).toEqual({ skipped: true, reason: "gates not met" });
   });
 
   test("updates state file after successful run", async () => {
@@ -494,13 +569,13 @@ Body.
       makeEntry({
         title: `Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     const state = await readMaintenanceState(maintenanceTestDir);
     expect(state).not.toBeNull();
@@ -520,23 +595,23 @@ Body.
       makeEntry({
         title: `Entry ${i}`,
         body: "Brief.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     const logContent = await Bun.file(join(maintenanceTestDir, "maintenance.log")).text();
     const logEntry = JSON.parse(logContent.trim());
     expect(logEntry.timestamp).toBe("2026-03-30T12:00:00.000Z");
-    expect(logEntry.cwd).toBe("/projects/myapp");
+    expect(logEntry.cwd).toBe(testCwd("/projects/myapp"));
     expect(logEntry.before).toBe(5);
     expect(logEntry.after).toBe(5);
   });
 
-  test("auto-promotes entries appearing in 3+ CWDs without user prompt", async () => {
+  test("routine maintenance generalizes three child branches to their parent", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
       hasInferenceProvider: async () => false,
@@ -545,69 +620,93 @@ Body.
     const { runMaintenance } = await import("../../../src/memory/maintenance");
     const { loadLearnings: loadL } = await import("../../../src/memory/learnings");
 
-    // Entry appears in 3 CWDs and is not nonglobal -> should be auto-promoted
     const entries = [
       makeEntry({
         title: "Cross-project pattern",
-        cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
+        cwds: testCwds("/projects/alpha", "/projects/beta", "/projects/gamma"),
         nonglobal: false,
       }),
       makeEntry({
         title: "Single project entry",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
       }),
     ];
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, { now });
 
-    expect(result.promoted).toBe(1);
+    expect(result.generalized).toBe(1);
+    expect(result).not.toHaveProperty("promoted");
 
     const final = await loadL(maintenanceTestDir);
-    const promoted = final.find((e) => e.title === "Cross-project pattern");
-    expect(promoted).toBeDefined();
-    expect(promoted!.cwds).toEqual(["*"]);
+    expect(final.find((entry) => entry.title === "Cross-project pattern")).toMatchObject({
+      cwds: testCwds("/projects"),
+      promotionEvidence: {
+        sourceCwds: testCwds("/projects/alpha", "/projects/beta", "/projects/gamma"),
+        reasons: ["automatic-hierarchical-generalization"],
+      },
+    });
+    const log = JSON.parse(
+      (await Bun.file(join(maintenanceTestDir, "maintenance.log")).text()).trim(),
+    );
+    expect(log.generalized).toBe(1);
+    expect(log).not.toHaveProperty("promoted");
   });
 
-  test("persists automatic promotion evidence with the global learning", async () => {
+  test("repeated exposures at one CWD do not widen during maintenance", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
       hasInferenceProvider: async () => false,
     }));
 
     const { runMaintenance } = await import("../../../src/memory/maintenance");
-    const sourceEntry = makeEntry({
-      title: "Cross-project pattern",
-      body: "Use one shared boundary in every project.",
-      category: "pattern",
-      cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
+    const entry = makeEntry({
+      cwds: testCwds("/projects/myapp"),
       exposures: [
-        { date: "2026-03-01", sessionHash: "alpha123" },
-        { date: "2026-03-02", sessionHash: "beta456" },
+        { date: "2026-03-01", sessionHash: "aaaa1111" },
+        { date: "2026-03-02", sessionHash: "bbbb2222" },
+        { date: "2026-03-03", sessionHash: "cccc3333" },
       ],
     });
-    await writeLearnings(maintenanceTestDir, [sourceEntry]);
+    await writeLearnings(maintenanceTestDir, [entry]);
 
-    await runMaintenance(maintenanceTestDir, "/projects/alpha", 1, {
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
       now: new Date("2026-03-30T12:00:00Z"),
     });
 
-    const [promoted] = await loadLearnings(maintenanceTestDir);
-    expect(promoted?.cwds).toEqual(["*"]);
-    expect(promoted?.promotionEvidence).toEqual({
-      sourceCwds: sourceEntry.cwds,
-      exposures: sourceEntry.exposures,
-      reasons: ["automatic-cross-project-threshold"],
-    });
-
-    const logContent = await Bun.file(join(maintenanceTestDir, "maintenance.log")).text();
-    const logEntry = JSON.parse(logContent.trim());
-    expect(logEntry.promoted).toBe(1);
-    expect(logEntry).not.toHaveProperty("promotions");
+    expect(result.generalized).toBe(0);
+    expect(await loadLearnings(maintenanceTestDir)).toEqual([entry]);
   });
 
-  test("retains promotion evidence when maintenance logging fails", async () => {
+  test("an unchanged second maintenance pass reports no generalization", async () => {
+    mock.module("../../../src/inference", () => ({
+      inference: async () => ({ success: true, text: "NO CLUSTERS" }),
+      hasInferenceProvider: async () => false,
+    }));
+
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    await writeLearnings(maintenanceTestDir, [
+      makeEntry({
+        cwds: testCwds("/projects/alpha", "/projects/beta", "/projects/gamma"),
+      }),
+    ]);
+
+    const first = await runMaintenance(maintenanceTestDir, testCwd("/projects/alpha"), 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+    const second = await runMaintenance(maintenanceTestDir, testCwd("/projects/alpha"), 1, {
+      now: new Date("2026-03-31T13:00:00Z"),
+    });
+
+    expect(first.generalized).toBe(1);
+    expect(second.generalized).toBe(0);
+    expect((await loadLearnings(maintenanceTestDir))[0]?.promotionEvidence?.reasons).toEqual([
+      "automatic-hierarchical-generalization",
+    ]);
+  });
+
+  test("a logging failure does not undo the already-protected active write", async () => {
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: "NO CLUSTERS" }),
       hasInferenceProvider: async () => false,
@@ -616,7 +715,7 @@ Body.
     const { runMaintenance } = await import("../../../src/memory/maintenance");
     const sourceEntry = makeEntry({
       title: "Cross-project pattern",
-      cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
+      cwds: testCwds("/projects/alpha", "/projects/beta", "/projects/gamma"),
       exposures: [
         { date: "2026-03-01", sessionHash: "alpha123" },
         { date: "2026-03-02", sessionHash: "beta456" },
@@ -626,45 +725,20 @@ Body.
     await mkdir(join(maintenanceTestDir, "maintenance.log"));
 
     await expect(
-      runMaintenance(maintenanceTestDir, "/projects/alpha", 1, {
+      runMaintenance(maintenanceTestDir, testCwd("/projects/alpha"), 1, {
         now: new Date("2026-03-30T12:00:00Z"),
       }),
     ).rejects.toThrow();
 
-    const [promoted] = await loadLearnings(maintenanceTestDir);
-    expect(promoted?.cwds).toEqual(["*"]);
-    expect(promoted?.promotionEvidence).toEqual({
-      sourceCwds: sourceEntry.cwds,
-      exposures: sourceEntry.exposures,
-      reasons: ["automatic-cross-project-threshold"],
-    });
-  });
-
-  test("does not promote nonglobal entries", async () => {
-    mock.module("../../../src/inference", () => ({
-      inference: async () => ({ success: true, text: "NO CLUSTERS" }),
-      hasInferenceProvider: async () => false,
-    }));
-
-    const { runMaintenance } = await import("../../../src/memory/maintenance");
-    const { loadLearnings: loadL } = await import("../../../src/memory/learnings");
-
-    const entries = [
-      makeEntry({
-        title: "Nonglobal entry",
-        cwds: ["/projects/alpha", "/projects/beta", "/projects/gamma"],
-        nonglobal: true, // user opted out
+    expect(await loadLearnings(maintenanceTestDir)).toEqual([
+      expect.objectContaining({
+        ...sourceEntry,
+        cwds: testCwds("/projects"),
+        promotionEvidence: expect.objectContaining({
+          sourceCwds: testCwds("/projects/alpha", "/projects/beta", "/projects/gamma"),
+        }),
       }),
-    ];
-    await writeLearnings(maintenanceTestDir, entries);
-
-    const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
-
-    expect(result.promoted).toBe(0);
-
-    const final = await loadL(maintenanceTestDir);
-    expect(final[0]!.cwds).toEqual(["/projects/alpha", "/projects/beta", "/projects/gamma"]);
+    ]);
   });
 
   test("auto-prunes bottom-ranked entries when decision is consolidate-and-prune", async () => {
@@ -690,13 +764,13 @@ RANK 2 [2] — one-time debugging step`;
       makeEntry({
         title: `Long Entry ${i} That Takes Up Budget Space`,
         body: `Detailed body for entry ${i}. `.repeat(5).trim(),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     expect(result.pruned).toBe(2);
 
@@ -729,15 +803,66 @@ RANK 5 [5] — reason 5`;
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
         body: `Detailed body for entry ${i}. `.repeat(5).trim(),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     expect(result.pruned).toBe(3);
+  });
+
+  test("automatic pruning excludes promotion evidence and nonglobal state", async () => {
+    let rankingPrompt = "";
+    mock.module("../../../src/inference", () => ({
+      inference: async ({ userPrompt }: { userPrompt: string }) => {
+        if (userPrompt.startsWith("Rank these entries")) {
+          rankingPrompt = userPrompt;
+          return { success: true, text: "ALL ACCEPTABLE" };
+        }
+        return { success: true, text: "NO DUPLICATES" };
+      },
+      hasInferenceProvider: async () => false,
+    }));
+    const { runMaintenance } = await import("../../../src/memory/maintenance");
+    const durable = [
+      makeEntry({
+        title: "Evidence-bearing durable entry",
+        body: "Durable body. ".repeat(8).trim(),
+        promotionEvidence: {
+          sourceCwds: testCwds("/projects/myapp"),
+          excludedCwds: [],
+          exposures: [],
+          reasons: ["manual-scope-correction"],
+        },
+      }),
+      makeEntry({
+        title: "Explicit nonglobal entry",
+        body: "Durable body. ".repeat(8).trim(),
+        nonglobal: true,
+      }),
+    ];
+    const ordinary = Array.from({ length: 38 }, (_, index) =>
+      makeEntry({
+        title: `Ordinary prune candidate ${index}`,
+        body: `Detailed body ${index}. `.repeat(8).trim(),
+        exposures: [{ date: "2026-03-01", sessionHash: `old${String(index).padStart(5, "0")}` }],
+      }),
+    );
+    await writeLearnings(maintenanceTestDir, [...durable, ...ordinary]);
+
+    await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
+      now: new Date("2026-03-30T12:00:00Z"),
+    });
+
+    expect(rankingPrompt).toContain("Ordinary prune candidate");
+    expect(rankingPrompt).not.toContain("Evidence-bearing durable entry");
+    expect(rankingPrompt).not.toContain("Explicit nonglobal entry");
+    const finalTitles = (await loadLearnings(maintenanceTestDir)).map((entry) => entry.title);
+    expect(finalTitles).toContain("Evidence-bearing durable entry");
+    expect(finalTitles).toContain("Explicit nonglobal entry");
   });
 
   test("inference failure in consolidation does not crash (fail-open)", async () => {
@@ -753,7 +878,7 @@ RANK 5 [5] — reason 5`;
     const entries = Array.from({ length: 5 }, (_, i) =>
       makeEntry({
         title: `Entry ${i}`,
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${i}a00` },
           { date: "2026-03-05", sessionHash: `hash${i}b00` },
@@ -763,7 +888,7 @@ RANK 5 [5] — reason 5`;
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     expect(result.skipped).toBe(false);
     const state = await readMaintenanceState(maintenanceTestDir);
@@ -790,13 +915,13 @@ RANK 5 [5] — reason 5`;
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
         body: `Detailed body for entry ${i}. `.repeat(5).trim(),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     // Pruning failed, but pipeline completed
     expect(result.skipped).toBe(false);
@@ -824,7 +949,7 @@ RANK 5 [5] — reason 5`;
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
         body: `Detailed body for entry ${i}. `.repeat(5).trim(),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${String(i).padStart(4, "0")}` },
           { date: "2026-03-10", sessionHash: `sec${String(i).padStart(5, "0")}` },
@@ -833,7 +958,7 @@ RANK 5 [5] — reason 5`;
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     // All entries have 2 exposures, none should be prunable regardless of ranking
     expect(result.pruned).toBe(0);
@@ -856,13 +981,13 @@ RANK 5 [5] — reason 5`;
       makeEntry({
         title: `Long Entry ${i} That Takes Budget`,
         body: `Detailed body for entry ${i}. `.repeat(5).trim(),
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [{ date: "2026-03-24", sessionHash: `hash${String(i).padStart(4, "0")}` }],
       }),
     );
     await writeLearnings(maintenanceTestDir, entries);
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, { now });
 
     // All entries are < 7 days old, none should be prunable
     expect(result.pruned).toBe(0);
@@ -883,7 +1008,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
     const entries = [
       makeEntry({
         title: "Use Bun.file()",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: "aaaa0000" },
           { date: "2026-03-05", sessionHash: "bbbb0000" },
@@ -891,7 +1016,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
       }),
       makeEntry({
         title: "Use bun:test",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-02", sessionHash: "cccc0000" },
           { date: "2026-03-06", sessionHash: "dddd0000" },
@@ -901,7 +1026,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, { now });
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, { now });
 
     expect(result.skipped).toBe(false);
     expect(result.before).toBe(2);
@@ -945,7 +1070,7 @@ Keep after.`;
     const activeSource = await Bun.file(activePath).text();
     const archiveSource = await Bun.file(archivePath).text();
 
-    const result = await runMaintenance(maintenanceTestDir, "/projects/myapp", 1, {
+    const result = await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 1, {
       now: new Date("2026-03-30T12:00:00Z"),
     });
 
@@ -978,7 +1103,7 @@ Keep after.`;
       makeEntry({
         title: `Entry ${i}`,
         body: "Body.",
-        cwds: ["/projects/myapp"],
+        cwds: testCwds("/projects/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${i}a00` },
           { date: "2026-03-05", sessionHash: `hash${i}b00` },
@@ -988,7 +1113,7 @@ Keep after.`;
     await writeLearnings(maintenanceTestDir, entries);
 
     const now = new Date("2026-03-30T12:00:00Z");
-    await runMaintenance(maintenanceTestDir, "/projects/myapp", 2, {
+    await runMaintenance(maintenanceTestDir, testCwd("/projects/myapp"), 2, {
       now,
       provider: "opencode",
     });
