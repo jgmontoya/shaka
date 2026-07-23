@@ -11,6 +11,15 @@ memory_e2e_contains() {
   printf '%s\n' "$output" | grep -Fq "$expected"
 }
 
+memory_e2e_runtime_cwd() (
+  cd "$1"
+  bun -e 'process.stdout.write(process.cwd())'
+)
+
+memory_e2e_json_string() {
+  printf '%s' "$1" | bun -e 'process.stdout.write(JSON.stringify(await Bun.stdin.text()))'
+}
+
 memory_e2e_assert_scope() {
   local output="$1"
   local included="$2"
@@ -49,8 +58,8 @@ run_memory_recall_e2e() (
   section "Memory recall contract"
 
   fixture_root=$(mktemp -d "${TMPDIR:-/tmp}/shaka-memory-e2e.XXXXXX")
-  current_project="$fixture_root/current-project"
-  unrelated_project="$fixture_root/unrelated-project"
+  current_project_dir="$fixture_root/current-project"
+  unrelated_project_dir="$fixture_root/unrelated-project"
   memory_dir="$SHAKA_HOME/memory"
   sessions_dir="$memory_dir/sessions"
   knowledge_root="$memory_dir/knowledge"
@@ -69,21 +78,23 @@ run_memory_recall_e2e() (
   trap memory_e2e_cleanup EXIT
 
   mkdir -p \
-    "$current_project" \
-    "$unrelated_project" \
+    "$current_project_dir" \
+    "$unrelated_project_dir" \
     "$sessions_dir" \
     "$current_knowledge" \
     "$unrelated_knowledge"
 
-  # macOS resolves /var through /private/var in process.cwd(); persist the
-  # physical paths so fixture metadata and Shaka's runtime CWD are identical.
-  current_project=$(cd "$current_project" && pwd -P)
-  unrelated_project=$(cd "$unrelated_project" && pwd -P)
+  # Persist the CWD spelling used by Bun. Git Bash and Bun represent the same
+  # Windows directory differently, while macOS may resolve /var to /private/var.
+  current_project_cwd=$(memory_e2e_runtime_cwd "$current_project_dir")
+  unrelated_project_cwd=$(memory_e2e_runtime_cwd "$unrelated_project_dir")
+  current_project_json=$(memory_e2e_json_string "$current_project_cwd")
+  unrelated_project_json=$(memory_e2e_json_string "$unrelated_project_cwd")
 
   cat >"$current_session_file" <<EOF
 ---
 date: "2026-07-14"
-cwd: $current_project
+cwd: $current_project_json
 tags: [memory-e2e]
 provider: claude
 session_id: memory-e2e-current
@@ -100,7 +111,7 @@ EOF
   cat >"$unrelated_session_file" <<EOF
 ---
 date: "2026-07-14"
-cwd: $unrelated_project
+cwd: $unrelated_project_json
 tags: [memory-e2e]
 provider: claude
 session_id: memory-e2e-unrelated
@@ -114,8 +125,8 @@ memory-e2e-scope-token
 MEMORY_E2E_UNRELATED_SESSION_CONTEXT
 EOF
 
-  printf '{"cwd":"%s"}\n' "$current_project" >"$current_knowledge/.project.json"
-  printf '{"cwd":"%s"}\n' "$unrelated_project" >"$unrelated_knowledge/.project.json"
+  printf '{"cwd":%s}\n' "$current_project_json" >"$current_knowledge/.project.json"
+  printf '{"cwd":%s}\n' "$unrelated_project_json" >"$unrelated_knowledge/.project.json"
 
   cat >"$current_knowledge/memory-design.md" <<'EOF'
 ---
@@ -150,7 +161,7 @@ MEMORY_E2E_UNRELATED_KNOWLEDGE_CONTEXT
 EOF
 
   local default_output
-  default_output=$(cd "$current_project" && shaka memory search memory-e2e-scope-token)
+  default_output=$(cd "$current_project_dir" && shaka memory search memory-e2e-scope-token)
   memory_e2e_assert_scope \
     "$default_output" \
     "Memory E2E Current Session" \
@@ -158,7 +169,7 @@ EOF
     "Default memory search stays in the current project"
 
   local all_output
-  all_output=$(cd "$current_project" && shaka memory search memory-e2e-scope-token --all)
+  all_output=$(cd "$current_project_dir" && shaka memory search memory-e2e-scope-token --all)
   memory_e2e_assert_both \
     "$all_output" \
     "Memory E2E Current Session" \
@@ -166,7 +177,7 @@ EOF
     "All-project memory search is explicit"
 
   local explicit_output
-  explicit_output=$(shaka memory search memory-e2e-scope-token --cwd "$unrelated_project")
+  explicit_output=$(shaka memory search memory-e2e-scope-token --cwd "$unrelated_project_cwd")
   memory_e2e_assert_scope \
     "$explicit_output" \
     "Memory E2E Unrelated Session" \
@@ -175,7 +186,7 @@ EOF
 
   local knowledge_output
   knowledge_output=$(
-    cd "$current_project" && shaka memory search memory-e2e-knowledge-token --type knowledge
+    cd "$current_project_dir" && shaka memory search memory-e2e-knowledge-token --type knowledge
   )
   memory_e2e_assert_scope \
     "$knowledge_output" \
@@ -185,7 +196,7 @@ EOF
 
   local tool_output
   tool_output=$(
-    cd "$current_project" && \
+    cd "$current_project_dir" && \
       printf '%s\n' '{"query":"memory-e2e-scope-token","all_projects":true}' | \
       shaka tool memory-search
   )
@@ -196,7 +207,7 @@ EOF
     "Memory-search tool honors all_projects"
 
   local context_output
-  context_output=$(cd "$current_project" && bun "$SHAKA_HOME/system/hooks/session-start.ts" 2>/dev/null)
+  context_output=$(cd "$current_project_dir" && bun "$SHAKA_HOME/system/hooks/session-start.ts" 2>/dev/null)
   memory_e2e_assert_scope \
     "$context_output" \
     "MEMORY_E2E_CURRENT_SESSION_CONTEXT" \
@@ -208,16 +219,17 @@ EOF
     "MEMORY_E2E_UNRELATED_KNOWLEDGE_CONTEXT" \
     "Session-start knowledge stays in the current project"
 
-  local metadata_project="$fixture_root/metadata-project"
-  mkdir -p "$metadata_project"
-  metadata_project=$(cd "$metadata_project" && pwd -P)
-  (cd "$metadata_project" && shaka memory compile >/dev/null)
+  local metadata_project_dir="$fixture_root/metadata-project"
+  mkdir -p "$metadata_project_dir"
+  metadata_project_cwd=$(memory_e2e_runtime_cwd "$metadata_project_dir")
+  metadata_project_json=$(memory_e2e_json_string "$metadata_project_cwd")
+  (cd "$metadata_project_dir" && shaka memory compile >/dev/null)
 
   local metadata_file=""
   local candidate
   for candidate in "$knowledge_root"/*/.project.json; do
     [ -f "$candidate" ] || continue
-    if grep -Fq "\"cwd\":\"$metadata_project\"" "$candidate"; then
+    if grep -Fq "\"cwd\":$metadata_project_json" "$candidate"; then
       metadata_file="$candidate"
       break
     fi

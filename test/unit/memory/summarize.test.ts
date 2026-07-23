@@ -97,6 +97,7 @@ describe("Summarize", () => {
     test("includes learnings extraction section", () => {
       const prompt = buildSummarizationPrompt(sampleMessages, sampleMetadata);
       expect(prompt).toContain("## Learnings");
+      expect(prompt).toContain("None.");
       expect(prompt).toContain("Do NOT extract");
       expect(prompt).toContain("DO extract");
     });

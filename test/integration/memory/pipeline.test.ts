@@ -24,6 +24,7 @@ import {
   OPENCODE_LLM_OUTPUT,
   OPENCODE_METADATA,
 } from "./fixtures";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-pipeline");
 
@@ -270,7 +271,8 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
         hasInferenceProvider: async () => false,
       }));
 
-      const { loadLearnings, writeLearnings } = await import("../../../src/memory/learnings");
+      const { loadLearnings } = await import("../../../src/memory/learnings");
+      const { writeLearnings } = await import("../../../src/memory/learning-store");
       const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
 
       // Build 20+ entries (to trigger passes 1-2).
@@ -284,7 +286,7 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
       const entries = [
         {
           category: "pattern" as const,
-          cwds: ["/myapp"],
+          cwds: testCwds("/myapp"),
           exposures: twoExposures,
           nonglobal: false,
           title: "Use Bun.file() for file I/O",
@@ -292,7 +294,7 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
         },
         {
           category: "pattern" as const,
-          cwds: ["/myapp"],
+          cwds: testCwds("/myapp"),
           exposures: twoExposures,
           nonglobal: false,
           title: "Use bun:test for testing",
@@ -301,7 +303,7 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
         // 18 filler entries with different CWDs to avoid promotion prompts
         ...Array.from({ length: 18 }, (_, i) => ({
           category: "fact" as const,
-          cwds: [`/filler-${i}`],
+          cwds: testCwds(`/filler-${i}`),
           exposures: [{ date: "2026-03-01", sessionHash: `fill${String(i).padStart(4, "0")}` }],
           nonglobal: false,
           title: `Filler entry ${i}`,
@@ -318,7 +320,7 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
 
       const compound = final.find((e) => e.title === "Bun Runtime Conventions");
       expect(compound).toBeDefined();
-      expect(compound?.cwds).toEqual(["/myapp"]);
+      expect(compound?.cwds).toEqual(testCwds("/myapp"));
       expect(compound?.body).toContain("Bun.file()");
       expect(compound?.body).toContain("bun:test");
 
@@ -336,14 +338,15 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
     });
 
     test("condensed entries are searchable in archive", async () => {
-      const { writeLearnings } = await import("../../../src/memory/learnings");
-      const { appendToArchive } = await import("../../../src/memory/learnings");
+      const { appendToArchive, writeLearnings } = await import(
+        "../../../src/memory/learning-store"
+      );
 
       // Write an active learning and an archived one
       await writeLearnings(testMemoryDir, [
         {
           category: "pattern" as const,
-          cwds: ["/myapp"],
+          cwds: testCwds("/myapp"),
           exposures: [{ date: "2026-03-01", sessionHash: "aaaa0000" }],
           nonglobal: false,
           title: "Active Entry",
@@ -354,7 +357,7 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
       await appendToArchive(testMemoryDir, [
         {
           category: "pattern" as const,
-          cwds: ["/myapp"],
+          cwds: testCwds("/myapp"),
           exposures: [{ date: "2026-02-01", sessionHash: "bbbb0000" }],
           nonglobal: false,
           title: "Archived Entry",
@@ -363,10 +366,14 @@ BODY: Use Bun.file() for all file I/O and bun:test for testing. These are Bun-na
       ]);
 
       // Search should find both
-      const activeResults = await searchMemory("Active", testMemoryDir, { cwd: "/myapp" });
+      const activeResults = await searchMemory("Active", testMemoryDir, {
+        cwd: testCwd("/myapp"),
+      });
       expect(activeResults.length).toBeGreaterThan(0);
 
-      const archiveResults = await searchMemory("Archived", testMemoryDir, { cwd: "/myapp" });
+      const archiveResults = await searchMemory("Archived", testMemoryDir, {
+        cwd: testCwd("/myapp"),
+      });
       expect(archiveResults.length).toBeGreaterThan(0);
       expect(archiveResults[0]?.snippet).toContain("[archived]");
     });

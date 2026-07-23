@@ -39,8 +39,8 @@ export interface KnowledgeFragment {
 export function buildSummarizationPrompt(
   messages: NormalizedMessage[],
   metadata: SessionMetadata,
-  existingLearningTitles: string[] = [],
-  existingTopicTitles: string[] = [],
+  existingLearningTitles: readonly string[] = [],
+  existingTopicTitles: readonly string[] = [],
 ): string {
   const transcript = messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
   const learningsSection = buildExtractionPromptSection(existingLearningTitles);
@@ -97,6 +97,8 @@ session_id: ${metadata.sessionId}
 ### (category) Title
 
 Body (1-3 sentences).
+
+Or exactly \`None.\` when there are no learnings.
 
 ## Knowledge
 
@@ -280,7 +282,7 @@ function stripExtractedSections(body: string): string {
  * Build the knowledge extraction section for the summarization prompt.
  * Includes existing topic titles for tag convergence.
  */
-function buildKnowledgeExtractionSection(existingTopicTitles: string[]): string {
+function buildKnowledgeExtractionSection(existingTopicTitles: readonly string[]): string {
   const topicsBlock =
     existingTopicTitles.length > 0
       ? `Existing knowledge topics: ${existingTopicTitles.join(", ")}. Reuse these as Topics tags when the content is related.`

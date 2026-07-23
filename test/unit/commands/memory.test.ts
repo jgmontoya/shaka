@@ -10,28 +10,53 @@ mock.module("../../../src/inference", () => ({
 }));
 
 import { createMemoryCommand } from "../../../src/commands/memory/index";
+import { CONDENSATION_COMMIT_FILE } from "../../../src/memory/condensation-commit";
 import { rebuildIndex } from "../../../src/memory/knowledge";
-import {
-  type LearningEntry,
-  appendToArchive,
-  loadLearnings,
-  renderLearnings,
-  writeLearnings,
-} from "../../../src/memory/learnings";
+import { appendToArchive, writeLearnings } from "../../../src/memory/learning-store";
+import { type LearningEntry, loadLearnings, renderLearnings } from "../../../src/memory/learnings";
 import { projectSlug } from "../../../src/memory/rollups";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
 import { hashContent } from "../../../src/memory/utils";
 import { makeRunShaka } from "../../helpers/run-shaka";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
     category: overrides.category ?? "correction",
-    cwds: overrides.cwds ?? ["/projects/myapp"],
+    cwds: overrides.cwds ?? testCwds("/projects/myapp"),
     exposures: overrides.exposures ?? [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
     nonglobal: overrides.nonglobal ?? false,
     title: overrides.title ?? "Default Title",
     body: overrides.body ?? "Default body.",
+    ...(overrides.promotionEvidence === undefined
+      ? {}
+      : { promotionEvidence: overrides.promotionEvidence }),
+  };
+}
+
+function emptyMigrationCounts() {
+  return {
+    wildcardRecordsExamined: 0,
+    recordsCanonicalized: 0,
+    recordsEnriched: 0,
+    recordsUnchanged: 0,
+    globalNonglobalNormalized: 0,
+    exposureJoinsResolved: 0,
+    exposureJoinsMissing: 0,
+    exposureJoinsAmbiguous: 0,
+    relativeCandidatesDropped: 0,
+    optionalHistoryFailures: 0,
+    sourceContributions: {
+      exposure: 0,
+      activeMixed: 0,
+      backupPromotion: 0,
+      backupScoped: 0,
+      backupMixed: 0,
+      archivePromotion: 0,
+      archiveScoped: 0,
+      archiveMixed: 0,
+    },
   };
 }
 
@@ -62,15 +87,15 @@ describe("memory consolidate", () => {
     await rm(testDir, { recursive: true, force: true });
   });
 
-  test("duplicate titles: each entry promoted independently", async () => {
+  test("non-interactive consolidation applies automatic scope generalization", async () => {
     // Need 20+ entries to exceed consolidation threshold
     const entries: LearningEntry[] = [];
     for (let i = 0; i < 18; i++) {
       entries.push(makeEntry({ title: `Filler entry ${i}` }));
     }
-    // Two entries with same title, 3+ CWDs each (promotion-eligible)
-    entries.push(makeEntry({ title: "Same Title", cwds: ["/a", "/b", "/c"] }));
-    entries.push(makeEntry({ title: "Same Title", cwds: ["/d", "/e", "/f"] }));
+    // Two entries with same title and three independent top-level branches.
+    entries.push(makeEntry({ title: "Same Title", cwds: testCwds("/a", "/b", "/c") }));
+    entries.push(makeEntry({ title: "Same Title", cwds: testCwds("/d", "/e", "/f") }));
 
     await writeLearnings(memoryDir, entries);
 
@@ -78,21 +103,23 @@ describe("memory consolidate", () => {
     await cmd.parseAsync(["consolidate"], { from: "user" });
 
     const result = await loadLearnings(memoryDir);
-    const promoted = result.filter((e) => e.title === "Same Title");
+    const generalized = result.filter((e) => e.title === "Same Title");
 
-    expect(promoted).toHaveLength(2);
-    expect(promoted[0]?.cwds).toEqual(["*"]);
-    expect(promoted[1]?.cwds).toEqual(["*"]);
-    expect(promoted[0]?.promotionEvidence?.sourceCwds).toEqual(["/a", "/b", "/c"]);
-    expect(promoted[0]?.promotionEvidence?.exposures).toEqual([
-      { date: "2026-02-09", sessionHash: "a1b2c3d4" },
-    ]);
-    expect(promoted[0]?.promotionEvidence?.reasons).toEqual(["manual-cross-project-review"]);
-    expect(promoted[1]?.promotionEvidence?.sourceCwds).toEqual(["/d", "/e", "/f"]);
-    expect(promoted[1]?.promotionEvidence?.exposures).toEqual([
-      { date: "2026-02-09", sessionHash: "a1b2c3d4" },
-    ]);
-    expect(promoted[1]?.promotionEvidence?.reasons).toEqual(["manual-cross-project-review"]);
+    expect(generalized).toHaveLength(2);
+    expect(generalized[0]?.cwds).toEqual(["*"]);
+    expect(generalized[1]?.cwds).toEqual(["*"]);
+    expect(generalized[0]?.promotionEvidence).toEqual({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      excludedCwds: [],
+      exposures: [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
+      reasons: ["automatic-hierarchical-generalization"],
+    });
+    expect(generalized[1]?.promotionEvidence).toEqual({
+      sourceCwds: testCwds("/d", "/e", "/f"),
+      excludedCwds: [],
+      exposures: [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
+      reasons: ["automatic-hierarchical-generalization"],
+    });
   });
 });
 
@@ -178,6 +205,28 @@ Body.`;
     expect(await Bun.file(targetPath).text()).toBe(source);
   });
 
+  test("consolidate reports blocked migration readiness without a stack trace", async () => {
+    const memoryDir = join(commandRoot, "memory");
+    await writeLearnings(memoryDir, [makeEntry({ title: "Migration target" })]);
+    await Bun.write(join(memoryDir, ".learning-scope-migration-v1.json"), "not-json");
+    const errors: string[] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => errors.push(args.join(" "));
+
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["consolidate"], { from: "user" });
+    } finally {
+      console.error = originalError;
+    }
+
+    const rendered = errors.join("\n");
+    expect(rendered).toContain("Migration marker is malformed");
+    expect(rendered).toContain("shaka memory check");
+    expect(rendered).not.toMatch(/at .*\.(?:js|ts):\d+/);
+    expect(process.exitCode).toBe(1);
+  });
+
   test("consolidate subprocess exits cleanly when storage is damaged", async () => {
     const learningPath = join(commandRoot, "memory", "learnings.md");
     const source = `# Learnings
@@ -200,6 +249,20 @@ Body.`;
     expect(result.stderr).not.toMatch(/at .*\.(?:js|ts):\d+/);
     expect(result.stderr).not.toContain("LearningsIntegrityError:");
     expect(await Bun.file(learningPath).text()).toBe(source);
+  });
+
+  test("consolidate subprocess reports a malformed condensation intent without a stack trace", async () => {
+    const memoryDir = join(commandRoot, "memory");
+    await Bun.write(join(memoryDir, CONDENSATION_COMMIT_FILE), "{not-json}\n");
+
+    const result = makeRunShaka(commandRoot)(["memory", "consolidate"]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Condensation intent is malformed");
+    expect(result.stderr).toContain("shaka memory check");
+    expect(result.stderr).not.toMatch(/at .*\.(?:js|ts):\d+/);
+    expect(result.stderr).not.toContain("CondensationCommitError:");
+    expect(result.stderr).not.toContain("Bun v");
   });
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -239,6 +302,158 @@ Body.`;
   });
 });
 
+describe("memory review scope", () => {
+  let reviewRoot: string;
+  let reviewMemoryDir: string;
+  let savedIsTTY: boolean | undefined;
+
+  beforeEach(async () => {
+    reviewRoot = await mkdtemp(join(tmpdir(), "shaka-review-scope-"));
+    reviewMemoryDir = join(reviewRoot, "memory");
+    savedIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+  });
+
+  afterEach(async () => {
+    process.stdin.isTTY = savedIsTTY as boolean;
+    await rm(reviewRoot, { recursive: true, force: true });
+  });
+
+  test("excludes a target and accepts the displayed common ancestor", async () => {
+    const target = testCwd("/company-b/project-x");
+    await writeLearnings(reviewMemoryDir, [
+      makeEntry({
+        title: "Company A convention",
+        cwds: ["*"],
+        promotionEvidence: {
+          sourceCwds: [
+            testCwd("/company-a/project-1"),
+            testCwd("/company-a/project-2"),
+            testCwd("/company-a/project-3"),
+            target,
+          ],
+          excludedCwds: [],
+          exposures: [],
+          reasons: ["legacy-source-reconstruction"],
+        },
+      }),
+    ]);
+    const answers = ["1", "s", "e", "y", "a", "y", "q"];
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const { runReview } = await import("../../../src/commands/memory/review");
+      await runReview(
+        reviewMemoryDir,
+        { cwd: target, forbiddenAncestorRoots: testCwds("/Users/test") },
+        async () => answers.shift() ?? "q",
+      );
+    } finally {
+      console.log = originalLog;
+    }
+
+    const [result] = await loadLearnings(reviewMemoryDir);
+    expect(result?.cwds).toEqual(testCwds("/company-a"));
+    expect(result?.promotionEvidence?.excludedCwds).toEqual([target]);
+    expect(result?.nonglobal).toBe(true);
+    expect(output.join("\n")).toContain("Source CWDs:");
+    expect(output.join("\n")).toContain("Excluded CWDs:");
+    expect(output.join("\n")).toContain("Evidence reasons: legacy-source-reconstruction");
+  });
+
+  test("includes one exact stored exclusion without clearing nonglobal", async () => {
+    const target = testCwd("/company-b/project-x");
+    await writeLearnings(reviewMemoryDir, [
+      makeEntry({
+        title: "Corrected convention",
+        cwds: testCwds("/company-a"),
+        nonglobal: true,
+        promotionEvidence: {
+          sourceCwds: [testCwd("/company-a/project-1"), testCwd("/company-a/project-2"), target],
+          excludedCwds: [target],
+          exposures: [],
+          reasons: ["manual-scope-correction"],
+        },
+      }),
+    ]);
+    const answers = ["1", "s", "i", "1", "y", "q"];
+    const { runReview } = await import("../../../src/commands/memory/review");
+
+    await runReview(reviewMemoryDir, { cwd: target }, async () => answers.shift() ?? "q");
+
+    const [result] = await loadLearnings(reviewMemoryDir);
+    expect(result?.cwds).toEqual([testCwd("/company-a"), target]);
+    expect(result?.promotionEvidence?.excludedCwds).toEqual([]);
+    expect(result?.nonglobal).toBe(true);
+  });
+
+  test("requires asserted roots before narrowing an evidence-free legacy global", async () => {
+    const target = testCwd("/company-b/project-x");
+    await writeLearnings(reviewMemoryDir, [makeEntry({ title: "Legacy global", cwds: ["*"] })]);
+    const answers = [
+      "1",
+      "s",
+      "e",
+      "y",
+      "r",
+      "relative/project",
+      `${testCwd("/company-a/project-1")}, ${testCwd("/company-a/project-2")}`,
+      "a",
+      "y",
+      "q",
+    ];
+    const { runReview } = await import("../../../src/commands/memory/review");
+
+    await runReview(reviewMemoryDir, { cwd: target }, async () => answers.shift() ?? "q");
+
+    const [result] = await loadLearnings(reviewMemoryDir);
+    expect(result?.cwds).toEqual(testCwds("/company-a"));
+    expect(result?.promotionEvidence?.sourceCwds).toEqual(
+      testCwds("/company-a/project-1", "/company-a/project-2"),
+    );
+    expect(result?.promotionEvidence?.excludedCwds).toEqual([target]);
+  });
+
+  test("reports stale review state and preserves the concurrent change", async () => {
+    const target = testCwd("/target");
+    const original = makeEntry({
+      title: "Concurrent scope review",
+      cwds: ["*"],
+      promotionEvidence: {
+        sourceCwds: [testCwd("/a"), testCwd("/b"), testCwd("/c"), target],
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["legacy-source-reconstruction"],
+      },
+    });
+    await writeLearnings(reviewMemoryDir, [original]);
+    const answers = ["1", "s", "e", "y"];
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const { runReview } = await import("../../../src/commands/memory/review");
+      await runReview(reviewMemoryDir, { cwd: target }, async (question) => {
+        if (question.includes("Apply this scope")) {
+          await writeLearnings(reviewMemoryDir, [
+            { ...original, body: "Changed by another writer." },
+          ]);
+          return "y";
+        }
+        return answers.shift() ?? "q";
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const [result] = await loadLearnings(reviewMemoryDir);
+    expect(result?.cwds).toEqual(["*"]);
+    expect(result?.body).toBe("Changed by another writer.");
+    expect(output.join("\n")).toContain("changed while it was being reviewed");
+  });
+});
+
 describe("memory stats", () => {
   let savedShakaHome: string | undefined;
   let statsTestDir: string;
@@ -269,15 +484,19 @@ describe("memory stats", () => {
 
   test("runs with learnings and sessions", async () => {
     await writeLearnings(statsMemoryDir, [
-      makeEntry({ category: "correction", cwds: ["/projects/a"] }),
+      makeEntry({ category: "correction", cwds: testCwds("/projects/a") }),
       makeEntry({ category: "pattern", cwds: ["*"], title: "Global Pattern" }),
-      makeEntry({ category: "correction", cwds: ["/projects/a"], title: "Another Correction" }),
+      makeEntry({
+        category: "correction",
+        cwds: testCwds("/projects/a"),
+        title: "Another Correction",
+      }),
     ]);
 
     const summary: SessionSummary = {
       metadata: {
         date: "2026-02-15",
-        cwd: "/projects/a",
+        cwd: testCwd("/projects/a"),
         provider: "claude",
         sessionId: "ses-stats001",
       },
@@ -290,6 +509,36 @@ describe("memory stats", () => {
     const cmd = createMemoryCommand();
     // Should not throw
     await cmd.parseAsync(["stats"], { from: "user" });
+  });
+
+  test("reports global, scoped, and scope-corrected learnings as exclusive groups", async () => {
+    await writeLearnings(statsMemoryDir, [
+      makeEntry({ category: "pattern", cwds: ["*"], title: "Global Pattern" }),
+      makeEntry({ category: "fact", cwds: testCwds("/projects/a"), title: "Scoped Fact" }),
+      makeEntry({
+        category: "correction",
+        cwds: testCwds("/projects/a"),
+        title: "Corrected Scope",
+        promotionEvidence: {
+          sourceCwds: testCwds("/projects/a", "/projects/b"),
+          excludedCwds: testCwds("/projects/b"),
+          exposures: [],
+          reasons: ["manual-scope-correction"],
+        },
+      }),
+    ]);
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["stats"], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(output).toContain("  global: 1  |  project-scoped: 1  |  scope-corrected: 1");
   });
 });
 
@@ -316,7 +565,7 @@ describe("memory search", () => {
     const summaryPath = await writeSummary(searchMemoryDir, {
       metadata: {
         date: "2026-02-15",
-        cwd: "/projects/unrelated",
+        cwd: testCwd("/projects/unrelated"),
         provider: "claude",
         sessionId: "ses-search-all",
       },
@@ -344,7 +593,7 @@ describe("memory search", () => {
     await writeSummary(searchMemoryDir, {
       metadata: {
         date: "2026-02-15",
-        cwd: "/projects/unrelated",
+        cwd: testCwd("/projects/unrelated"),
         provider: "claude",
         sessionId: "ses-search-default",
       },
@@ -458,7 +707,7 @@ describe("memory check", () => {
   });
 
   test("passes with healthy active and archived learnings", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const checkMemoryDir = join(checkRoot, "memory");
     await writeLearnings(checkMemoryDir, [makeEntry({ title: "Active learning" })]);
     await appendToArchive(checkMemoryDir, [makeEntry({ title: "Archived learning" })]);
@@ -480,8 +729,44 @@ describe("memory check", () => {
     expect(process.exitCode).toBe(0);
   });
 
+  test("reports migration recovery warnings without failing storage health", async () => {
+    const cwd = testCwd("/projects/shaka");
+    const checkMemoryDir = join(checkRoot, "memory");
+    await mkdir(checkMemoryDir, { recursive: true });
+    await Bun.write(
+      join(checkMemoryDir, "learnings.md"),
+      renderLearnings([makeEntry({ title: "Healthy learning" })]),
+    );
+    await Bun.write(
+      join(checkMemoryDir, ".learning-scope-migration-v1.json"),
+      `${JSON.stringify({
+        version: 1,
+        intentSha256: "a".repeat(64),
+        completedAt: "2026-07-21T12:00:00.000Z",
+        expectedBackups: { active: false, archive: false },
+        counts: emptyMigrationCounts(),
+      })}\n`,
+    );
+
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    try {
+      const cmd = createMemoryCommand();
+      await cmd.parseAsync(["check", "--cwd", cwd], { from: "user" });
+    } finally {
+      console.log = originalLog;
+    }
+
+    const rendered = output.join("\n");
+    expect(rendered).toContain("Memory integrity: PASS");
+    expect(rendered).toContain("Learning integrity: PASS");
+    expect(rendered).toContain("[warning] learning-scope-migration-recovery");
+    expect(process.exitCode).toBe(0);
+  });
+
   test("reports integrity failures and sets a failing exit code", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const knowledgeDir = join(checkRoot, "memory", "knowledge", projectSlug(cwd));
     const topicPath = join(knowledgeDir, "broken-topic.md");
     await mkdir(knowledgeDir, { recursive: true });
@@ -513,7 +798,7 @@ describe("memory check", () => {
   });
 
   test("reports mixed-case active promotion metadata without changing it", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const learningPath = join(checkRoot, "memory", "learnings.md");
     const source = `# Learnings
 
@@ -552,13 +837,13 @@ Keep the source evidence.
   });
 
   test("reports malformed learning records with their title and file path", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const learningPath = join(checkRoot, "memory", "learnings.md");
     const source = `# Learnings
 
 ---
 
-<!-- correction | cwd: /projects/a | broken -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | broken -->
 
 ### Lost learning
 
@@ -589,10 +874,13 @@ Body.
   });
 
   test("reports duplicated archived promotion metadata", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const archivePath = join(checkRoot, "memory", "learnings-archive.md");
-    const promotion =
-      '<!-- promotion: {"sourceCwds":["/a","/b","/c"],"exposures":[{"date":"2026-07-18","sessionHash":"aaaa0000"}],"reasons":["automatic-cross-project-threshold"]} -->';
+    const promotion = `<!-- promotion: ${JSON.stringify({
+      sourceCwds: testCwds("/a", "/b", "/c"),
+      exposures: [{ date: "2026-07-18", sessionHash: "aaaa0000" }],
+      reasons: ["automatic-cross-project-threshold"],
+    })} -->`;
     const source = `# Archived Learnings
 
 ---
@@ -628,7 +916,7 @@ Keep the archived source evidence.
   });
 
   test("reports an unreadable learnings file instead of crashing", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const learningPath = join(checkRoot, "memory", "learnings.md");
     await mkdir(learningPath, { recursive: true });
 
@@ -651,7 +939,7 @@ Keep the archived source evidence.
   });
 
   test("reports a symlinked active learnings file without replacing it", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const checkMemoryDir = join(checkRoot, "memory");
     const learningPath = join(checkMemoryDir, "learnings.md");
     const targetPath = join(checkRoot, "linked-learnings.md");
@@ -659,7 +947,7 @@ Keep the archived source evidence.
 
 ---
 
-<!-- correction | cwd: /projects/a | exposures: 2026-07-18@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/projects/a")} | exposures: 2026-07-18@aaaa0000 -->
 
 ### Linked learning
 
@@ -691,7 +979,7 @@ Body.
   });
 
   test("reports a dangling active learnings symlink as invalid storage", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const checkMemoryDir = join(checkRoot, "memory");
     const learningPath = join(checkMemoryDir, "learnings.md");
     const missingTarget = join(checkRoot, "missing-learnings.md");
@@ -735,7 +1023,7 @@ describe("memory impact", () => {
   });
 
   test("reports source references without changing knowledge files", async () => {
-    const cwd = "/projects/shaka";
+    const cwd = testCwd("/projects/shaka");
     const sourceId = "2026-07-15-impact001";
     const memoryDir = join(impactRoot, "memory");
     const sourcePath = join(memoryDir, "sessions", `${sourceId}.md`);

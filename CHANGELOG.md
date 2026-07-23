@@ -8,8 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Changed
 
-- **Global promotion evidence is retained** - automatic promotions now preserve the source projects, exposure snapshot, and promotion reason on the global learning, so this evidence survives maintenance-log failures. The three-project threshold is unchanged.
-- **Invalid learning storage is protected** - read-only memory remains available when possible, while malformed records, damaged or duplicated promotion evidence, and unsafe learning-file paths are rejected before mutation. Replacement values the Markdown format cannot round-trip are rejected instead of being written. `shaka memory check` reports existing storage damage with the affected file and learning when available, and maintenance and consolidation backups preserve the original source text.
+- **Learning applicability now follows the directory hierarchy** - evidence from three sibling branches widens a learning to their nearest common parent, reaching global scope only when the filesystem root qualifies. Repeated evidence inside one branch does not widen scope. Interactive consolidation can approve a broader scope, and `shaka memory review --cwd <path>` can exclude or restore a project, preview the result, and control future widening. Shaka preserves the source CWD evidence behind wider scopes and protects reviewed entries from automatic pruning and lossy condensation.
+- **Legacy global learnings migrate automatically** - the first learning mutation backfills known source CWDs from active, archived, and historical evidence. Existing global learnings stay global, including entries where no source CWD can be recovered.
+- **Public learning APIs changed** - custom integrations must handle the tagged `parseExtractedLearnings(raw)` result and use `rewriteSessionLearnings` for session updates. Removal results now report `status`, maintenance reports `generalized`, and the old two-step session helpers and `beforeWrite` replacement callback have been removed.
+
+### Fixed
+
+- **Learning storage now fails and recovers safely** - malformed learning records, migration state, and unsafe file paths block mutations while valid read-only memory remains available. `shaka memory check` reports the affected files and any pending recovery. Interrupted condensation resumes exactly once, preventing duplicate archive entries.
 
 ## [0.14.0] - 2026-07-17
 
@@ -30,7 +35,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 - **Codex hook setup preserves existing configuration** - `shaka init`, `shaka reload`, and `shaka uninstall` retain unrelated hooks and top-level settings, write generated files atomically, and stop with a clear error instead of overwriting an invalid `hooks.json`.
 - **Codex security checks cover patch edits** - file additions, updates, moves, and deletions made through `apply_patch` now pass through the same path validation as other file tools.
 - **Native tools stay in sync across providers** - opencode and Pi now generate native registrations from the same resolved tool definitions as MCP, so new or overridden tools and updated parameters become available after `shaka init` or `shaka reload`.
-- **Concurrent memory updates no longer overwrite each other** - session extraction, automatic maintenance, consolidation, and review coordinate their writes. Stale locks recover automatically, and interactive commands stop safely if memory changes while they run.
+- **Concurrent memory updates no longer overwrite each other** - session extraction, automatic maintenance, consolidation, and review coordinate their writes. Automatic maintenance releases the learning-write lock during provider inference, so session extraction can continue. Stale locks recover automatically, and pending changes stop safely if memory changes before publication.
 - **Invalid compiled knowledge is rejected before writing** - Shaka validates generated topic pages and their source references, gives invalid model output one correction attempt, and leaves compiled knowledge unchanged when correction fails.
 - **Unsafe compiled topic filenames are rejected** - Shaka rejects topic tags that would create unsafe or ambiguous filenames, reports invalid stored topic files through `shaka memory check`, and prevents them from entering search results or rebuilt indexes.
 

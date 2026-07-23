@@ -194,3 +194,89 @@ before compilation can continue. Invalid generated output may use one extra
 model call. A second validation failure leaves topic pages, the index, the log,
 and the manifest unchanged. Readers report invalid stored state according to
 their role without treating it as valid knowledge.
+
+---
+
+## ADR-013: One Authoritative Learning Applicability Scope
+
+**Status:** Accepted
+
+**Context:** Learnings can become useful across several projects. A wildcard
+made those learnings global, but it discarded the project roots that supported
+the decision. Adding runtime exclusions would require every recall path to
+combine two applicability rules and would make broad ancestor inference unsafe.
+
+**Decision:** The learning's active `cwds` array is the only runtime
+applicability rule. Promotion metadata stores source CWDs, exclusions, exposure
+snapshots, and provenance for reviewed transitions. Readers select entries from
+`cwds` and do not interpret that metadata as another filter.
+
+Scope widening follows the lexical path hierarchy. Positive evidence in three
+distinct immediate child branches lets maintenance and explicit consolidation
+replace those descendants with their parent. The rule runs from the deepest
+nodes upward, so separate clusters and exact outliers can remain in one active
+scope. A qualifying filesystem root is stored as `cwds: ["*"]`. The user's home
+directory is never selected automatically.
+
+Interactive consolidation starts from the automatic result and may offer a
+broader common ancestor or global scope. Keeping the current scope sets
+`nonglobal` and blocks later automatic widening. An exclusion immediately
+rewrites active `cwds` to exact effective roots or a confirmed ancestor and sets
+`nonglobal`. Inclusion removes one exact stored exclusion and previews the
+result before writing it.
+
+Legacy wildcard records remain global during migration. Migration preserves
+mixed wildcard companion paths and adds exact source CWDs recovered from
+history, with no inferred paths. Future reinforcement can add missing positive
+roots.
+
+**Rationale:** One active rule keeps session context, search, measurement, and
+maintenance consistent. Stored evidence makes corrections reversible and gives
+deterministic consolidation enough information to choose a safe narrower scope.
+The three-child rule bounds each automatic widening step without assigning
+meaning to directory names or inspecting the filesystem. Manual review covers
+broader choices that the branch evidence does not support automatically.
+
+**Consequences:** The flat three-CWD-to-global policy is removed.
+Non-interactive consolidation still applies the deterministic hierarchy and
+skips every prompt. A scope can become global only when a filesystem root, or
+three distinct platform-parsed roots, has enough branch evidence. Lossy pruning
+and condensation exclude entries with promotion evidence or `nonglobal: true`
+until compound evidence partitioning has its own design. Mutation paths migrate
+and validate active or archived storage before writing; ordinary reads remain
+write-free.
+
+---
+
+## ADR-014: Recover Condensation Moves from an Immutable Intent
+
+**Status:** Accepted
+
+**Context:** Condensation appends source entries to `learnings-archive.md` and
+removes them from `learnings.md`. A directory lock serializes Shaka writers,
+but it cannot make both file replacements atomic. Publishing the archive first
+can leave duplicate active and archived records if the process exits before the
+active replacement. Retrying the old append-first flow can archive the sources
+again.
+
+**Decision:** Publish a condensation-specific intent before either target
+changes. The intent stores each target's exact source state and validated
+replacement text with SHA-256 hashes. While holding the learning lock, replay
+accepts only a source or replacement state, publishes archive before active,
+verifies both replacements, and removes the unchanged intent last. Every public
+learning mutation resumes a pending intent before loading its requested target.
+
+The consolidation compare-and-swap returns without an intent when the active
+snapshot is stale. Condensation with no archive entries remains an
+active-only replacement. `memory check` reports a safe pending intent as a
+warning and malformed or third-state storage as an error without changing it.
+
+**Rationale:** The intent freezes one logical move and makes each publication
+step idempotent. Retry never recomputes the archive append. A small module for
+two fixed files keeps this recovery rule separate from learning grammar and
+avoids a general transaction abstraction.
+
+**Consequences:** A process interruption can leave a visible partial state
+until the next mutation runs recovery. Read-only operations remain write-free.
+The protocol relies on the existing atomic-rename behavior and does not claim
+power-loss durability because Shaka does not `fsync` files or directories.

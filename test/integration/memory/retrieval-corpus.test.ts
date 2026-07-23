@@ -9,9 +9,8 @@ import { loadKnowledgeIndex, rebuildIndex } from "../../../src/memory/knowledge"
 import {
   type LearningCategory,
   type LearningEntry,
-  appendToArchive,
-  writeLearnings,
 } from "../../../src/memory/learnings";
+import { appendToArchive, writeLearnings } from "../../../src/memory/learning-store";
 import { projectSlug } from "../../../src/memory/rollups";
 import { type SearchFilter, type SearchResult, searchMemory } from "../../../src/memory/search";
 import { writeSummary } from "../../../src/memory/storage";

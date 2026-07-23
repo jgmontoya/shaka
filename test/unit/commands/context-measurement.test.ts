@@ -8,8 +8,10 @@ import {
 } from "../../../src/commands/context-measurement";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
-import { renderEntryForContext, writeLearnings } from "../../../src/memory/learnings";
+import { renderEntryForContext } from "../../../src/memory/learnings";
 import type { LearningEntry } from "../../../src/memory/learnings";
+import { writeLearnings } from "../../../src/memory/learning-store";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testDir = join(tmpdir(), `shaka-test-context-${process.pid}`);
 
@@ -247,6 +249,35 @@ describe("collectMeasurements", () => {
 
       const expected = `## Learnings\n\n${renderEntryForContext(entry)}`.length;
       expect(m.learnings.chars).toBe(expected);
+    });
+
+    test("uses the same corrected active scope as session-start selection", async () => {
+      await setupMinimalHome(testDir);
+      const memoryDir = join(testDir, "memory");
+      const currentCwd = process.cwd();
+
+      await writeLearnings(memoryDir, [
+        {
+          category: "correction",
+          cwds: testCwds("/projects/other"),
+          exposures: [{ date: "2026-02-20", sessionHash: "a1b2c3d4" }],
+          nonglobal: true,
+          title: "Corrected current-project exclusion",
+          body: "Do not inject this learning here.",
+          promotionEvidence: {
+            sourceCwds: [currentCwd, testCwd("/projects/other")],
+            excludedCwds: [currentCwd],
+            exposures: [{ date: "2026-02-20", sessionHash: "a1b2c3d4" }],
+            reasons: ["manual-scope-correction"],
+          },
+        },
+      ]);
+
+      const measurement = await collectMeasurements(testDir);
+
+      expect(measurement.learnings.entryCount).toBe(1);
+      expect(measurement.learnings.selectedCount).toBe(0);
+      expect(measurement.learnings.chars).toBe(0);
     });
   });
 

@@ -22,14 +22,13 @@ import {
   type NormalizedMessage,
   type ProviderName,
   type SessionMetadata,
+  type SessionRewriteCounts,
   buildSummarizationPrompt,
   compileKnowledge,
   hashSessionId,
   inference,
   isSubagent,
   loadConfig,
-  loadLearnings,
-  mergeNewLearnings,
   mutateLearnings,
   parseClaudeCodeTranscript,
   parseCodexTranscript,
@@ -37,13 +36,15 @@ import {
   parseOpencodeTranscript,
   parsePiTranscript,
   parseSummaryOutput,
+  prepareLearningStoreForMutation,
   readExistingTopicTitles,
   resolveKnowledgeProjectDir,
   resolveShakaHome,
+  rewriteSessionLearnings,
   runMaintenance,
   truncateTranscript,
-  undoSessionLearnings,
   updateRollups,
+  validateSessionRewriteInput,
   writeSummary,
 } from "shaka";
 
@@ -297,10 +298,10 @@ async function worker(tmpPath: string) {
     sessionId,
   };
 
-  // Load existing learnings for title matching in extraction prompt
+  // Prepare learning storage before title-driven inference. Summary writing remains fail-open.
   t = performance.now();
-  const existingLearnings = await loadLearnings(memoryDir);
-  const existingTitles = existingLearnings.map((e) => e.title);
+  const learningPreparation = await prepareLearningExtraction(memoryDir);
+  const existingTitles = learningPreparation.existingTitles;
   mark("Loaded existing learnings", t, `${existingTitles.length} titles`);
 
   // Load existing knowledge topic titles for tag convergence (fail-open)
@@ -353,7 +354,12 @@ async function worker(tmpPath: string) {
 
   // Extract and write learnings (fail-open: summary already written)
   t = performance.now();
-  const newLearningsCount = await extractAndWriteLearnings(rawOutput, metadata, memoryDir);
+  const newLearningsCount = await extractAndWriteLearnings(
+    rawOutput,
+    metadata,
+    memoryDir,
+    learningPreparation.learningWriteAllowed,
+  );
   mark("Learnings extraction", t, `${newLearningsCount} new`);
 
   // Update rolling summaries (fail-open: session summary already written)
@@ -364,7 +370,7 @@ async function worker(tmpPath: string) {
   });
   mark("Rollups update", t);
 
-  // Maintenance: consolidation, auto-promote, auto-prune (fail-open)
+  // Maintenance: consolidation, hierarchical generalization, and bounded auto-prune (fail-open)
   t = performance.now();
   try {
     const config = await loadConfig();
@@ -377,7 +383,7 @@ async function worker(tmpPath: string) {
       } else {
         const detail = [
           `condensed=${maintenanceResult.condensed ?? 0}`,
-          `promoted=${maintenanceResult.promoted ?? 0}`,
+          `generalized=${maintenanceResult.generalized ?? 0}`,
           `pruned=${maintenanceResult.pruned ?? 0}`,
         ].join(", ");
         mark("Maintenance complete", t, detail);
@@ -427,35 +433,92 @@ async function worker(tmpPath: string) {
   Bun.write(timingPath, `${new Date().toISOString()}\n${timings.join("\n")}\n`).catch(() => {});
 }
 
+/** Existing-title snapshot plus the write decision established before inference. */
+export interface LearningExtractionPreparation {
+  readonly existingTitles: readonly string[];
+  readonly learningWriteAllowed: boolean;
+}
+
+export async function prepareLearningExtraction(
+  memoryDir: string,
+): Promise<LearningExtractionPreparation> {
+  try {
+    const readiness = await prepareLearningStoreForMutation(memoryDir, ["active"]);
+    const active = readiness.active;
+    if (!active) throw new Error("Active learning readiness was not established");
+    return {
+      existingTitles: active.document.entries.map((entry) => entry.title),
+      learningWriteAllowed: true,
+    };
+  } catch (error) {
+    console.error(
+      `Learning storage readiness failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return { existingTitles: [], learningWriteAllowed: false };
+  }
+}
+
 /**
- * Extract learnings from inference output and write to learnings.md.
- * Fail-open: any error is logged but does not affect the summary.
- * Returns the number of learnings extracted (0 on failure).
+ * Parse and commit the session's complete learning rewrite without affecting summary success.
+ * Returns committed append, rewrite, and reinforcement outcomes for maintenance gating.
  */
-async function extractAndWriteLearnings(
+export async function extractAndWriteLearnings(
   rawOutput: string,
   metadata: SessionMetadata,
   memoryDir: string,
+  learningWriteAllowed: boolean,
 ): Promise<number> {
   try {
     const sessionHash = hashSessionId(metadata.sessionId);
-    const extracted = parseExtractedLearnings(rawOutput, {
-      date: metadata.date,
-      cwd: metadata.cwd,
-      sessionHash,
-    });
-
-    if (extracted.length === 0) {
-      console.error("No learnings extracted from this session");
+    const extracted = parseExtractedLearnings(rawOutput);
+    if (extracted.status === "missing") {
+      console.error("Learnings extraction missing; preserving prior session contributions");
+      return 0;
+    }
+    if (extracted.status === "malformed") {
+      console.error(`Learnings extraction malformed: ${extracted.issues.join(" ")}`);
+      return 0;
+    }
+    if (!learningWriteAllowed) {
+      console.error("Learnings write disabled because storage readiness failed");
       return 0;
     }
 
-    await mutateLearnings(memoryDir, (entries) => {
-      const withoutPrevious = undoSessionLearnings(entries, sessionHash);
-      return mergeNewLearnings(withoutPrevious, extracted);
+    const validation = validateSessionRewriteInput(extracted.entries, {
+      date: metadata.date,
+      sessionHash,
+      currentCwd: metadata.cwd,
     });
-    console.error(`Wrote ${extracted.length} learning(s) to learnings.md`);
-    return extracted.length;
+    if (!validation.ok) {
+      console.error(
+        `Learnings extraction malformed: ${validation.issues.map((issue) => issue.message).join(" ")}`,
+      );
+      return 0;
+    }
+
+    let committedCounts: SessionRewriteCounts | undefined;
+    await mutateLearnings(memoryDir, (entries) => {
+      const rewrite = rewriteSessionLearnings(entries, validation.extracted, validation.context);
+      committedCounts = rewrite.counts;
+      return [...rewrite.entries];
+    });
+    if (!committedCounts) throw new Error("Learning rewrite completed without outcome counts");
+    const maintenanceEligible =
+      committedCounts.appended + committedCounts.rewritten + committedCounts.reinforced;
+    console.error(
+      [
+        "Committed learning rewrite",
+        `appended=${committedCounts.appended}`,
+        `rewritten=${committedCounts.rewritten}`,
+        `reinforced=${committedCounts.reinforced}`,
+        `suppressed=${committedCounts.suppressed}`,
+        `ambiguous=${committedCounts.ambiguousTitles}`,
+        `primary-exposures-removed=${committedCounts.primaryExposuresRemoved}`,
+        `orphans-removed=${committedCounts.orphansRemoved}`,
+        `durable-retained=${committedCounts.durableEntriesRetained}`,
+      ].join(" "),
+    );
+    return maintenanceEligible;
   } catch (err) {
     console.error(
       `Learnings extraction failed: ${err instanceof Error ? err.message : String(err)}`,

@@ -3,9 +3,11 @@
  * Subcommands: search, list, consolidate, review, compile.
  */
 
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Command, Option } from "commander";
 import { loadConfig, resolveShakaHome } from "../../domain/config";
+import { CondensationCommitError } from "../../memory/condensation-commit";
 import {
   type KnowledgeInspection,
   findKnowledgeSourceImpact,
@@ -15,12 +17,14 @@ import {
   type LearningStorageDiagnostic,
   inspectLearningStorage,
 } from "../../memory/learning-inspection";
+import { normalizeCwdPath } from "../../memory/learning-scope";
 import {
   type LearningEntry,
   LearningsIntegrityError,
   LearningsStoragePathError,
   loadLearnings,
 } from "../../memory/learnings";
+import { LearningScopeMigrationError } from "../../memory/legacy-scope-migration";
 import { type SearchFilter, searchMemory } from "../../memory/search";
 import { type SummaryIndex, listSummaries } from "../../memory/storage";
 import { runCompile } from "./compile";
@@ -141,7 +145,10 @@ export function createMemoryCommand(): Command {
     .action(async () => {
       await runLearningMutationCommand(async () => {
         const { memoryDir } = resolveMemoryPaths();
-        await runConsolidation(memoryDir);
+        const home = normalizeCwdPath(homedir());
+        await runConsolidation(memoryDir, {
+          forbiddenAncestorRoots: home ? [home] : [],
+        });
       });
     });
 
@@ -150,10 +157,19 @@ export function createMemoryCommand(): Command {
     .description("Interactively review, filter, and delete learnings")
     .option("--prune", "AI-assisted quality assessment: flag low-quality entries for review")
     .option("--filter <text>", "Pre-filter learnings by text (matches CWDs, titles, body)")
-    .action(async (options: { prune?: boolean; filter?: string }) => {
+    .option("--cwd <path>", "Correct applicability for a specific project", ".")
+    .action(async (options: { prune?: boolean; filter?: string; cwd: string }) => {
       await runLearningMutationCommand(async () => {
         const { memoryDir } = resolveMemoryPaths();
-        await runReview(memoryDir, options);
+        const baseCwd = process.cwd();
+        const cwd = normalizeCwdPath(options.cwd, baseCwd);
+        if (!cwd) throw new Error("Review CWD must resolve from an absolute working directory");
+        const home = normalizeCwdPath(homedir());
+        await runReview(memoryDir, {
+          ...options,
+          cwd,
+          forbiddenAncestorRoots: home ? [home] : [],
+        });
       });
     });
 
@@ -228,7 +244,14 @@ async function runLearningMutationCommand(operation: () => Promise<void>): Promi
   try {
     await operation();
   } catch (error) {
-    if (!(error instanceof LearningsIntegrityError || error instanceof LearningsStoragePathError)) {
+    if (
+      !(
+        error instanceof LearningsIntegrityError ||
+        error instanceof LearningsStoragePathError ||
+        error instanceof LearningScopeMigrationError ||
+        error instanceof CondensationCommitError
+      )
+    ) {
       throw error;
     }
 
@@ -246,7 +269,9 @@ async function runMemoryCheck(memoryDir: string, cwd: string): Promise<void> {
   const knowledgeHealthy =
     knowledge.complete &&
     knowledge.diagnostics.every((diagnostic) => diagnostic.severity !== "error");
-  const learningsHealthy = learningDiagnostics.length === 0;
+  const learningsHealthy = learningDiagnostics.every(
+    (diagnostic) => diagnostic.severity !== "error",
+  );
   const healthy = knowledgeHealthy && learningsHealthy;
 
   console.log(`Memory integrity: ${healthy ? "PASS" : "FAIL"}`);
@@ -305,10 +330,20 @@ function printLearningsStats(learnings: LearningEntry[]): void {
   if (learnings.length === 0) return;
 
   const cats = countBy(learnings, (e) => e.category);
-  const globalCount = learnings.filter((e) => e.cwds.includes("*")).length;
+  const globalCount = learnings.filter(
+    (entry) => entry.cwds.length === 1 && entry.cwds[0] === "*",
+  ).length;
+  const correctedCount = learnings.filter(
+    (entry) =>
+      !(entry.cwds.length === 1 && entry.cwds[0] === "*") &&
+      (entry.promotionEvidence?.excludedCwds.length ?? 0) > 0,
+  ).length;
+  const scopedCount = learnings.length - globalCount - correctedCount;
 
   console.log(`  ${formatCounts(cats)}`);
-  console.log(`  global: ${globalCount}  |  project-scoped: ${learnings.length - globalCount}`);
+  console.log(
+    `  global: ${globalCount}  |  project-scoped: ${scopedCount}  |  scope-corrected: ${correctedCount}`,
+  );
 
   const cwdFreq = countBy(
     learnings.flatMap((e) => e.cwds.filter((c) => c !== "*")),

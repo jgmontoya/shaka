@@ -11,19 +11,16 @@ import { lstat, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LearningEntry } from "../../../src/memory/learnings";
-import {
-  parseLearnings,
-  promoteToGlobal,
-  renderLearnings,
-  writeLearnings,
-} from "../../../src/memory/learnings";
+import { parseLearnings, promoteToGlobal, renderLearnings } from "../../../src/memory/learnings";
+import { writeLearnings } from "../../../src/memory/learning-store";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-consolidate-orch");
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {
     category: overrides.category ?? "correction",
-    cwds: overrides.cwds ?? ["/projects/myapp"],
+    cwds: overrides.cwds ?? testCwds("/projects/myapp"),
     exposures: overrides.exposures ?? [{ date: "2026-02-09", sessionHash: "a1b2c3d4" }],
     nonglobal: overrides.nonglobal ?? false,
     title: overrides.title ?? "Use Bun.file() instead of fs.readFile()",
@@ -44,7 +41,7 @@ describe("appendToArchive", () => {
   });
 
   test("creates archive file when it does not exist", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
 
     const entries = [
       makeEntry({ title: "Archived A", body: "Body A." }),
@@ -62,7 +59,7 @@ describe("appendToArchive", () => {
   });
 
   test("appends to existing archive file without losing previous entries", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
 
     // First write
     const first = [makeEntry({ title: "First Entry", body: "First body." })];
@@ -81,9 +78,9 @@ describe("appendToArchive", () => {
   });
 
   test("preserves promotion evidence in the archive", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
     const promoted = promoteToGlobal(
-      makeEntry({ title: "Promoted", cwds: ["/a", "/b", "/c"] }),
+      makeEntry({ title: "Promoted", cwds: testCwds("/a", "/b", "/c") }),
       "automatic-cross-project-threshold",
     );
 
@@ -94,7 +91,7 @@ describe("appendToArchive", () => {
   });
 
   test("refuses to append when existing archive promotion metadata is malformed", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
     const archivePath = join(testMemoryDir, "learnings-archive.md");
     const raw = `# Learnings
 
@@ -116,8 +113,28 @@ Body.
     expect(await Bun.file(archivePath).text()).toBe(raw);
   });
 
+  test("refuses to append invalid applicability evidence", async () => {
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
+    const archivePath = join(testMemoryDir, "learnings-archive.md");
+    const invalid = {
+      ...makeEntry({ title: "Invalid archive entry", cwds: ["*"] }),
+      promotionEvidence: {
+        sourceCwds: testCwds("/work/project"),
+        excludedCwds: testCwds("/work/project"),
+        exposures: [],
+        reasons: ["manual-scope-correction" as const],
+      },
+    };
+
+    await expect(appendToArchive(testMemoryDir, [invalid])).rejects.toThrow(
+      "invalid applicability scope",
+    );
+
+    expect(await Bun.file(archivePath).exists()).toBe(false);
+  });
+
   test("refuses to replace a symlinked archive", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
     const archivePath = join(testMemoryDir, "learnings-archive.md");
     const targetPath = join(testMemoryDir, "linked-archive.md");
     const raw = renderLearnings([makeEntry({ title: "Existing archive entry" })]);
@@ -133,7 +150,7 @@ Body.
   });
 
   test("refuses to replace a dangling archive symlink", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
     const archivePath = join(testMemoryDir, "learnings-archive.md");
     const missingTarget = join(testMemoryDir, "missing-archive.md");
     await symlink(missingTarget, archivePath);
@@ -147,7 +164,7 @@ Body.
   });
 
   test("no-ops when given empty array", async () => {
-    const { appendToArchive } = await import("../../../src/memory/learnings");
+    const { appendToArchive } = await import("../../../src/memory/learning-store");
 
     await appendToArchive(testMemoryDir, []);
 
@@ -165,8 +182,8 @@ describe("condenseEntries", () => {
     const { condenseEntries } = await import("../../../src/memory/consolidation");
 
     const entries = [
-      makeEntry({ title: "A", cwds: ["/proj"] }),
-      makeEntry({ title: "B", cwds: ["/proj"] }),
+      makeEntry({ title: "A", cwds: testCwds("/proj") }),
+      makeEntry({ title: "B", cwds: testCwds("/proj") }),
     ];
 
     const result = await condenseEntries(entries);
@@ -212,12 +229,12 @@ BODY: Use Bun.file() for file I/O and bun:test for testing. Avoids Node.js-speci
     const entries = [
       makeEntry({
         title: "Use Bun.file()",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: twoExposures(),
       }),
       makeEntry({
         title: "Use bun:test",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: twoExposures(),
       }),
     ];
@@ -241,12 +258,12 @@ BODY: Use Bun.file() for file I/O and bun:test for testing. Avoids Node.js-speci
     const entries = [
       makeEntry({
         title: "A",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: twoExposures(),
       }),
       makeEntry({
         title: "B",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: twoExposures(),
       }),
     ];
@@ -285,22 +302,22 @@ BODY: Merged body A.`,
     const entries = [
       makeEntry({
         title: "A1",
-        cwds: ["/proj-a"],
+        cwds: testCwds("/proj-a"),
         exposures: twoExposures(),
       }),
       makeEntry({
         title: "A2",
-        cwds: ["/proj-a"],
+        cwds: testCwds("/proj-a"),
         exposures: twoExposures(),
       }),
       makeEntry({
         title: "B1",
-        cwds: ["/proj-b"],
+        cwds: testCwds("/proj-b"),
         exposures: twoExposures(),
       }),
       makeEntry({
         title: "B2",
-        cwds: ["/proj-b"],
+        cwds: testCwds("/proj-b"),
         exposures: twoExposures(),
       }),
     ];
@@ -321,6 +338,219 @@ BODY: Merged body A.`,
 });
 
 // --- runConsolidation threshold behavior ---
+
+describe("promptForScopeWidening", () => {
+  test("shows every positive source CWD before asking for a widening decision", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const sourceCwds = testCwds(
+      "/company-a/project-1",
+      "/company-a/project-2",
+      "/company-a/project-3",
+    );
+    const entry = {
+      ...makeEntry({ title: "Company convention", cwds: testCwds("/company-a") }),
+      promotionEvidence: {
+        sourceCwds,
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["manual-common-ancestor-review" as const],
+      },
+    };
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+
+    try {
+      await promptForScopeWidening([entry], {
+        isTTY: true,
+        prompt: async () => {
+          const rendered = output.join("\n");
+          expect(rendered).toContain(`Sources: ${sourceCwds.join(", ")}`);
+          return "q";
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+  });
+
+  test("accepts a displayed common ancestor", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const entry = makeEntry({
+      title: "Company convention",
+      cwds: testCwds("/company-a/project-1", "/company-a/project-2", "/company-a/project-3"),
+    });
+
+    const result = await promptForScopeWidening([entry], {
+      isTTY: true,
+      forbiddenAncestorRoots: testCwds("/Users/test"),
+      prompt: async () => "a",
+    });
+
+    expect(result[0]?.cwds).toEqual(testCwds("/company-a"));
+    expect(result[0]?.nonglobal).toBe(true);
+    expect(result[0]?.promotionEvidence?.sourceCwds).toEqual(entry.cwds);
+    expect(result[0]?.promotionEvidence?.reasons).toEqual(["manual-common-ancestor-review"]);
+  });
+
+  test("does not offer an ancestor equal to the automatic single-root scope", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const entry = {
+      ...makeEntry({ title: "Company convention", cwds: testCwds("/company-a") }),
+      promotionEvidence: {
+        sourceCwds: testCwds(
+          "/company-a/project-1",
+          "/company-a/project-2",
+          "/company-a/project-3",
+        ),
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["automatic-hierarchical-generalization" as const],
+      },
+    };
+    let question = "";
+
+    const result = await promptForScopeWidening([entry], {
+      isTTY: true,
+      prompt: async (value) => {
+        question = value;
+        return "g";
+      },
+    });
+
+    expect(question).not.toContain("[a]");
+    expect(result[0]?.cwds).toEqual(["*"]);
+  });
+
+  test("offers a broader ancestor after independent clusters generalize", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const entry = {
+      ...makeEntry({
+        title: "Company convention",
+        cwds: testCwds("/company-a/project-1", "/company-a/project-2"),
+      }),
+      promotionEvidence: {
+        sourceCwds: testCwds(
+          "/company-a/project-1/repo-a",
+          "/company-a/project-1/repo-b",
+          "/company-a/project-1/repo-c",
+          "/company-a/project-2/repo-a",
+          "/company-a/project-2/repo-b",
+          "/company-a/project-2/repo-c",
+        ),
+        excludedCwds: [],
+        exposures: [],
+        reasons: ["automatic-hierarchical-generalization" as const],
+      },
+    };
+    let question = "";
+
+    const result = await promptForScopeWidening([entry], {
+      isTTY: true,
+      prompt: async (value) => {
+        question = value;
+        return "a";
+      },
+    });
+
+    expect(question).toContain("[a]");
+    expect(result[0]?.cwds).toEqual(testCwds("/company-a"));
+    expect(result[0]?.promotionEvidence?.reasons).toEqual([
+      "automatic-hierarchical-generalization",
+      "manual-common-ancestor-review",
+    ]);
+  });
+
+  test("requires an explicit global choice", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const entry = makeEntry({ cwds: testCwds("/a", "/b", "/c") });
+
+    const result = await promptForScopeWidening([entry], {
+      isTTY: true,
+      prompt: async () => "g",
+    });
+
+    expect(result[0]?.cwds).toEqual(["*"]);
+    expect(result[0]?.promotionEvidence?.reasons).toEqual(["manual-global-review"]);
+  });
+
+  test("view returns to the same prompt and keep stops future reviews", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const answers = ["v", "k"];
+    let prompts = 0;
+    const entry = makeEntry({ cwds: testCwds("/a", "/b", "/c") });
+
+    const result = await promptForScopeWidening([entry], {
+      isTTY: true,
+      prompt: async () => {
+        prompts++;
+        return answers.shift() ?? "q";
+      },
+    });
+
+    expect(prompts).toBe(2);
+    expect(result[0]?.cwds).toEqual(entry.cwds);
+    expect(result[0]?.nonglobal).toBe(true);
+    expect(result[0]?.promotionEvidence).toBeUndefined();
+  });
+
+  test("skip advances and quit leaves remaining candidates unchanged", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const first = makeEntry({ title: "First", cwds: testCwds("/a", "/b", "/c") });
+    const second = makeEntry({ title: "Second", cwds: testCwds("/d", "/e", "/f") });
+    const answers = ["s", "q"];
+
+    const result = await promptForScopeWidening([first, second], {
+      isTTY: true,
+      prompt: async () => answers.shift() ?? "q",
+    });
+
+    expect(result).toEqual([first, second]);
+  });
+
+  test("updates duplicate titles by reviewed structural position", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const first = makeEntry({ title: "Same title", cwds: testCwds("/a", "/b", "/c") });
+    const second = makeEntry({ title: "Same title", cwds: testCwds("/d", "/e", "/f") });
+    const answers = ["g", "k"];
+
+    const result = await promptForScopeWidening([first, second], {
+      isTTY: true,
+      prompt: async () => answers.shift() ?? "q",
+    });
+
+    expect(result[0]?.cwds).toEqual(["*"]);
+    expect(result[1]?.cwds).toEqual(second.cwds);
+    expect(result[1]?.nonglobal).toBe(true);
+  });
+
+  test("rejects structurally identical widening candidates as ambiguous", async () => {
+    const { promptForScopeWidening } = await import("../../../src/commands/memory/consolidate");
+    const first = makeEntry({ title: "Identical", cwds: testCwds("/a", "/b", "/c") });
+    const second = makeEntry({ title: "Identical", cwds: testCwds("/a", "/b", "/c") });
+    let prompts = 0;
+    const output: string[] = [];
+    const originalLog = console.log;
+    console.log = (...args: unknown[]) => output.push(args.join(" "));
+    let result: LearningEntry[] | undefined;
+
+    try {
+      result = await promptForScopeWidening([first, second], {
+        isTTY: true,
+        prompt: async () => {
+          prompts++;
+          return "g";
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+
+    expect(prompts).toBe(0);
+    expect(result).toEqual([first, second]);
+    expect(output.join("\n")).toContain("identical persisted entries are ambiguous");
+  });
+});
 
 describe("runConsolidation", () => {
   beforeEach(async () => {
@@ -356,14 +586,14 @@ Body.
     expect(await Bun.file(join(testMemoryDir, "learnings-archive.md")).exists()).toBe(false);
   });
 
-  test("backs up the original learnings source without canonicalizing it", async () => {
+  test("preserves legacy source bytes before writing the operational backup", async () => {
     const raw = `# Learnings
 
 Custom header retained by the backup.
 
 ---
 
-<!-- correction | cwd: /myapp | exposures: 2026-02-09@aaaa0000 -->
+<!-- correction | cwd: ${testCwd("/myapp")} | exposures: 2026-02-09@aaaa0000 -->
 
 ### Project entry
 
@@ -374,7 +604,12 @@ Body.
     const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
     await runConsolidation(testMemoryDir);
 
-    expect(await Bun.file(join(testMemoryDir, "learnings.backup.md")).text()).toBe(raw);
+    expect(
+      await Bun.file(join(testMemoryDir, ".learning-scope-migration-v1.active.md")).text(),
+    ).toBe(raw);
+    expect(await Bun.file(join(testMemoryDir, "learnings.backup.md")).text()).toBe(
+      await Bun.file(join(testMemoryDir, "learnings.md")).text(),
+    );
   });
 
   test("runs pass 3 even below threshold of 20 entries", async () => {
@@ -397,7 +632,7 @@ Body.
     const entries: LearningEntry[] = Array.from({ length: 5 }, (_, i) =>
       makeEntry({
         title: `Entry ${i}`,
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: `hash${i}a00` },
           { date: "2026-03-05", sessionHash: `hash${i}b00` },
@@ -410,6 +645,38 @@ Body.
 
     // Pass 3 must have run — inference was called
     expect(inferenceCalled).toBe(true);
+  });
+
+  test("applies deterministic generalization in non-TTY consolidation", async () => {
+    const { runConsolidation } = await import("../../../src/commands/memory/consolidate");
+    const { loadLearnings } = await import("../../../src/memory/learnings");
+    await writeLearnings(testMemoryDir, [
+      makeEntry({
+        title: "Company convention",
+        cwds: testCwds(
+          "/work/company-a/project-1",
+          "/work/company-a/project-2",
+          "/work/company-a/project-3",
+        ),
+      }),
+    ]);
+
+    await runConsolidation(testMemoryDir, {
+      isTTY: false,
+      forbiddenAncestorRoots: testCwds("/home/alice"),
+    });
+
+    expect((await loadLearnings(testMemoryDir))[0]).toMatchObject({
+      cwds: testCwds("/work/company-a"),
+      promotionEvidence: {
+        sourceCwds: testCwds(
+          "/work/company-a/project-1",
+          "/work/company-a/project-2",
+          "/work/company-a/project-3",
+        ),
+        reasons: ["automatic-hierarchical-generalization"],
+      },
+    });
   });
 
   test("archives condensed entries to learnings-archive.md", async () => {
@@ -429,7 +696,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
     const entries: LearningEntry[] = [
       makeEntry({
         title: "Use Bun.file()",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: [
           { date: "2026-03-01", sessionHash: "aaaa0000" },
           { date: "2026-03-05", sessionHash: "bbbb0000" },
@@ -437,7 +704,7 @@ BODY: Use Bun.file() and bun:test. Avoids Node.js APIs.`;
       }),
       makeEntry({
         title: "Use bun:test",
-        cwds: ["/myapp"],
+        cwds: testCwds("/myapp"),
         exposures: [
           { date: "2026-03-02", sessionHash: "cccc0000" },
           { date: "2026-03-06", sessionHash: "dddd0000" },
