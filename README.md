@@ -466,7 +466,7 @@ Domain containers for complex workflows. A skill is a **folder** with a `SKILL.m
 | council            | Multi-perspective debate (3-7 agents)                     |
 | experiment         | Reproducible proof-of-concept investigations              |
 | first-principles   | Deconstruct, challenge, and reconstruct reasoning         |
-| red-team           | Adversarial validation (32 agents)                        |
+| red-team           | Evidence-backed adversarial analysis and steelmanning     |
 | science            | Scientific method workflows                               |
 | tdd                | Test-driven development (default for implementation work) |
 | validate-plan      | Multi-pass pressure test before implementation            |

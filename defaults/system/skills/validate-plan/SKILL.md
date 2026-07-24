@@ -11,7 +11,7 @@ Pressure-test a proposed design with Research, Architect, Engineer, and cold-rea
 
 | Skill              | Target                     | Move                                                                                       |
 | ------------------ | -------------------------- | ------------------------------------------------------------------------------------------ |
-| `red-team`          | Any idea                   | 32-agent adversarial attack; steelman + counter                                            |
+| `red-team`          | Any idea                   | Task-sized adversarial analysis; steelman + counter                                        |
 | `council`          | Open question              | Multi-round debate transcript across perspectives                                          |
 | `first-principles`  | Stuck reasoning            | Decompose → challenge constraints → reconstruct                                            |
 | **`validate-plan`** | **A design about to ship** | **Orchestrate Research+Architect+Engineer+cold reader; produce a revised plan delta + verdict** |

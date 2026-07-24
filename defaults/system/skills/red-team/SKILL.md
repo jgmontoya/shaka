@@ -7,11 +7,15 @@ include_when: Claims need stress-testing. Security implications. Could fail non-
 
 # red-team Skill
 
-Military-grade adversarial analysis using parallel agent deployment. Breaks arguments into atomic components, attacks from 32 expert perspectives (engineers, architects, pentesters, interns), synthesizes findings, and produces devastating counter-arguments with steelman representations.
+Pressure-test claims, plans, architectures, and security designs. Size the
+analysis to the task, preserve independent first passes when multiple
+perspectives add value, and prefer concrete evidence over vote counts. The core
+deliverables are a fair steelman, the strongest surviving counter-argument, and
+an explicit stop reason.
 
 ## Workflow Routing
 
-Route to the appropriate workflow based on the request.
+Route to the workflow that matches the requested outcome.
 
 **When executing a workflow, output this notification directly:**
 
@@ -24,58 +28,47 @@ Running the **WorkflowName** workflow in the **red-team** skill to ACTION...
 | Red team analysis (stress-test existing content)             | `Workflows/ParallelAnalysis.md`      |
 | Adversarial validation (produce new content via competition) | `Workflows/AdversarialValidation.md` |
 
----
-
 ## Quick Reference
 
-| Workflow                  | Purpose                             | Output                                        |
-| ------------------------- | ----------------------------------- | --------------------------------------------- |
-| **ParallelAnalysis**      | Stress-test existing content        | Steelman + Counter-argument (8-points each)   |
-| **AdversarialValidation** | Produce new content via competition | Synthesized solution from competing proposals |
+| Workflow                  | Purpose                             | Output summary                                  |
+| ------------------------- | ----------------------------------- | ----------------------------------------------- |
+| **ParallelAnalysis**      | Stress-test existing content        | Steelman + counter-argument (8 points each)     |
+| **AdversarialValidation** | Produce new content via competition | Synthesized solution from competing proposals   |
 
-**The Five-Phase Protocol (ParallelAnalysis):**
+The output column is a routing summary. Follow the selected workflow and
+`Integration.md` for its full contract.
 
-1. **Decomposition** - Break into 24 atomic claims
-2. **Parallel Analysis** - 32 agents examine strengths AND weaknesses
-3. **Synthesis** - Identify convergent insights
-4. **Steelman** - Strongest version of the argument
-5. **Counter-Argument** - Strongest rebuttal
+**ParallelAnalysis protocol:**
 
----
+1. Frame the core position and its independently falsifiable assumptions.
+2. Size the work to the task, host capacity, and user budget.
+3. Preserve independent first passes before sharing findings.
+4. Synthesize evidence, discard speculation, and state the resulting judgment.
+5. Present the steelman, counter-argument, stop reason, and unresolved concerns.
 
 ## Context Files
 
-- `Philosophy.md` - Core philosophy, success criteria, agent types
-- `Integration.md` - Skill integration, first-principles usage, output format
-
----
+- `Philosophy.md`: Core philosophy, success criteria, and evidence standards
+- `Integration.md`: Optional integrations and output contract
 
 ## Examples
 
-**Attack an architecture proposal:**
+**Stress-test an architecture proposal:**
 
-```
+```text
 User: "red team this microservices migration plan"
 --> Workflows/ParallelAnalysis.md
---> Returns steelman + devastating counter-argument (8 points each)
+--> Returns the strongest steelman and surviving counter-argument
 ```
 
-**Devil's advocate on a business decision:**
+**Compare competing approaches before creating a design:**
 
-```
-User: "poke holes in my plan to raise prices 20%"
---> Workflows/ParallelAnalysis.md
---> Surfaces the ONE core issue that could collapse the plan
-```
-
-**Adversarial validation for content:**
-
-```
+```text
 User: "battle of bots - which approach is better for this feature?"
 --> Workflows/AdversarialValidation.md
---> Synthesizes best solution from competing ideas
+--> Synthesizes a solution from competing proposals
 ```
 
 ---
 
-**Last Updated:** 2025-12-20
+**Last Updated:** 2026-07-23
