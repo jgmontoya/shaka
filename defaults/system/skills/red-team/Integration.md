@@ -1,38 +1,32 @@
 # Red Team Integration Guide
 
-## Skill Integration Order
+## Before the Review
 
-**Use BEFORE red-team:**
+Gather only the context needed to evaluate the important claims. Distinguish
+supplied facts from assumptions and open questions. If evidence is unavailable,
+preserve the uncertainty instead of filling it with speculation.
 
-- `research` - Gather context, find precedents
+## During the Review
 
-**Use DURING red-team:**
+Use first-principles reasoning when a conclusion depends on whether a constraint
+is hard, soft, or assumed. Apply it to the specific premise; it is not a
+required ceremony for every review.
 
-- `storyexplanation` - Decomposition methodology
-- Intern Agents - Parallel assault
+Use task-relevant perspectives only when they can inspect different failure
+mechanisms. The host controls execution and concurrency. Run the perspectives
+sequentially when parallel work is unavailable, and share conclusions only
+after their independent first passes.
 
-**Use AFTER red-team:**
+## Output Contract
 
-- `extractalpha` - Highest-signal critiques
-- `xpost` - Share findings
-
-## first-principles Integration
-
-red-team deeply integrates with first-principles skill:
-
-- **Phase 1 Enhancement:** Use `first-principles/Deconstruct` to break arguments into fundamental parts
-- **Phase 5 Enhancement:** Use `first-principles/Challenge` to classify constraints as hard/soft/assumption
-- **Core Insight:** The most devastating critiques come from challenging hidden assumptions
-- **Invocation:** "Use first-principles/Challenge on the stated constraints before parallel analysis"
-
-## Output Format
-
-- **Format:** Steelman + Counter-argument, each with 8 numbered points
-- **Length:** 12-16 words per point (strict discipline)
-- **Tone:** Direct, substantive, non-performative
-- **Must Include:** First-principles analysis, convergence identification
-- **Must Avoid:** Nitpicking, strawmanning, generic objections
+- **Steelman:** Exactly eight numbered points of 12-16 words each
+- **Counter-argument:** Exactly eight numbered points of 12-16 words each
+- **Evidence:** Concrete support suited to each surviving finding
+- **Judgment:** Sound, sound only after changes, or unsound
+- **Stop:** The applicable stop reason and unresolved concerns
+- **Tone:** Direct, fair, substantive, and non-performative
+- **Avoid:** Nitpicks, strawmen, unsupported speculation, and confidence by vote count
 
 ---
 
-**Last Updated:** 2025-12-20
+**Last Updated:** 2026-07-23

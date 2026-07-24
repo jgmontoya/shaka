@@ -2,37 +2,49 @@
 
 ## Origin
 
-Military red teaming - dedicated teams that attack plans, strategies, and assumptions to find vulnerabilities before the enemy does.
+Red teaming uses an independent, adversarial perspective to expose weaknesses
+before they become costly failures.
 
 ## Core Insight
 
-**The goal is NOT destruction** - it's finding the fundamental flaw that, if challenged, causes the entire structure to collapse.
+The goal is not destruction. It is to find the assumption, logical gap, or
+counterexample that most changes the decision while representing the original
+position fairly.
 
-The most powerful critique is usually ONE core issue:
+The strongest critique often rests on one core issue:
 
-- A hidden assumption that's actually false
-- A logical step that doesn't follow
-- A category error (treating X like Y)
-- An ignored precedent that directly contradicts
+- a hidden assumption that is false or unsupported;
+- a logical step that does not follow;
+- a category error;
+- a relevant counterexample or precedent;
+- a failure mode the proposal does not contain.
 
 ## Success Criteria
 
-- Steelman is strong enough that a proponent would say "yes, that's my argument"
-- Counter-argument defeats the steelman, not a weaker strawman
-- Multiple agents converged on same insights
-- Reader says "I hadn't thought of that"
+- The steelman is strong enough that a proponent recognizes their position.
+- The counter-argument defeats that steelman, not a weaker substitute.
+- Findings identify a concrete mechanism and evidence suited to the task.
+- A well-supported lone finding survives even when other perspectives miss it.
+- Unsupported speculation and low-value nitpicks are discarded.
+- The conclusion states what remains unresolved and why the analysis stopped.
 
-## The 32 Agent Types
+## Task-Sized Independence
 
-| Type           | Count | Focus                          |
-| -------------- | ----- | ------------------------------ |
-| **Engineers**  | 8     | Technical and logical rigor    |
-| **Architects** | 8     | Structural and systemic issues |
-| **Pentesters** | 8     | Adversarial thinking           |
-| **Interns**    | 8     | Fresh perspectives             |
+Use only the perspectives that can examine distinct failure
+mechanisms. A narrow claim may need one local pass. A broader design may benefit
+from a small set of independent first passes.
 
-Each agent type brings unique attack angles - see `Workflows/ParallelAnalysis.md` for full roster.
+Host capacity and the user's budget are ceilings, never targets. Work
+sequentially when parallel execution is unavailable. Do not share sibling
+conclusions until the initial passes are complete.
+
+## Evidence Over Consensus
+
+Agent count is not confidence. Prefer reproduction, supplied facts, violated
+constraints, counterexamples, and explicit logical gaps. Similar conclusions
+matter when they arise from independent evidence, but agreement cannot rescue
+an unsupported finding.
 
 ---
 
-**Last Updated:** 2025-12-20
+**Last Updated:** 2026-07-23

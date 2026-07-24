@@ -12,7 +12,7 @@ Running the **AdversarialValidation** workflow in the **red-team** skill to vali
 - Content that needs to withstand scrutiny
 - Any output where quality matters more than speed
 
-**Source:** Network Chuck prompting video (2025) - "AI is normally better at critiquing or editing than original writing"
+**Source:** Network Chuck prompting video (2025): "AI is normally better at critiquing or editing than original writing"
 
 ---
 
@@ -163,20 +163,20 @@ OUTPUT:
 
 ## Integration with Existing red-team
 
-**Relationship to 32-Agent Protocol:**
+**Relationship to ParallelAnalysis:**
 
-- The 32-agent parallel analysis (parallelAnalysis.md) is for DEPTH - attacking one argument from 32 perspectives
-- Adversarial Validation is for SYNTHESIS - producing better output through competition and refinement
+- `ParallelAnalysis.md` stress-tests an existing position with task-sized adversarial analysis
+- Adversarial Validation produces a new solution through competition and refinement
 
 **When to Use Which:**
 
-- **32-Agent Protocol:** "Red team this argument/idea" - stress-test existing content
-- **Adversarial Validation:** "Help me design/decide/create X" - produce new content through adversarial refinement
+- **ParallelAnalysis:** "Red team this argument/idea": stress-test existing content
+- **Adversarial Validation:** "Help me design/decide/create X": produce new content through adversarial refinement
 
 **Combining Both:**
 
 1. Use Adversarial Validation to produce initial solution
-2. Use 32-Agent Protocol to stress-test the synthesized result
+2. Use ParallelAnalysis to stress-test the synthesized result
 3. Iterate if critical flaws found
 
 ---
@@ -185,10 +185,10 @@ OUTPUT:
 
 **Good Adversarial Validation:**
 
-- Each proposal genuinely represents its perspective (not strawmen)
+- Each proposal represents a distinct perspective (not strawmen)
 - Critic finds real flaws, not just nitpicks
 - Synthesis is demonstrably better than any individual proposal
-- Trade-offs are honestly acknowledged
+- Trade-offs are acknowledged
 - Final output withstands scrutiny
 
 **Bad Signs:**
@@ -229,11 +229,11 @@ Start with A's JWT approach (pragmatic), add B's short-lived tokens (15 min) and
 
 ## Key Principles
 
-1. **Genuine competition** - Proposals must represent real alternatives, not strawmen
-2. **Brutal but fair critique** - Find real flaws, acknowledge real strengths
-3. **Synthesis > Compromise** - The goal is BETTER, not BLENDED
-4. **Honest trade-offs** - Don't pretend tensions are fully resolved
-5. **Permission to fail applies** - If no synthesis is clearly superior, say so
+1. **Real competition:** Proposals must represent real alternatives, not strawmen
+2. **Brutal but fair critique:** Find real flaws, acknowledge real strengths
+3. **Synthesis > Compromise:** The goal is BETTER, not BLENDED
+4. **Honest trade-offs:** Don't pretend tensions are fully resolved
+5. **Permission to fail applies:** If no synthesis is clearly superior, say so
 
 ---
 
@@ -250,7 +250,6 @@ Start with A's JWT approach (pragmatic), add B's short-lived tokens (15 min) and
 
 **Related Workflows:**
 
-- `parallelAnalysis.md` - For stress-testing existing arguments
-- `Tree-of-thought.md` (CORE) - For exploring branches before committing
+- `ParallelAnalysis.md`: For stress-testing existing arguments
 
-**Last Updated:** 2025-11-27
+**Last Updated:** 2026-07-23
