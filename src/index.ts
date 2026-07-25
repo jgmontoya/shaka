@@ -209,6 +209,7 @@ import { createAutoresearchCommand, createOptimizeCommand } from "./commands/aut
 import { createCommandsCommand } from "./commands/commands";
 import { createConfigCommand } from "./commands/config";
 import { createDoctorCommand } from "./commands/doctor";
+import { createHookCommand } from "./commands/hook";
 import { createInitCommand } from "./commands/init";
 import { createMcpCommand } from "./commands/mcp";
 import { createMemoryCommand } from "./commands/memory";
@@ -238,6 +239,7 @@ if (import.meta.main) {
   program.addCommand(createDoctorCommand());
   program.addCommand(createConfigCommand());
   program.addCommand(createMcpCommand());
+  program.addCommand(createHookCommand());
   program.addCommand(createToolCommand());
   program.addCommand(createMemoryCommand());
   program.addCommand(createCommandsCommand());
