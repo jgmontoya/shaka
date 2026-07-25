@@ -27,6 +27,8 @@ const ROOT = join(
   tmpdir(),
   `shaka-pi-extension-load-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
 );
+const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
+const SOURCE_ENTRY = join(REPO_ROOT, "src", "index.ts");
 const BIN_DIR = join(ROOT, "bin");
 const SHAKA_BIN = join(BIN_DIR, "shaka");
 const STDIN_LOG = join(ROOT, "stdin.log");
@@ -103,6 +105,25 @@ async function writeStubShaka(exitCode: number, stderr = "blocked: dangerous"): 
       `cat > ${shellEscape(STDIN_LOG)}`,
       `printf '%s' ${shellEscape(stderr)} >&2`,
       `exit ${exitCode}`,
+      "",
+    ].join("\n"),
+  );
+  await chmod(SHAKA_BIN, 0o755);
+}
+
+async function writeSourceShaka(): Promise<void> {
+  await Bun.write(
+    SHAKA_BIN,
+    [
+      "#!/usr/bin/env bun",
+      `const child = Bun.spawn(["bun", ${JSON.stringify(SOURCE_ENTRY)}, ...process.argv.slice(2)], {`,
+      "  cwd: process.cwd(),",
+      "  env: process.env,",
+      '  stdin: "inherit",',
+      '  stdout: "inherit",',
+      '  stderr: "inherit",',
+      "});",
+      "process.exitCode = await child.exited;",
       "",
     ].join("\n"),
   );
@@ -205,8 +226,10 @@ beforeEach(async () => {
   // because a previous test's log content satisfies the substring check.
   await rm(STDIN_LOG, { force: true });
   await rm(ARGV_LOG, { force: true });
+  await rm(join(SHAKA_HOME, "system", "hooks"), { recursive: true, force: true });
+  await mkdir(join(SHAKA_HOME, "system", "hooks"), { recursive: true });
   process.env.SHAKA_BIN = SHAKA_BIN;
-  delete process.env.SHAKA_PI_SUBAGENT;
+  Reflect.deleteProperty(process.env, "SHAKA_PI_SUBAGENT");
 });
 
 afterEach(() => {
@@ -227,6 +250,59 @@ describe.skipIf(process.platform === "win32")("Pi extension — generated extens
     const userProfile = join(ROOT, "windows-profile");
 
     expect(mod.resolveExtensionShakaHome({ USERPROFILE: userProfile })).toBe(SHAKA_HOME);
+  });
+
+  test("session.start context crosses the generated extension and real source CLI", async () => {
+    await writeSourceShaka();
+    await Bun.write(
+      join(SHAKA_HOME, "system", "hooks", "context.ts"),
+      [
+        'export const TRIGGER = ["session.start"] as const;',
+        "if (import.meta.main) {",
+        "  await Bun.stdin.text();",
+        '  process.stdout.write("context from real hook dispatch");',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { handlers } = await loadExtension();
+
+    const result = await handlers.before_agent_start?.(
+      { type: "before_agent_start", prompt: "hello", systemPrompt: "base prompt" },
+      { sessionManager: { id: "real-cli-session" } },
+    );
+
+    expect(result).toEqual({
+      systemPrompt: "base prompt\n\ncontext from real hook dispatch",
+    });
+  });
+
+  test("tool.before exit 2 crosses the generated extension and real source CLI", async () => {
+    await writeSourceShaka();
+    await Bun.write(
+      join(SHAKA_HOME, "system", "hooks", "security.ts"),
+      [
+        'export const TRIGGER = ["tool.before"] as const;',
+        'export const MATCHER = ["Bash"] as const;',
+        "if (import.meta.main) {",
+        "  await Bun.stdin.text();",
+        '  process.stderr.write("blocked by real hook dispatch");',
+        "  process.exitCode = 2;",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const { handlers } = await loadExtension();
+
+    const result = await handlers.tool_call?.(
+      { type: "tool_call", toolName: "bash", toolCallId: "c1", input: { command: "rm -rf /" } },
+      { sessionManager: { id: "real-cli-security" } },
+    );
+
+    expect(result).toEqual({
+      block: true,
+      reason: "blocked by real hook dispatch",
+    });
   });
 
   test("tool_call returns { block: true, reason } when shaka hook exits 2", async () => {
