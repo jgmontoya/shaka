@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-25
+
 ### Changed
 
 - **Red-team reviews now scale to the task:** the shipped skill uses available subagents for distinct first passes only when they can change the result and the active host supports delegation. Otherwise, including on Pi's default installation, it runs focused passes sequentially in the current agent. Fixed 24-claim and 32-agent quotas are gone. The workflow gives concrete evidence more weight than vote counts, preserves the eight-point steelman and counter-argument format, and reports its execution mode, judgment, stop reason, and unresolved concerns.
@@ -15,6 +17,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ### Fixed
 
+- **Pi lifecycle hooks run again** - the Pi extension now dispatches session, prompt, tool, and shutdown events through `shaka hook`, so system and customized hooks execute and tool-blocking decisions reach Pi.
 - **Learning storage now fails and recovers safely** - malformed learning records, migration state, and unsafe file paths block mutations while valid read-only memory remains available. `shaka memory check` reports the affected files and any pending recovery. Interrupted condensation resumes exactly once, preventing duplicate archive entries.
 
 ## [0.14.0] - 2026-07-17
@@ -472,7 +475,8 @@ Initial release. Core infrastructure for a provider-agnostic AI assistant framew
 - **E2E tests** — Docker-based end-to-end tests for both providers
 - **Unit tests** — 200+ tests covering core logic
 
-[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/jgmontoya/shaka/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/jgmontoya/shaka/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/jgmontoya/shaka/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/jgmontoya/shaka/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/jgmontoya/shaka/compare/v0.11.0...v0.12.0
