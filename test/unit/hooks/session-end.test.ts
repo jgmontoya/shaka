@@ -92,20 +92,21 @@ describe("session-end hook", () => {
       expect({ exitCode, stdout, stderr }).toEqual({ exitCode: 0, stdout: "", stderr: "" });
 
       let workerLog = "";
-      for (let attempt = 0; attempt < 100; attempt++) {
+      const workerDeadline = performance.now() + 10_000;
+      while (performance.now() < workerDeadline) {
         const file = Bun.file(workerLogPath);
         if (await file.exists()) {
           workerLog = await file.text();
           if (workerLog.includes("Empty transcript, skipping summarization")) break;
         }
-        await Bun.sleep(10);
+        await Bun.sleep(25);
       }
       expect(workerLog).toContain(`Worker started: pi session ${sessionId}`);
       expect(workerLog).toContain("Empty transcript, skipping summarization");
     } finally {
       await rm(shakaHome, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 
   test("source file has provider discrimination for codex", async () => {
     const source = await Bun.file("defaults/system/hooks/session-end.ts").text();

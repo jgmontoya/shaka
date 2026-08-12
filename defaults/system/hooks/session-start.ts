@@ -16,15 +16,16 @@ import {
   loadConfig,
   loadKnowledgeIndex,
   loadLearnings,
+  loadRollups,
   loadShakaFile,
   renderEntryForContext,
   renderSessionSection,
   resolveDefaultsUserDir,
   resolveShakaHome,
   selectLearnings,
-  loadRollups,
   selectRecentSummaries,
 } from "shaka";
+import { spawnSessionEndWorker } from "./session-end";
 
 /** Hook trigger events - Shaka canonical names (provider configurers handle conversion) */
 export const TRIGGER = ["session.start"] as const;
@@ -210,15 +211,8 @@ async function main() {
             };
             await Bun.write(tmpPath, JSON.stringify(sessionEndInput));
 
-            // Find session-end hook path (same directory as this hook)
-            const sessionEndHookPath = join(import.meta.dir, "session-end.ts");
             const logPath = join(memoryDir, ".session-end-worker.log");
-            const proc = Bun.spawn(["bun", "run", sessionEndHookPath, "--worker", tmpPath], {
-              stdin: "ignore",
-              stdout: "ignore",
-              stderr: Bun.file(logPath),
-            });
-            proc.unref();
+            await spawnSessionEndWorker(tmpPath, logPath);
 
             console.error(
               `[session-start] Recovered stale Codex marker for session ${marker.session_id}`,

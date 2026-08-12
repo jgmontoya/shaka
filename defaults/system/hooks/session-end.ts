@@ -58,6 +58,8 @@ const MAX_TRANSCRIPT_CHARS = 100_000;
 /** CLI flag that switches to worker mode */
 const WORKER_FLAG = "--worker";
 
+const WINDOWS_WORKER_COMMAND = `start "" /b "%SHAKA_SESSION_END_RUNTIME%" "%SHAKA_SESSION_END_HOOK%" ${WORKER_FLAG} "%SHAKA_SESSION_END_INPUT%"`;
+
 interface SessionEndInput {
   session_id?: string;
   transcript_path?: string;
@@ -186,6 +188,47 @@ function elapsedMs(start: number): number {
   return Math.round(performance.now() - start);
 }
 
+/**
+ * Spawn a session-end worker that can outlive the hook process.
+ *
+ * Bun cannot currently detach a child from its Windows job object
+ * (oven-sh/bun#31603), so unref alone kills the worker when the dispatch
+ * process exits. `cmd start` provides the required process breakaway. Paths
+ * travel through quoted environment variables so cmd never parses
+ * user-controlled path text as shell syntax.
+ */
+export async function spawnSessionEndWorker(tmpPath: string, logPath: string): Promise<void> {
+  const stderr = Bun.file(logPath);
+
+  if (process.platform === "win32") {
+    const bootstrap = Bun.spawn(["cmd.exe", "/d", "/s", "/c", WINDOWS_WORKER_COMMAND], {
+      env: {
+        ...process.env,
+        SHAKA_SESSION_END_RUNTIME: process.execPath,
+        SHAKA_SESSION_END_HOOK: import.meta.path,
+        SHAKA_SESSION_END_INPUT: tmpPath,
+      },
+      stdin: "ignore",
+      stdout: "ignore",
+      stderr,
+      windowsHide: true,
+    });
+    const exitCode = await bootstrap.exited;
+    if (exitCode !== 0) {
+      throw new Error(`Failed to launch detached session-end worker (exit ${exitCode})`);
+    }
+    return;
+  }
+
+  const proc = Bun.spawn([process.execPath, import.meta.path, WORKER_FLAG, tmpPath], {
+    detached: true,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr,
+  });
+  proc.unref();
+}
+
 // ─── Dispatch (parent) ──────────────────────────────────────────────────────
 
 /**
@@ -229,12 +272,7 @@ async function dispatch() {
 
   // Spawn detached worker — stderr goes to log file for diagnostics
   const logPath = join(memoryDir, ".session-end-worker.log");
-  const proc = Bun.spawn(["bun", import.meta.path, WORKER_FLAG, tmpPath], {
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: Bun.file(logPath),
-  });
-  proc.unref();
+  await spawnSessionEndWorker(tmpPath, logPath);
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────────────
