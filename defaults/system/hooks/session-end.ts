@@ -58,7 +58,7 @@ const MAX_TRANSCRIPT_CHARS = 100_000;
 /** CLI flag that switches to worker mode */
 const WORKER_FLAG = "--worker";
 
-const WINDOWS_WORKER_COMMAND = `start "" /b "%SHAKA_SESSION_END_RUNTIME%" "%SHAKA_SESSION_END_HOOK%" ${WORKER_FLAG} "%SHAKA_SESSION_END_INPUT%"`;
+const WINDOWS_WORKER_COMMAND = `start "" /b "%SHAKA_SESSION_END_RUNTIME%" "%SHAKA_SESSION_END_HOOK%" ${WORKER_FLAG} "%SHAKA_SESSION_END_INPUT%" 2>> "%SHAKA_SESSION_END_LOG%"`;
 
 interface SessionEndInput {
   session_id?: string;
@@ -207,10 +207,11 @@ export async function spawnSessionEndWorker(tmpPath: string, logPath: string): P
         SHAKA_SESSION_END_RUNTIME: process.execPath,
         SHAKA_SESSION_END_HOOK: import.meta.path,
         SHAKA_SESSION_END_INPUT: tmpPath,
+        SHAKA_SESSION_END_LOG: logPath,
       },
       stdin: "ignore",
       stdout: "ignore",
-      stderr,
+      stderr: "ignore",
       windowsHide: true,
     });
     const exitCode = await bootstrap.exited;
