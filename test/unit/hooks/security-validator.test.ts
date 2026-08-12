@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, rm, stat, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,7 +142,7 @@ describe("security-validator hook", () => {
       ];
 
       for (const directory of eventDirectories) {
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
+        expect((await Bun.file(directory).stat()).mode & 0o777).toBe(0o700);
       }
     } finally {
       await rm(privateHome, { recursive: true, force: true });
@@ -172,7 +172,7 @@ describe("security-validator hook", () => {
       await runHook(bashInput("sudo rm -rf /"), privateHome, preloadPath);
 
       for (const directory of eventDirectories) {
-        expect((await stat(directory)).mode & 0o777).toBe(0o700);
+        expect((await Bun.file(directory).stat()).mode & 0o777).toBe(0o700);
       }
     } finally {
       await rm(privateHome, { recursive: true, force: true });
@@ -190,7 +190,7 @@ describe("security-validator hook", () => {
       expect(eventFile).toBeDefined();
       const eventPath = join(privateHome, "memory", "security", eventFile as string);
 
-      expect((await stat(eventPath)).mode & 0o777).toBe(0o600);
+      expect((await Bun.file(eventPath).stat()).mode & 0o777).toBe(0o600);
     } finally {
       await rm(privateHome, { recursive: true, force: true });
     }
