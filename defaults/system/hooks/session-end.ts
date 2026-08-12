@@ -58,8 +58,6 @@ const MAX_TRANSCRIPT_CHARS = 100_000;
 /** CLI flag that switches to worker mode */
 const WORKER_FLAG = "--worker";
 
-const WINDOWS_WORKER_COMMAND = `start "" /b "%SHAKA_SESSION_END_RUNTIME%" "%SHAKA_SESSION_END_HOOK%" ${WORKER_FLAG} "%SHAKA_SESSION_END_INPUT%" 2>> "%SHAKA_SESSION_END_LOG%"`;
-
 interface SessionEndInput {
   session_id?: string;
   transcript_path?: string;
@@ -193,27 +191,34 @@ function elapsedMs(start: number): number {
  *
  * Bun cannot currently detach a child from its Windows job object
  * (oven-sh/bun#31603), so unref alone kills the worker when the dispatch
- * process exits. `cmd start` provides the required process breakaway. Paths
- * travel through quoted environment variables so cmd never parses
- * user-controlled path text as shell syntax.
+ * process exits. `cmd start` provides the required process breakaway.
  */
 export async function spawnSessionEndWorker(tmpPath: string, logPath: string): Promise<void> {
   const stderr = Bun.file(logPath);
 
   if (process.platform === "win32") {
-    const bootstrap = Bun.spawn(["cmd.exe", "/d", "/s", "/c", WINDOWS_WORKER_COMMAND], {
-      env: {
-        ...process.env,
-        SHAKA_SESSION_END_RUNTIME: process.execPath,
-        SHAKA_SESSION_END_HOOK: import.meta.path,
-        SHAKA_SESSION_END_INPUT: tmpPath,
-        SHAKA_SESSION_END_LOG: logPath,
+    const bootstrap = Bun.spawn(
+      [
+        "cmd.exe",
+        "/d",
+        "/c",
+        "start",
+        "",
+        "/b",
+        process.execPath,
+        import.meta.path,
+        WORKER_FLAG,
+        tmpPath,
+        "2>>",
+        logPath,
+      ],
+      {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+        windowsHide: true,
       },
-      stdin: "ignore",
-      stdout: "ignore",
-      stderr: "ignore",
-      windowsHide: true,
-    });
+    );
     const exitCode = await bootstrap.exited;
     if (exitCode !== 0) {
       throw new Error(`Failed to launch detached session-end worker (exit ${exitCode})`);
