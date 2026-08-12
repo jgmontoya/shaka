@@ -235,8 +235,6 @@ async function dispatch() {
     stderr: Bun.file(logPath),
   });
   proc.unref();
-
-  console.error(`[session-end] Dispatched worker for session ${sessionId}`);
 }
 
 // ─── Worker ─────────────────────────────────────────────────────────────────
