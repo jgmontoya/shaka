@@ -61,7 +61,7 @@ The full-auto default needs a TTY (interactive handoff to the provider CLI). If 
 
 Non-TTY contexts now have two options: `--oneshot` runs the setup agent non-interactively (agent authors the setup artifacts end-to-end, no TUI) and `--wizard` uses the hand-filled wizard + TODO template. Pick `--oneshot` when you trust the agent to pick sensible defaults from the objective alone; pick `--wizard` when you want to dictate every field yourself.
 
-If no provider CLI is installed, the default fails the same way. Run `shaka init` to install one, or use `--wizard` to author the setup by hand.
+If no provider CLI is installed, the default fails the same way. Install a provider CLI and run `shaka init`, or use `--wizard` to author the setup by hand.
 
 ## The loop
 

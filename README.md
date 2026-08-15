@@ -27,7 +27,7 @@ shaka init
 
 `shaka init` will detect your installed providers (Claude Code, opencode, Codex, Pi, or any combination) and set everything up.
 
-**Prerequisites:** [Bun](https://bun.sh) (make sure it's [on your `PATH`](https://bun.com/docs/installation#add-bun-to-your-path)) and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai), [Codex](https://github.com/openai/codex), or [Pi](https://pi.dev).
+**Prerequisites:** [Bun](https://bun.sh) (make sure it's [on your `PATH`](https://bun.com/docs/installation#add-bun-to-your-path)) and at least one of [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [opencode](https://opencode.ai), [Codex](https://developers.openai.com/codex/cli/), or [Pi](https://pi.dev).
 
 After installation, the quickest inspection commands are:
 

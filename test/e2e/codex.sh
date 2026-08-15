@@ -27,6 +27,15 @@ else
   exit 1
 fi
 
+CODEX_BIN=$(readlink -f "$(command -v codex)")
+CODE_MODE_HOST="$(dirname "$CODEX_BIN")/codex-code-mode-host"
+if [ -x "$CODE_MODE_HOST" ]; then
+  pass "Codex code-mode host installed"
+else
+  fail "Codex code-mode host not found beside $CODEX_BIN"
+  exit 1
+fi
+
 # ── Wrong provider flag ──────────────────────────────────────────────
 
 section "Wrong provider flag"

@@ -51,6 +51,63 @@ describe("session-end hook", () => {
     expect(source).toContain("unlink(tmpPath)");
   });
 
+  test("successful dispatch runs the worker without writing console output", async () => {
+    const shakaHome = await mkdtemp(join(tmpdir(), "shaka-session-end-dispatch-"));
+    const transcriptPath = join(shakaHome, "empty-pi-transcript.jsonl");
+    const workerLogPath = join(shakaHome, "memory", ".session-end-worker.log");
+    const sessionId = "session-silent-dispatch";
+    const env = {
+      ...process.env,
+      CLAUDE_AGENT_TYPE: undefined,
+      CLAUDE_PROJECT_DIR: undefined,
+      SHAKA_CODEX_SUBAGENT: "false",
+      SHAKA_HOME: shakaHome,
+      SHAKA_OPENCODE_SUBAGENT: "false",
+      SHAKA_PI_SUBAGENT: "false",
+    };
+
+    try {
+      await Bun.write(transcriptPath, "");
+      const proc = Bun.spawn(["bun", "defaults/system/hooks/session-end.ts"], {
+        cwd: process.cwd(),
+        env,
+        stdin: new Blob([
+          JSON.stringify({
+            session_id: sessionId,
+            transcript_path: transcriptPath,
+            cwd: testCwd("/work/project"),
+            provider: "pi",
+          }),
+        ]),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+
+      expect({ exitCode, stdout, stderr }).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+
+      let workerLog = "";
+      const workerDeadline = performance.now() + 10_000;
+      while (performance.now() < workerDeadline) {
+        const file = Bun.file(workerLogPath);
+        if (await file.exists()) {
+          workerLog = await file.text();
+          if (workerLog.includes("Empty transcript, skipping summarization")) break;
+        }
+        await Bun.sleep(25);
+      }
+      expect(workerLog).toContain(`Worker started: pi session ${sessionId}`);
+      expect(workerLog).toContain("Empty transcript, skipping summarization");
+    } finally {
+      await rm(shakaHome, { recursive: true, force: true });
+    }
+  }, 15_000);
+
   test("source file has provider discrimination for codex", async () => {
     const source = await Bun.file("defaults/system/hooks/session-end.ts").text();
     // loadTranscript should route codex to its own parser

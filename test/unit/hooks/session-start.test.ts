@@ -44,10 +44,10 @@ describe("session-start hook", () => {
 
   test("source file recovers stale codex markers by spawning session-end workers", async () => {
     const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    // Should read marker data and spawn session-end worker for crash recovery
+    // Should read marker data and delegate to the cross-platform worker launcher.
     expect(source).toContain("session_id");
     expect(source).toContain("transcript_path");
-    expect(source).toContain("--worker");
+    expect(source).toContain("spawnSessionEndWorker(tmpPath, logPath)");
   });
 });
 

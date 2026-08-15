@@ -14,7 +14,16 @@
  * - exit(2) → Hard block (catastrophic)
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   type PatternsConfig,
@@ -100,22 +109,46 @@ function loadPatterns(shakaHome: string): PatternsConfig {
 
 // Logging
 function logSecurityEvent(shakaHome: string, event: SecurityEvent): void {
+  let temporaryPath: string | undefined;
+
   try {
     const now = new Date();
     const year = now.getFullYear();
     const month = String(now.getMonth() + 1).padStart(2, "0");
 
-    const logDir = join(shakaHome, "memory", "security", String(year), month);
+    const securityDir = join(shakaHome, "memory", "security");
+    const yearDir = join(securityDir, String(year));
+    const logDir = join(yearDir, month);
     if (!existsSync(logDir)) {
-      mkdirSync(logDir, { recursive: true });
+      mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    }
+    if (process.platform !== "win32") {
+      for (const directory of [securityDir, yearDir, logDir]) {
+        chmodSync(directory, 0o700);
+      }
     }
 
     const timestamp = now.toISOString().replace(/[:.]/g, "-");
-    const logPath = join(logDir, `security-${event.event_type}-${timestamp}.json`);
+    const eventName = `security-${event.event_type}-${timestamp}-${randomUUID()}`;
+    const logPath = join(logDir, `${eventName}.json`);
+    temporaryPath = join(logDir, `.${eventName}.tmp`);
 
-    writeFileSync(logPath, JSON.stringify(event, null, 2));
+    writeFileSync(temporaryPath, JSON.stringify(event, null, 2), {
+      flag: "wx",
+      mode: 0o600,
+    });
+    renameSync(temporaryPath, logPath);
+    temporaryPath = undefined;
   } catch {
     // Logging failure should not block operations
+  } finally {
+    if (temporaryPath) {
+      try {
+        unlinkSync(temporaryPath);
+      } catch {
+        // Best-effort cleanup after a logging failure
+      }
+    }
   }
 }
 
