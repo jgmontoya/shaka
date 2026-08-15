@@ -1,7 +1,6 @@
 # Shaka + Codex — isolated test environment
 # Provides full isolation — no writes to host ~/.codex/ or global bun state
-# Trixie stays aligned with the current Codex e2e image baseline; the CLI
-# download below uses the upstream Linux musl release asset.
+# Trixie stays aligned with the current Codex e2e image baseline.
 FROM debian:trixie-slim
 
 LABEL org.opencontainers.image.title="shaka-codex" \
@@ -23,19 +22,13 @@ WORKDIR /home/shakaUser
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/home/shakaUser/.bun/bin:${PATH}"
 
-# Install Codex CLI from GitHub releases (auto-detect architecture)
-RUN mkdir -p /home/shakaUser/.local/bin && \
-    ARCH=$(uname -m) && \
-    if [ "$ARCH" = "aarch64" ] || [ "$ARCH" = "arm64" ]; then \
-      TRIPLE="aarch64-unknown-linux-musl"; \
-    else \
-      TRIPLE="x86_64-unknown-linux-musl"; \
-    fi && \
-    curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-${TRIPLE}.tar.gz" | \
-    tar xz -C /home/shakaUser/.local/bin && \
-    mv "/home/shakaUser/.local/bin/codex-${TRIPLE}" /home/shakaUser/.local/bin/codex && \
-    chmod +x /home/shakaUser/.local/bin/codex && \
-    mkdir -p /home/shakaUser/.codex
+# Install the complete Codex package. The official installer selects the
+# architecture-specific release, verifies it, and preserves the CLI's sibling
+# binaries and resources (including codex-code-mode-host).
+RUN curl -fsSLo /tmp/codex-install.sh --retry 5 --connect-timeout 10 \
+      https://chatgpt.com/codex/install.sh && \
+    CODEX_NON_INTERACTIVE=1 sh /tmp/codex-install.sh && \
+    rm -f /tmp/codex-install.sh
 ENV PATH="/home/shakaUser/.local/bin:${PATH}"
 
 # Set up app directory

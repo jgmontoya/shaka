@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test";
 
-test("codex Docker image installs the current Linux musl release assets", async () => {
+test("codex Docker image installs the complete official standalone package", async () => {
   const dockerfile = await Bun.file("dockerfile-codex").text();
 
-  expect(dockerfile).toContain('TRIPLE="aarch64-unknown-linux-musl"');
-  expect(dockerfile).toContain('TRIPLE="x86_64-unknown-linux-musl"');
-  expect(dockerfile).not.toContain("unknown-linux-gnu");
+  expect(dockerfile).toContain("https://chatgpt.com/codex/install.sh");
+  expect(dockerfile).toContain("CODEX_NON_INTERACTIVE=1");
+  expect(dockerfile).not.toContain("releases/latest/download/codex-");
 });

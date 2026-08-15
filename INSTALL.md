@@ -9,8 +9,10 @@ Get Shaka running in under 5 minutes.
 - At least one AI coding assistant:
   - [Claude Code](https://claude.ai/download) (`claude` CLI)
   - [opencode](https://opencode.ai/) (`opencode` CLI)
-  - [Codex](https://github.com/openai/codex) (`codex` CLI)
+  - [Codex](https://developers.openai.com/codex/cli/) (`codex` CLI)
   - [Pi](https://pi.dev) (`pi` CLI — `bun add -g @earendil-works/pi-coding-agent`)
+
+Shaka configures installed provider CLIs. It does not install them.
 
 ## Quick Start
 
@@ -243,8 +245,8 @@ cat ~/.claude/settings.json | grep -A 10 hooks
 # opencode — plugin file
 ls -la ~/.config/opencode/plugins/shaka.ts
 
-# Codex — wrapper registered in config.toml
-grep -A 5 '\[hooks' ~/.codex/config.toml
+# Codex: hooks live in hooks.json
+jq '.hooks' ~/.codex/hooks.json
 
 # Pi — generated extension
 ls -la ~/.pi/agent/extensions/shaka.ts
@@ -275,7 +277,7 @@ shaka uninstall --delete-data  # also wipe user/, customizations/, memory/
 # Manual fallback (only if `shaka uninstall` isn't available):
 #   Claude Code  → remove `shaka` entries from ~/.claude/settings.json
 #   opencode     → rm ~/.config/opencode/plugins/shaka.ts
-#   Codex        → remove `[mcp_servers.shaka]` + Shaka hook block from ~/.codex/config.toml
+#   Codex: remove `[mcp_servers.shaka]` from ~/.codex/config.toml and Shaka entries from ~/.codex/hooks.json
 #   Pi           → rm ~/.pi/agent/extensions/shaka.ts, ~/.pi/agent/prompts/shaka-*.md, and any ~/.pi/agent/skills/shaka-* entries
 
 # Remove Shaka configuration (system/ is a symlink — removing it doesn't delete the repo)
