@@ -12,6 +12,7 @@
  */
 
 import { join } from "node:path";
+import { text } from "node:stream/consumers";
 import { Command } from "commander";
 import { resolveShakaHome } from "../domain/config";
 import { discoverToolsWithOverrides } from "../mcp/tool-discovery";
@@ -44,7 +45,7 @@ export function createToolCommand(): Command {
           process.exit(1);
         }
 
-        const stdin = await Bun.stdin.text();
+        const stdin = await text(process.stdin);
         const args = stdin.trim() ? JSON.parse(stdin) : {};
         if (typeof args !== "object" || args === null || Array.isArray(args)) {
           throw new Error("stdin must decode to a JSON object");

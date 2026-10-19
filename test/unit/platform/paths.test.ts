@@ -56,9 +56,10 @@ describe("platform/paths", () => {
     });
 
     test("matches fileURLToPath behavior for known URL", () => {
-      const base = pathToFileURL(join("/", "fake", "module.ts")).href;
+      const directory = join(tmpdir(), "fake");
+      const base = pathToFileURL(join(directory, "module.ts")).href;
       const result = resolveFromModule(base, "./sibling.ts");
-      expect(result).toBe(join("/", "fake", "sibling.ts"));
+      expect(result).toBe(join(directory, "sibling.ts"));
     });
   });
 
