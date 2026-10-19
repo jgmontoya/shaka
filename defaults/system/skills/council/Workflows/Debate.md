@@ -1,13 +1,15 @@
 # Debate Workflow
 
-Full structured multi-agent debate with 3 rounds and visible transcript.
+Full structured debate with 3 rounds and a visible transcript.
 
-Running the **Debate** workflow in the **council** skill to run multi-agent debate...
+Running the **Debate** workflow in the **council** skill to compare perspectives...
 
 ## Prerequisites
 
 - Topic or question to debate
 - Optional: Custom council members (default: architect, designer, engineer, researcher)
+- Read the shared [dispatch and fallback contract](../SKILL.md#dispatch-and-fallback)
+  and [role mapping](../CouncilMembers.md).
 
 ## Execution
 
@@ -18,18 +20,22 @@ Output the debate header:
 ```markdown
 ## Council Debate: [Topic]
 
-**Council Members:** [List agents participating]
+**Council Members:** [List selected perspectives]
+**Execution:** [Delegated agents / Sequential local perspectives / Mixed; limits]
 **Rounds:** 3 (Positions → Responses → Synthesis)
 ```
 
 ### Step 2: Round 1 - Initial Positions
 
-Launch 4 parallel Task calls (one per council member).
+Gather one initial position per selected role using the shared dispatch and
+fallback contract. Keep the original question and evidence the same for each
+initial pass, without earlier positions. Complete all initial positions before
+Round 2.
 
 **Each agent prompt includes:**
 
 ```
-You are [Agent Name], [brief role description from AgentPersonalities.md].
+You are [Council Role], [brief perspective from CouncilMembers.md].
 
 COUNCIL DEBATE - ROUND 1: INITIAL POSITIONS
 
@@ -44,12 +50,8 @@ Give your initial position on this topic from your specialized perspective.
 Your perspective focuses on: [agent's domain]
 ```
 
-**Agent domains:**
-
-- **architect**: System design, patterns, scalability, long-term architectural implications
-- **designer**: User experience, accessibility, user needs, interface implications
-- **engineer**: Implementation reality, tech debt, maintenance burden, practical constraints
-- **researcher** (ClaudeResearcher): Data, precedent, external examples, what others have done
+Use the perspectives and available-agent selection in
+[CouncilMembers.md](../CouncilMembers.md).
 
 **Output each response as it completes:**
 
@@ -71,7 +73,8 @@ Your perspective focuses on: [agent's domain]
 
 ### Step 3: Round 2 - Responses & Challenges
 
-Launch 4 parallel Task calls with Round 1 transcript included.
+Gather responses from the selected roles using the shared dispatch and fallback
+contract. Give each the completed Round 1 transcript.
 
 **Each agent prompt includes:**
 
@@ -115,7 +118,8 @@ The value is in genuine intellectual friction—engage with their actual argumen
 
 ### Step 4: Round 3 - Synthesis
 
-Launch 4 parallel Task calls with Round 1 + Round 2 transcripts.
+Gather final positions from the selected roles using the shared dispatch and
+fallback contract. Give each the completed Round 1 and Round 2 transcripts.
 
 **Each agent prompt includes:**
 
@@ -165,47 +169,23 @@ After all rounds complete, synthesize the debate:
 
 **Areas of Convergence:**
 
-- [Points where 3+ agents agreed]
+- [Points where selected perspectives agree, with supporting evidence]
 - [Shared concerns or recommendations]
 
 **Remaining Disagreements:**
 
-- [Points still contested between agents]
+- [Points still contested between perspectives]
 - [Trade-offs that couldn't be resolved]
 
 **Recommended Path:**
-[Based on convergence and weight of arguments, the recommended approach is...]
+[Based on evidence and weight of arguments, the recommended approach is...]
 ```
 
 ## Custom Council Members
 
-If user specifies custom members, adjust accordingly:
-
-- "Council with security" → Add pentester agent
-- "Council with intern" → Add intern agent (fresh perspective)
-- "Council with writer" → Add writer agent (communication focus)
-- Omit agents: "Just architect and engineer" → Only those two
-
-## Agent Type Mapping
-
-| Council Role | Task subagent_type              | Personality Reference |
-| ------------ | ------------------------------- | --------------------- |
-| Architect    | Architect                       | Serena Blackwood      |
-| Designer     | Designer                        | Aditi Sharma          |
-| Engineer     | Engineer                        | Marcus Webb           |
-| Researcher   | PerplexityResearcher            | Ava Chen              |
-| Security     | Pentester                       | Rook Blackburn        |
-| Intern       | Intern                          | Dev Patel             |
-| Writer       | (use Intern with writer prompt) | Emma Hartley          |
-
-## Timing
-
-- Round 1: ~10-20 seconds (parallel)
-- Round 2: ~10-20 seconds (parallel)
-- Round 3: ~10-20 seconds (parallel)
-- Synthesis: ~5 seconds
-
-**Total: 30-90 seconds for full debate**
+Apply the user's requested composition using
+[CouncilMembers.md](../CouncilMembers.md). That file owns the role mapping for
+both workflows.
 
 ## Done
 

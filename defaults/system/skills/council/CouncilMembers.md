@@ -1,40 +1,35 @@
 # Council Members
 
-Reference for council member roles, perspectives, and voice assignments.
+The shared role mapping for both Council workflows. Roles describe perspectives;
+the active provider determines which agents are available.
 
-## Default Council Members
+## Role Mapping
 
-| Agent          | Perspective                        | Voice            |
-| -------------- | ---------------------------------- | ---------------- |
-| **Architect**  | System design, patterns, long-term | Serena Blackwood |
-| **Designer**   | UX, user needs, accessibility      | Aditi Sharma     |
-| **Engineer**   | Implementation reality, tech debt  | Marcus Webb      |
-| **Researcher** | Data, precedent, external examples | Ava Chen         |
+| Role | Perspective | Capability | Shipped agent example | Voice |
+| --- | --- | --- | --- | --- |
+| Architect | System design, boundaries, long-term costs | `architect` | `Architect` | Serena Blackwood |
+| Designer | UX, user needs, accessibility | `design` | `Designer` | Aditi Sharma |
+| Engineer | Implementation, tech debt, maintenance | `engineer` | `Engineer` | Marcus Webb |
+| Researcher | Data, precedent, external examples | `research` | `ClaudeResearcher` | Ava Chen |
+| Security | Risk, attack surface, compliance | `security` | `Pentester` | Rook Blackburn |
+| Intern | Fresh eyes, naive questions | `general` | `Intern` | Dev Patel |
+| Writer | Communication, documentation | `documentation` | `TechnicalWriter` | Emma Hartley |
 
-## Optional Members
+Shaka surfaces available agents by their `capability` field. The named agents
+are shipped examples; a session may not expose all of them. Any available agent
+with the same capability can fill the role. If none is available, use the local
+fallback in [SKILL.md](SKILL.md#dispatch-and-fallback).
 
-Add these as needed based on the topic:
+## Council Composition
 
-| Agent        | Perspective                      | When to Add            |
-| ------------ | -------------------------------- | ---------------------- |
-| **Security** | Risk, attack surface, compliance | Auth, data, APIs       |
-| **Intern**   | Fresh eyes, naive questions      | Complex UX, onboarding |
-| **Writer**   | Communication, documentation     | Public-facing, docs    |
-
-## Agent Type Mapping
-
-| Council Role | Task subagent_type              | Personality      |
-| ------------ | ------------------------------- | ---------------- |
-| Architect    | Architect                       | Serena Blackwood |
-| Designer     | Designer                        | Aditi Sharma     |
-| Engineer     | Engineer                        | Marcus Webb      |
-| Researcher   | PerplexityResearcher            | Ava Chen         |
-| Security     | Pentester                       | Rook Blackburn   |
-| Intern       | Intern                          | Dev Patel        |
-| Writer       | (use Intern with writer prompt) | Emma Hartley     |
+Architect, Designer, Engineer, and Researcher are the default perspectives.
+Select only perspectives relevant to the question; the default is not a quota.
+Add Security for auth, data, or API risks; Intern for onboarding or a fresh look;
+and Writer for public-facing explanations.
 
 ## Custom Council Composition
 
-- "Council with security" - Add pentester agent
-- "Council with intern" - Add intern for fresh perspective
+- "Council with security" - Add the Security perspective
+- "Council with intern" - Add the Intern perspective
+- "Council with writer" - Add the Writer perspective
 - "Just architect and engineer" - Only specified members

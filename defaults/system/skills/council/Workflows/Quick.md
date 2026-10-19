@@ -8,6 +8,8 @@ Running the **Quick** workflow in the **council** skill to get fast perspectives
 
 - Topic or question to evaluate
 - Optional: Custom council members
+- Read the shared [dispatch and fallback contract](../SKILL.md#dispatch-and-fallback)
+  and [role mapping](../CouncilMembers.md).
 
 ## Execution
 
@@ -16,13 +18,16 @@ Running the **Quick** workflow in the **council** skill to get fast perspectives
 ```markdown
 ## Quick Council: [Topic]
 
-**Council Members:** [List agents]
+**Council Members:** [List selected perspectives]
+**Execution:** [Delegated agents / Sequential local perspectives / Mixed; limits]
 **Mode:** Single round (fast perspectives)
 ```
 
-### Step 2: Parallel Perspective Gathering
+### Step 2: Gather Initial Perspectives
 
-Launch all council members in parallel (single Task call batch).
+Gather one initial position per selected role using the shared dispatch and
+fallback contract. Keep initial inputs separate from earlier positions; only
+synthesize after all selected perspectives are complete.
 
 **Each agent prompt:**
 
@@ -73,10 +78,6 @@ If the quick check reveals significant disagreement or complex trade-offs, recom
 ⚠️ This topic has enough complexity for a full council debate.
 Run: "Council: [topic]" for 3-round structured discussion.
 ```
-
-## Timing
-
-- Total: 10-20 seconds
 
 ## Done
 

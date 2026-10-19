@@ -2,10 +2,18 @@
 
 Standard format for council debate transcripts.
 
+Examples show the default roles. Include only selected perspectives, using the
+shared [role mapping](CouncilMembers.md) and
+[dispatch and fallback contract](SKILL.md#dispatch-and-fallback). Role labels
+identify viewpoints; the Execution line states whether separate agents or local
+passes produced them.
+
 ## Full Debate Transcript
 
 ```markdown
 ## Council Debate: [Topic]
+
+**Execution:** [Delegated agents / Sequential local perspectives / Mixed; limits]
 
 ### Round 1: Initial Positions
 
@@ -42,7 +50,7 @@ Standard format for council debate transcripts.
 
 **Areas of Convergence:**
 
-- [Points where multiple agents agreed]
+- [Points where multiple perspectives agreed, with supporting evidence]
 
 **Remaining Disagreements:**
 
@@ -56,6 +64,8 @@ Standard format for council debate transcripts.
 
 ```markdown
 ## Quick Council: [Topic]
+
+**Execution:** [Delegated agents / Sequential local perspectives / Mixed; limits]
 
 ### Perspectives
 
@@ -76,7 +86,7 @@ Standard format for council debate transcripts.
 
 ## Output Requirements
 
-- **Length:** 50-150 words per agent per round (debate), 30-50 words (quick)
+- **Length:** 50-150 words per perspective per round (debate), 30-50 words (quick)
 - **Tone:** Professional but direct; genuine challenges
-- **Must Include:** Specific references to other agents' points in Round 2+
+- **Must Include:** Specific references to other perspectives' points in Round 2+
 - **Must Avoid:** Generic opinions, restating initial position without engagement

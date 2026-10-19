@@ -6,13 +6,15 @@ How council debates progress through rounds.
 
 ### Round 1 - Initial Positions
 
-Each agent gives their take from their specialized perspective. No interaction yet - just establishing positions.
+Each selected perspective establishes its initial position from the original
+question and evidence, before reading the other positions. Follow the shared
+[dispatch and fallback contract](SKILL.md#dispatch-and-fallback).
 
 **Goal:** Surface diverse viewpoints before interaction.
 
 ### Round 2 - Responses & Challenges
 
-Each agent reads Round 1 transcript and responds to specific points:
+Each perspective reads the completed Round 1 transcript and responds to specific points:
 
 - "I disagree with Architect's point about X because..."
 - "Building on Designer's concern about Y..."
@@ -21,7 +23,7 @@ Each agent reads Round 1 transcript and responds to specific points:
 
 ### Round 3 - Synthesis & Convergence
 
-Each agent identifies:
+Each perspective reads both completed earlier rounds and identifies:
 
 - Where the council agrees
 - Where they still disagree
@@ -38,13 +40,10 @@ Not just collecting opinions - genuine challenges where:
 - Researcher cites precedent that changes framing
 - Designer defends with user impact data
 
-## Timing
+## Execution
 
-| Phase     | Duration  | Parallelism         |
-| --------- | --------- | ------------------- |
-| Round 1   | 10-20 sec | All agents parallel |
-| Round 2   | 10-20 sec | All agents parallel |
-| Round 3   | 10-20 sec | All agents parallel |
-| Synthesis | 5 sec     | Sequential          |
-
-**Total: 30-90 seconds for full debate**
+Rounds are sequential. Within a round, run available agents concurrently only
+within host capacity, or gather perspectives sequentially under the shared
+dispatch contract. Duration depends on the question, evidence, and provider.
+Disclose capacity limits and any local fallback instead of promising a fixed
+duration or treating the default composition as a required agent count.

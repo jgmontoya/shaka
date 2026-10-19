@@ -9,7 +9,7 @@ include_when: Any implementation work — features, bug fixes, refactoring. Defa
 
 Write tests first. Each test verifies one behavior through the public interface. A good test reads like a specification — "user can checkout with valid cart" tells you exactly what capability exists.
 
-**Test behavior, not implementation.** If you refactor internals and behavior is unchanged, every test must stay green. If a test breaks on refactor, it was testing implementation — delete it and write a better one.
+**Test behavior, not implementation.** Observable behavior includes return values, readable state, public callbacks, and external effects at system boundaries. If a test fails after an internal refactor, investigate whether behavior changed before deciding the test is coupled. Repair or replace a coupled test while preserving coverage of the intended contract.
 
 List the **behaviors** to test, not the implementation steps. Think "what should the system do?" not "what functions do I need?"
 
@@ -21,23 +21,25 @@ test("user can checkout with valid cart")
   result = checkout(cart, paymentMethod)
   assert result.status == "confirmed"
 
-// Bad: tests implementation coupling
-test("checkout calls paymentService.process")
-  mockPayment = mock(paymentService)
-  checkout(cart, payment)
-  assert mockPayment.process.wasCalledWith(cart.total)
+// Bad: pins an internal collaborator
+test("checkout recalculates cart total")
+  cart = mock(Cart)
+  checkout(cart, paymentClient)
+  assert cart.recalculateTotal.wasCalledOnce()
 ```
 
 Red flags that a test is coupled to implementation:
 
 - Mocks internal collaborators (not system boundaries)
 - Tests private methods
-- Asserts on call counts or ordering
+- Pins private collaborator call counts or ordering that the public contract does not expose
 - Breaks when refactoring without behavior change
-- Verifies through external means instead of the interface
+- Reads private storage or intermediate state when the contract only promises a public result
+
+Call counts, ordering, payloads, and absence can be behavior at a public boundary. A payment adapter must send the right charge; a public progress callback may promise ordered updates. Assert that contract without pinning the internal helpers that implement it. Pair a no-effect assertion with a positive case showing the same observation detects the required effect.
 
 ```pseudocode
-// Bad: bypasses interface to verify
+// Bad: pins private storage when the contract is user retrieval
 test("createUser saves to database")
   createUser({ name: "Alice" })
   row = db.query("SELECT * FROM users WHERE name = ?", ["Alice"])
@@ -49,6 +51,8 @@ test("created user is retrievable")
   retrieved = getUser(user.id)
   assert retrieved.name == "Alice"
 ```
+
+When storage or output is itself the contract, inspect it directly. Database migrations, file exports, and provider registrations need assertions on the state their consumers observe. The contract determines the right observation; the shape of the assertion alone does not.
 
 ## Anti-Pattern: Horizontal Slicing
 
