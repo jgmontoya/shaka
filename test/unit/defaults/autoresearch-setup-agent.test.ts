@@ -14,6 +14,27 @@ const agentPath = resolve(repoRoot, "defaults/system/agents/autoresearch-setup.m
 const skillPath = resolve(repoRoot, "defaults/system/skills/autoresearch-setup/SKILL.md");
 
 describe("autoresearch-setup agent file", () => {
+  test("requires workload and correctness evidence before accepting a metric", async () => {
+    const content = (await Bun.file(skillPath).text()).replace(/\s+/g, " ");
+
+    for (const field of ["workload", "measured region", "configuration", "work evidence"]) {
+      expect(content).toContain(`- ${field}:`);
+    }
+    expect(content).toMatch(/missing required work.*nonzero/);
+    expect(content).toMatch(/metric alone does not establish/);
+    expect(content).toMatch(/exactly one line.*METRIC/);
+  });
+
+  test("requires measurement-appropriate baselines and baseline correctness checks", async () => {
+    const content = (await Bun.file(skillPath).text()).replace(/\s+/g, " ");
+
+    expect(content).toMatch(/Run any correctness gate against the baseline/);
+    expect(content).toMatch(/repeated baseline runs.*spread/);
+    expect(content).toMatch(/counts do not require repetition/);
+    expect(content).toContain("## Baseline");
+    expect(content).toMatch(/no separate checks script.*rationale/);
+  });
+
   test("body below frontmatter matches autoresearch-setup SKILL body byte-for-byte", async () => {
     const agentRaw = await Bun.file(agentPath).text();
     const skillRaw = await Bun.file(skillPath).text();
