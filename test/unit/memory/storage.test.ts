@@ -6,6 +6,7 @@ import {
   type SummaryIndex,
   listSummaries,
   loadSummary,
+  renderSessionSection,
   selectRecentSummaries,
   writeSummary,
 } from "../../../src/memory/storage";
@@ -235,6 +236,42 @@ describe("Storage", () => {
     test("returns null if file does not exist", async () => {
       const loaded = await loadSummary("/nonexistent/path/file.md");
       expect(loaded).toBeNull();
+    });
+  });
+
+  describe("renderSessionSection", () => {
+    test("counts titles, metadata, and bodies against a soft budget, excluding outer wrappers", async () => {
+      await writeSummary(
+        testMemoryDir,
+        makeSummary({
+          sessionId: "latest",
+          date: "2026-02-09",
+          title: "Latest session",
+          body: "Latest context.",
+        }),
+      );
+      await writeSummary(
+        testMemoryDir,
+        makeSummary({
+          sessionId: "older",
+          date: "2026-02-08",
+          title: "Older session",
+          body: "Older context.",
+          provider: "opencode",
+        }),
+      );
+      const selected = await listSummaries(testMemoryDir);
+      const latest = "### Latest session\n*2026-02-09 | claude*\n\nLatest context.";
+      const older = "### Older session\n*2026-02-08 | opencode*\n\nOlder context.";
+      const budget = latest.length + older.length;
+
+      expect(await renderSessionSection(selected, budget)).toBe(
+        `## Recent Sessions\n\n${latest}\n\n---\n\n${older}`,
+      );
+      expect(await renderSessionSection(selected, budget - 1)).toBe(
+        `## Recent Sessions\n\n${latest}`,
+      );
+      expect(await renderSessionSection(selected, 1)).toBe(`## Recent Sessions\n\n${latest}`);
     });
   });
 

@@ -21,7 +21,7 @@ suites unless a change, failure, or unresolved concern calls for it.
 
 | Changed surface | Focused command | What it proves and where it stops |
 | --- | --- | --- |
-| Session-start context and `doctor --context` | `bun test test/unit/hooks/session-start.test.ts test/unit/commands/context-measurement.test.ts` | Runs the deployed hook against isolated fixtures and checks the emitted context, including related-session selection and the session budget. Diagnostic measurements are tested separately. |
+| Session-start context and `doctor --context` | `bun test test/unit/hooks/session-start.test.ts test/unit/memory/storage.test.ts test/unit/commands/context-measurement.test.ts` | Runs the deployed hook against isolated fixtures and checks the emitted context, including related-session selection. Renderer tests verify exact budget boundaries, counted titles/metadata/bodies, excluded outer wrappers, and the first oversized summary. Diagnostic measurements are tested separately. |
 | Provider dependency boundaries | `bun test test/unit/architecture-check.test.ts`; `bun run architecture:check` | Checks module declarations, type imports, and literal `import()` targets against shared-code and cross-provider boundaries. Generic provider helpers, registry wiring, and same-provider internals remain valid. It does not prove runtime dispatch or classify computed import targets. |
 | Provider installation, generated commands, and tool bridges | `just test-generated-artifacts` | Checks generated artifacts, schemas, and adapter contracts. Add affected provider and `test/unit/commands/reload.test.ts` cases when changing reload behavior. Generated loads do not establish acceptance by a live provider. |
 | Memory search through the domain API, CLI, and MCP | `bun test test/integration/memory/retrieval-corpus.test.ts` | Checks retrieval, scope, evidence paths, and read-only access against the same fixtures. Fixture cost ceilings are regression checks, not a production context-budget policy. |
@@ -37,7 +37,12 @@ For changes to provider dispatch or installation behavior, also run the affected
 Docker recipe: `just e2e-claude`, `just e2e-opencode`, `just e2e-codex`, or
 `just e2e-pi`. These build the provider environment and run its E2E script. They
 require Docker and any credentials needed by the live sections. Inspect the
-script's credential mounts before running it, and keep secrets out of evidence.
+Docker Compose configuration and E2E scripts for credential mounts and
+environment forwarding before running them, and keep secrets out of evidence.
+
+`just e2e-pi` checks installation, offline extension loading, and deterministic
+behavior. It does not assert authenticated live sessions or live Pi dispatch;
+report those claims as UNVERIFIED unless a separate live check establishes them.
 
 Read the output for skips and authentication warnings. A successful script exit
 does not prove a live section that skipped. Report each applicable claim as
