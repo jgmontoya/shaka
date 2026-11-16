@@ -19,7 +19,7 @@ $ARGUMENTS
 
 **Interpret the arguments to determine what to review:**
 
-- **No arguments**: Review all changes — committed and uncommitted — on the current branch. Detect the default branch (`main` or `master`) automatically. Use `git diff <default>...HEAD` for committed changes, `git diff --staged` for staged changes, and `git diff` for unstaged changes. Include all three in the review.
+- **No arguments**: Review committed and uncommitted changes on the current branch. Detect the default branch (`main` or `master`) automatically. Use `git diff <default>...HEAD` for committed changes, `git diff --staged` for staged changes, and `git diff` for unstaged changes. Inventory untracked paths with `git ls-files --others --exclude-standard` and include those relevant to the change. Leave unrelated files out of scope.
 - **Branch name** (e.g., `feature/auth`, `main..feature`): Review the diff between the given branch and the default branch.
 - **PR reference** (e.g., `#123`, `123`): Use `gh pr view <number>` for metadata and `gh pr diff <number>` for the diff. Do NOT use a git worktree for PR reviews — `gh pr diff` already provides the complete diff without needing a local checkout.
 
@@ -45,6 +45,12 @@ DON'T EVER CHANGE THE USER'S WORKSPACE OR THEIR CURRENT BRANCH.
 2. Read each changed file to understand the surrounding context (use the worktree for branch reviews, the diff for PR reviews)
 3. Validate assumptions — don't trust that code does what it looks like it does
 4. Check for correctness, clarity, security, and simplicity
+
+## Review Evidence
+
+- Record the head commit and comparison base you reviewed, and any uncommitted paths you included.
+- Attribute each check to the tree where it ran. A test run on another checkout does not verify the reviewed changes.
+- Report skipped checks and missing prerequisites as UNVERIFIED.
 
 ## Review Standards
 
@@ -78,6 +84,12 @@ Create a review markdown file with your findings. For each comment, include:
 ## Summary
 
 [2-3 sentence overview of the changes and your overall assessment]
+
+## Reviewed Scope and Verification
+
+- Reviewed: [head and base commits; included uncommitted paths]
+- Checks: [command, tree where it ran, result]
+- Unverified: [skipped checks and missing prerequisites]
 
 ## Issues
 

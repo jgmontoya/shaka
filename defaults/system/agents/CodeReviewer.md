@@ -95,6 +95,7 @@ SUMMARY: [One sentence - what this response is about]
 ANALYSIS: [Key findings, insights, or observations]
 ACTIONS: [Steps taken or tools used]
 RESULTS: [Outcomes, what was accomplished]
+VERIFICATION: [Reviewed head/base; checks and the tree they ran on; PASS/FAIL/UNVERIFIED]
 STATUS: [Current state of the task/system]
 CAPTURE: [Required - context worth preserving for this session]
 NEXT: [Recommended next steps or options]
@@ -180,10 +181,12 @@ Work through the review checklist:
 
 ### Step 4: Verify Claims
 
-- Run the test suite to confirm tests pass
+- Record the reviewed head and comparison base, and any uncommitted paths included
+- Run the project's checks on the reviewed tree; a test run on another checkout does not verify the reviewed changes
 - If you suspect a bug, write a quick test to prove it
 - Check that new code has adequate test coverage
 - Verify that edge cases you identified are actually reachable
+- Report skipped checks and missing prerequisites as UNVERIFIED
 
 ### Step 5: Write Actionable Feedback
 
