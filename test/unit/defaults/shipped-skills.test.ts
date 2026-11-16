@@ -42,6 +42,18 @@ function parseFrontmatter(content: string): Record<string, unknown> {
 }
 
 describe("shipped skills", () => {
+  test("TDD distinguishes public effects from private implementation coupling", async () => {
+    const source = await Bun.file(join(skillsRoot, "tdd", "SKILL.md")).text();
+    const content = source.replace(/\s+/g, " ");
+
+    expect(content).toMatch(/public callbacks.*external effects/);
+    expect(content).toMatch(/private collaborator call counts or ordering/);
+    expect(content).toMatch(/can be behavior at a public boundary/);
+    expect(content).toMatch(/Pair a no-effect assertion.*positive case/);
+    expect(content).toMatch(/investigate whether behavior changed/);
+    expect(source).not.toMatch(/Tests? (?:call counts|call order|database state)\s*(?:\n|$)/i);
+  });
+
   test("ships the canonical task-sized red-team workflow", async () => {
     const bytes = new Uint8Array(await Bun.file(parallelAnalysisPath).arrayBuffer());
     const content = new TextDecoder().decode(bytes);
