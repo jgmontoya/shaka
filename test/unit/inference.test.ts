@@ -3,20 +3,22 @@ import { chmod, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 
-async function readEventually(path: string, timeoutMs = 250): Promise<string> {
+async function expectFileContentsEventually(
+  path: string,
+  expected: string,
+  timeoutMs = 250,
+): Promise<void> {
   const deadline = performance.now() + timeoutMs;
+  let observed: string | undefined;
   while (performance.now() < deadline) {
     const file = Bun.file(path);
-    if (await file.exists()) return file.text();
+    if (await file.exists()) {
+      observed = await file.text();
+      if (observed === expected) break;
+    }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  // Prefer a message naming the polling contract over the ENOENT the final
-  // .text() would otherwise throw — helps readers diagnose "did the writer
-  // never run?" vs "did the path I pass in even exist?"
-  if (!(await Bun.file(path).exists())) {
-    throw new Error(`readEventually: ${path} did not appear within ${timeoutMs}ms`);
-  }
-  return Bun.file(path).text();
+  expect(observed, `${path}: contents did not match within ${timeoutMs}ms`).toBe(expected);
 }
 
 function shellQuote(value: string): string {
@@ -809,7 +811,7 @@ describe("inference", () => {
 
           expect(result.success).toBe(false);
           expect(result.error).toContain("Timeout after 1000ms");
-          await expect(readEventually(cleanupFile, 1000)).resolves.toBe("ses_timeout_cleanup");
+          await expectFileContentsEventually(cleanupFile, "ses_timeout_cleanup", 1000);
         } finally {
           if (oldPath === undefined) {
             delete process.env.PATH;
