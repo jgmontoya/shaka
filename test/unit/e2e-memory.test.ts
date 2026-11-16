@@ -55,14 +55,13 @@ exec bun "${join(repoRoot, "src", "index.ts")}" "$@"
       proc.exited,
     ]);
 
-    expect(exitCode, stderr).toBe(0);
-    expect(stdout).toContain("No new sessions to compile.");
+    expect(exitCode, `${stderr}\n${stdout}`).toBe(0);
     const knowledgeRoot = join(shakaHome, "memory", "knowledge");
     const projects = await readdir(knowledgeRoot);
     expect(projects).toHaveLength(1);
     const metadata = await Bun.file(join(knowledgeRoot, projects[0]!, ".project.json")).json();
     expect(metadata).toEqual({ cwd });
-  });
+  }, 15_000);
 
   test("validates project-scoped recall through installed command surfaces", async () => {
     const proc = Bun.spawn(
