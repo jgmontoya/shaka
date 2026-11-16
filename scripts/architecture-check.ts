@@ -63,7 +63,7 @@ function configurationError(diagnostics: readonly ts.Diagnostic[]): Error {
 }
 
 function compilerOptions(): ts.CompilerOptions {
-  const config = ts.readConfigFile(resolve("tsconfig.json"), ts.sys.readFile);
+  const config = ts.readConfigFile(toPosixPath(resolve("tsconfig.json")), ts.sys.readFile);
   if (config.error) {
     throw configurationError([config.error]);
   }
