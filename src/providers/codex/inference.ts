@@ -29,7 +29,7 @@ export const codexInference = {
       const prompt = options.systemPrompt
         ? `${options.systemPrompt}\n\n${options.userPrompt}`
         : options.userPrompt;
-      args.push("-o", tmpOutput, prompt);
+      args.push("-o", tmpOutput, "--", prompt);
 
       const result = await deps.processRunner({
         command: "codex",
