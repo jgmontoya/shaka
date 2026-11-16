@@ -240,6 +240,15 @@ EOF
     pass "Compiled knowledge records project metadata"
   else
     fail "Compiled knowledge records project metadata"
+    printf 'Expected project CWD: %s\n' "$metadata_project_json" >&2
+    KNOWLEDGE_ROOT="$knowledge_root" bun -e '
+      for await (const file of new Bun.Glob("*/.project.json").scan({
+        cwd: process.env.KNOWLEDGE_ROOT,
+        absolute: true,
+      })) {
+        console.error(`${file}: ${await Bun.file(file).text()}`);
+      }
+    '
     return 1
   fi
 )
