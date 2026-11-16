@@ -6,11 +6,11 @@ import {
   type ContextMeasurement,
   collectMeasurements,
 } from "../../../src/commands/context-measurement";
-import { writeSummary } from "../../../src/memory/storage";
-import type { SessionSummary } from "../../../src/memory/summarize";
+import { writeLearnings } from "../../../src/memory/learning-store";
 import { renderEntryForContext } from "../../../src/memory/learnings";
 import type { LearningEntry } from "../../../src/memory/learnings";
-import { writeLearnings } from "../../../src/memory/learning-store";
+import { writeSummary } from "../../../src/memory/storage";
+import type { SessionSummary } from "../../../src/memory/summarize";
 import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testDir = join(tmpdir(), `shaka-test-context-${process.pid}`);

@@ -932,7 +932,7 @@ RANK 5 [5] — reason 5`;
   });
 
   test("does not prune entries with exactly 2 exposures (exposure floor)", async () => {
-    const rankingResponse = `RANK 1 [1] — should not be pruned`;
+    const rankingResponse = "RANK 1 [1] — should not be pruned";
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: rankingResponse }),
@@ -965,7 +965,7 @@ RANK 5 [5] — reason 5`;
   });
 
   test("does not prune entries younger than 7 days (age floor)", async () => {
-    const rankingResponse = `RANK 1 [1] — should not be pruned`;
+    const rankingResponse = "RANK 1 [1] — should not be pruned";
 
     mock.module("../../../src/inference", () => ({
       inference: async () => ({ success: true, text: rankingResponse }),

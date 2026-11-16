@@ -4,13 +4,13 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { ok } from "../../../src/domain/result";
 import { loadManifest } from "../../../src/domain/skills-manifest";
-import { validateSkillStructure } from "../../../src/services/skill-pipeline";
 import {
   type SecurityReport,
   installSkill,
   runSecurityChecks,
   scanForExecutableContent,
 } from "../../../src/services/skill-install-service";
+import { validateSkillStructure } from "../../../src/services/skill-pipeline";
 import { createGitHubProvider } from "../../../src/services/skill-source/github";
 
 const VALID_SKILL_MD = `---
@@ -702,7 +702,7 @@ describe("SkillInstallService", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "SKILL.md"),
-        `---\nname: ../escape\ndescription: bad\n---\n\n# Escape\n`,
+        "---\nname: ../escape\ndescription: bad\n---\n\n# Escape\n",
       );
 
       const result = await validateSkillStructure(dir);
@@ -717,7 +717,7 @@ describe("SkillInstallService", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "SKILL.md"),
-        `---\nname: nested/skill\ndescription: bad\n---\n\n# Nested\n`,
+        "---\nname: nested/skill\ndescription: bad\n---\n\n# Nested\n",
       );
 
       const result = await validateSkillStructure(dir);
@@ -764,7 +764,7 @@ describe("SkillInstallService", () => {
       await mkdir(dir, { recursive: true });
       await writeFile(
         join(dir, "SKILL.md"),
-        `---\nname: TestSkill\ndescription: A test skill\n---`,
+        "---\nname: TestSkill\ndescription: A test skill\n---",
       );
 
       const result = await validateSkillStructure(dir);

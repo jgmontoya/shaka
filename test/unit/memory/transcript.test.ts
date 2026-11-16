@@ -442,7 +442,7 @@ describe("Transcript", () => {
     test("skips malformed JSON without throwing", () => {
       const input = [
         `{"type":"message","id":"m1","message":{"role":"user","content":[{"type":"text","text":"valid"}]}}`,
-        `not valid json`,
+        "not valid json",
         `{"oops":"unterminated`,
       ].join("\n");
       expect(parsePiTranscript(input)).toEqual([{ role: "user", content: "valid" }]);

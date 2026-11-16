@@ -16,6 +16,7 @@ import {
   parseOpencodeTranscript,
   truncateTranscript,
 } from "../../../src/memory/transcript";
+import { testCwd, testCwds } from "../../helpers/memory-path";
 import {
   CLAUDE_JSONL,
   CLAUDE_LLM_OUTPUT,
@@ -24,7 +25,6 @@ import {
   OPENCODE_LLM_OUTPUT,
   OPENCODE_METADATA,
 } from "./fixtures";
-import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-pipeline");
 

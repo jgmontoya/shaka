@@ -10,7 +10,6 @@ import {
   type BenchResult,
   type Direction,
   type LogEntry,
-  readAutoresearchMeta,
   type VerdictInput,
   type WidgetState,
   type WizardAnswers,
@@ -23,6 +22,7 @@ import {
   improvesBest,
   parseMetricLine,
   parseSpec,
+  readAutoresearchMeta,
   renderTemplates,
   resolveExperimentWorktree,
   resolveResumeTarget,
@@ -1253,7 +1253,7 @@ describe("runLoop", () => {
           const path = join(dir, "autoresearch.jsonl");
           const file = Bun.file(path);
           const prev = (await file.exists()) ? await file.text() : "";
-          await Bun.write(path, prev + JSON.stringify(entry) + "\n");
+          await Bun.write(path, `${prev}${JSON.stringify(entry)}\n`);
           controller.abort();
         },
       },

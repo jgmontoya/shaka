@@ -331,16 +331,8 @@ export default function (pi: ExtensionAPI) {
       clearTimer(sid);
       sessionEndFired.delete(sid);
 
-      // session.start fires lazily on the first turn — eliminates the
-      // queued-append state needed if we ran it in a separate session_start
-      // handler. Only mark the session as fired AFTER the hook actually
-      // ran (exitCode 2 means runHook failed to spawn the shaka binary —
-      // we want the next turn to retry once the binary becomes reachable).
-      if (!sessionStartFired.has(sid)) {
-        const r = runHook("session.start", { session_id: sid, provider: "pi" });
-        if (r.exitCode !== 2) sessionStartFired.add(sid);
-        if (r.stdout.trim()) appends.push(r.stdout);
-      }
+      const startOutput = runSessionStartOnce(sid);
+      if (startOutput.trim()) appends.push(startOutput);
 
       const r = runHook("prompt.submit", {
         session_id: sid,
@@ -435,6 +427,19 @@ export default function (pi: ExtensionAPI) {
     sessionStartFired.delete(sid);
     sessionEndFired.delete(sid);
   });
+
+  // session.start fires lazily on the first turn — eliminates the
+  // queued-append state needed if we ran it in a separate session_start
+  // handler. Only mark the session as fired AFTER the hook actually
+  // ran (exitCode 2 means runHook failed to spawn the shaka binary —
+  // we want the next turn to retry once the binary becomes reachable).
+  // Returns the hook's stdout, or "" when session.start already fired.
+  function runSessionStartOnce(sid: string): string {
+    if (sessionStartFired.has(sid)) return "";
+    const r = runHook("session.start", { session_id: sid, provider: "pi" });
+    if (r.exitCode !== 2) sessionStartFired.add(sid);
+    return r.stdout;
+  }
 
   function fireSessionEnd(ctx: ExtensionContext, sid: string): void {
     sessionEndTimers.delete(sid);

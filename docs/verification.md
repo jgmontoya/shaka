@@ -6,11 +6,11 @@ then report what they establish and what remains unverified.
 ## Repository checks
 
 Run `just check` before handing off a change. It delegates to `bun run check`:
-TypeScript, Biome on `src/` and `scripts/`, the provider dependency gate, and the
-Bun test suite. Other architecture tripwires remain advisory; their warnings do
-not fail this gate. Existing lint debt keeps tests and default templates outside
-the canonical lint scope; check changed TypeScript files there with
-`bunx --no-install biome check <path>`.
+TypeScript, Biome on the whole repository (`src/`, `scripts/`, `test/`, and
+`defaults/`), the provider dependency gate, and the Bun test suite. Tests relax
+two Biome rules: non-null assertions are allowed, and so is `delete`, which test
+teardown uses to restore unset environment variables and properties. Other
+architecture tripwires remain advisory; their warnings do not fail this gate.
 
 `just test-hermetic` runs the same Bun unit and integration suite used
 by the repository check. Generated-provider tests are included in that suite;

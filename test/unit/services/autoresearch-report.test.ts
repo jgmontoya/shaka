@@ -87,8 +87,8 @@ async function makeReportDir(): Promise<string> {
         duration_ms: 1000,
       },
     ]
-      .map((entry) => JSON.stringify(entry))
-      .join("\n") + "\n",
+      .map((entry) => `${JSON.stringify(entry)}\n`)
+      .join(""),
   );
   return dir;
 }
@@ -186,8 +186,8 @@ describe("autoresearch report model", () => {
             duration_ms: 1000,
           },
         ]
-          .map((entry) => JSON.stringify(entry))
-          .join("\n") + "\n",
+          .map((entry) => `${JSON.stringify(entry)}\n`)
+          .join(""),
       );
 
       const model = await buildAutoresearchReportModel(dir);
