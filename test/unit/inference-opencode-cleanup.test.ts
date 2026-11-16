@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { expect, test } from "bun:test";
 
 // Invariants for the opencode session-cleanup wiring in callOpenCodeCLI.
 // Each classifier call creates a session in opencode's sqlite DB (no

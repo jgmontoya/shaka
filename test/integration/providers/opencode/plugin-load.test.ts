@@ -55,6 +55,11 @@ interface RecordedSchema {
   description?: string;
 }
 
+type ToolExecuteAfterHook = (
+  input: { tool: string; sessionID: string; callID: string },
+  output: { args: Record<string, unknown> },
+) => unknown;
+
 interface PluginHooks {
   tool?: Record<string, PluginTool>;
   [key: string]: unknown;
@@ -409,16 +414,16 @@ describe.serial.skipIf(process.platform === "win32")(
 
       const ShakaPlugin = await loadPlugin();
       const hooks = await ShakaPlugin({ directory: ROOT });
-      const afterHook = hooks["tool.execute.after"];
+      const afterHook = hooks["tool.execute.after"] as ToolExecuteAfterHook;
       expect(typeof afterHook).toBe("function");
 
-      await (afterHook as Function)(
+      await afterHook(
         { tool: "read", sessionID: "session-1", callID: "call-1" },
         { args: { filePath: "README.md" } },
       );
       expect(await Bun.file(hookLog).exists()).toBe(false);
 
-      await (afterHook as Function)(
+      await afterHook(
         { tool: "bash", sessionID: "session-1", callID: "call-2" },
         { args: { command: "echo ok" } },
       );

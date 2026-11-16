@@ -10,8 +10,8 @@ import {
   loadManifest,
   saveManifest,
 } from "../../../src/domain/skills-manifest";
-import { updateAllSkills, updateSkill } from "../../../src/services/skill-update-service";
 import { createGitHubProvider } from "../../../src/services/skill-source/github";
+import { updateAllSkills, updateSkill } from "../../../src/services/skill-update-service";
 
 const VALID_SKILL_MD = `---
 name: TestSkill
@@ -169,7 +169,8 @@ describe("SkillUpdateService", () => {
     test("rejects update when upstream skill was renamed", async () => {
       await installFakeSkill("TestSkill");
 
-      const renamedMd = `---\nname: RenamedSkill\ndescription: A renamed skill\n---\n\n# RenamedSkill\n`;
+      const renamedMd =
+        "---\nname: RenamedSkill\ndescription: A renamed skill\n---\n\n# RenamedSkill\n";
       const result = await updateSkill(tempDir, "TestSkill", {
         provider: testProvider(UPDATED_SHA, fakeGitClone(renamedMd)),
       });
@@ -184,7 +185,7 @@ describe("SkillUpdateService", () => {
     test("replaces skill files on disk", async () => {
       await installFakeSkill("TestSkill");
 
-      const updatedMd = `---\nname: TestSkill\ndescription: Updated\n---\n# Updated`;
+      const updatedMd = "---\nname: TestSkill\ndescription: Updated\n---\n# Updated";
       await updateSkill(tempDir, "TestSkill", {
         provider: testProvider(UPDATED_SHA, fakeGitClone(updatedMd)),
       });
@@ -266,7 +267,8 @@ describe("SkillUpdateService", () => {
 
   describe("updateAllSkills", () => {
     test("updates all installed skills", async () => {
-      const SECOND_SKILL_MD = `---\nname: SecondSkill\ndescription: A second skill\n---\n\n# SecondSkill\n`;
+      const SECOND_SKILL_MD =
+        "---\nname: SecondSkill\ndescription: A second skill\n---\n\n# SecondSkill\n";
 
       const skillDirA = join(tempDir, "skills", "TestSkill");
       const skillDirB = join(tempDir, "skills", "SecondSkill");
@@ -320,7 +322,7 @@ describe("SkillUpdateService", () => {
       await mkdir(skillDirA, { recursive: true });
       await mkdir(skillDirB, { recursive: true });
       await writeFile(join(skillDirA, "SKILL.md"), VALID_SKILL_MD);
-      await writeFile(join(skillDirB, "SKILL.md"), `---\nname: FailSkill\n---`);
+      await writeFile(join(skillDirB, "SKILL.md"), "---\nname: FailSkill\n---");
 
       let manifest = addSkill(emptyManifest(), "TestSkill", TEST_SKILL);
       manifest = addSkill(manifest, "FailSkill", { ...TEST_SKILL, source: "other/repo" });

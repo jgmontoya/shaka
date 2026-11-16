@@ -7,10 +7,9 @@ default:
 
 # ── Dev ───────────────────────────────────────────────────────────────
 
-# Run all hard checks, then warning-only architecture tripwires
+# Run typechecking, lint, architecture checks, and tests
 check:
     bun run check
-    bun run architecture:check
 
 # Run tests
 test *args:
@@ -24,7 +23,7 @@ typecheck:
 lint:
     bun run lint
 
-# Run warning-only architecture tripwires
+# Run the provider dependency gate and advisory architecture tripwires
 architecture-check:
     bun run architecture:check
 

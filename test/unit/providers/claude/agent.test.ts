@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { claudeAgentExecution } from "../../../../src/providers/claude/agent";
 import type { ProcessInvocation } from "../../../../src/platform/process-runner";
+import { claudeAgentExecution } from "../../../../src/providers/claude/agent";
 
 describe("claudeAgentExecution", () => {
   test("bridges Shaka's hook-scoped Claude token into the child Claude CLI env", async () => {

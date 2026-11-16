@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmod, mkdir, mkdtemp, readdir, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -32,6 +32,36 @@ exec bun "${join(repoRoot, "src", "index.ts")}" "$@"
   afterEach(async () => {
     await rm(testDir, { recursive: true, force: true });
   });
+
+  test("compile completes project metadata before the CLI exits", async () => {
+    const projectDir = join(testDir, "project");
+    await mkdir(projectDir);
+    const cwd = await realpath(projectDir);
+    const proc = Bun.spawn(
+      [process.execPath, join(repoRoot, "src/index.ts"), "memory", "compile"],
+      {
+        cwd,
+        env: { ...process.env, SHAKA_HOME: shakaHome },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+      },
+    );
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+
+    expect(exitCode, `${stderr}\n${stdout}`).toBe(0);
+    const knowledgeRoot = join(shakaHome, "memory", "knowledge");
+    const projects = await readdir(knowledgeRoot);
+    expect(projects).toHaveLength(1);
+    const metadata = await Bun.file(join(knowledgeRoot, projects[0]!, ".project.json")).json();
+    expect(metadata).toEqual({ cwd });
+  }, 15_000);
 
   test("validates project-scoped recall through installed command surfaces", async () => {
     const proc = Bun.spawn(

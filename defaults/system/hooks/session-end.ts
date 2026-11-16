@@ -186,6 +186,79 @@ function elapsedMs(start: number): number {
   return Math.round(performance.now() - start);
 }
 
+type Mark = (label: string, startMs: number, detail?: string) => void;
+
+/** Maintenance: consolidation, hierarchical generalization, and bounded auto-prune (fail-open). */
+async function runMaintenanceStep(
+  memoryDir: string,
+  cwd: string,
+  newLearningsCount: number,
+  provider: ProviderName,
+  mark: Mark,
+): Promise<void> {
+  const t = performance.now();
+  try {
+    const config = await loadConfig();
+    if (config?.memory?.maintenance?.enabled !== false) {
+      const maintenanceResult = await runMaintenance(memoryDir, cwd, newLearningsCount, {
+        provider,
+      });
+      if (maintenanceResult.skipped) {
+        mark("Maintenance skipped", t, maintenanceResult.reason ?? "");
+      } else {
+        const detail = [
+          `condensed=${maintenanceResult.condensed ?? 0}`,
+          `generalized=${maintenanceResult.generalized ?? 0}`,
+          `pruned=${maintenanceResult.pruned ?? 0}`,
+        ].join(", ");
+        mark("Maintenance complete", t, detail);
+      }
+    } else {
+      mark("Maintenance disabled", t);
+    }
+  } catch (err) {
+    console.error(`Maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
+    mark("Maintenance failed", t);
+  }
+}
+
+/** Knowledge compilation (own gating via manifest delta, fail-open). */
+async function runKnowledgeStep(
+  memoryDir: string,
+  cwd: string,
+  provider: ProviderName,
+  mark: Mark,
+): Promise<void> {
+  const t = performance.now();
+  try {
+    const config = await loadConfig();
+    if (config?.memory?.knowledge_enabled !== false) {
+      const inferFn = async (prompt: string): Promise<string> => {
+        const res = await inference({ userPrompt: prompt, provider, timeout: 60000 });
+        if (!res.success || !res.text) throw new Error(res.error ?? "inference failed");
+        return res.text;
+      };
+      const result = await compileKnowledge(memoryDir, cwd, inferFn);
+      if (result.sessionsProcessed === 0) {
+        mark("Knowledge compilation skipped", t, "no unprocessed sessions");
+      } else {
+        mark(
+          "Knowledge compilation complete",
+          t,
+          `${result.topicsCreated.length} created, ${result.topicsUpdated.length} updated`,
+        );
+      }
+    } else {
+      mark("Knowledge compilation disabled", t);
+    }
+  } catch (err) {
+    console.error(
+      `Knowledge compilation failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    mark("Knowledge compilation failed", t);
+  }
+}
+
 /**
  * Spawn a session-end worker that can outlive the hook process.
  *
@@ -413,60 +486,10 @@ async function worker(tmpPath: string) {
   mark("Rollups update", t);
 
   // Maintenance: consolidation, hierarchical generalization, and bounded auto-prune (fail-open)
-  t = performance.now();
-  try {
-    const config = await loadConfig();
-    if (config?.memory?.maintenance?.enabled !== false) {
-      const maintenanceResult = await runMaintenance(memoryDir, cwd, newLearningsCount, {
-        provider,
-      });
-      if (maintenanceResult.skipped) {
-        mark("Maintenance skipped", t, maintenanceResult.reason ?? "");
-      } else {
-        const detail = [
-          `condensed=${maintenanceResult.condensed ?? 0}`,
-          `generalized=${maintenanceResult.generalized ?? 0}`,
-          `pruned=${maintenanceResult.pruned ?? 0}`,
-        ].join(", ");
-        mark("Maintenance complete", t, detail);
-      }
-    } else {
-      mark("Maintenance disabled", t);
-    }
-  } catch (err) {
-    console.error(`Maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
-    mark("Maintenance failed", t);
-  }
+  await runMaintenanceStep(memoryDir, cwd, newLearningsCount, provider, mark);
 
   // Step 6: Knowledge compilation (own gating via manifest delta, fail-open)
-  t = performance.now();
-  try {
-    const config = await loadConfig();
-    if (config?.memory?.knowledge_enabled !== false) {
-      const inferFn = async (prompt: string): Promise<string> => {
-        const res = await inference({ userPrompt: prompt, provider, timeout: 60000 });
-        if (!res.success || !res.text) throw new Error(res.error ?? "inference failed");
-        return res.text;
-      };
-      const result = await compileKnowledge(memoryDir, cwd, inferFn);
-      if (result.sessionsProcessed === 0) {
-        mark("Knowledge compilation skipped", t, "no unprocessed sessions");
-      } else {
-        mark(
-          "Knowledge compilation complete",
-          t,
-          `${result.topicsCreated.length} created, ${result.topicsUpdated.length} updated`,
-        );
-      }
-    } else {
-      mark("Knowledge compilation disabled", t);
-    }
-  } catch (err) {
-    console.error(
-      `Knowledge compilation failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
-    mark("Knowledge compilation failed", t);
-  }
+  await runKnowledgeStep(memoryDir, cwd, provider, mark);
 
   mark("Session-end worker total", t0, provider);
 

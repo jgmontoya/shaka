@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   CLAUDE_PERMISSION_DEFAULTS,
-  OPENCODE_PERMISSION_DEFAULTS,
   type ClaudePermissions,
+  OPENCODE_PERMISSION_DEFAULTS,
   hasExistingOpencodePermissions,
   mergeClaudePermissions,
 } from "../../../src/providers/permissions";

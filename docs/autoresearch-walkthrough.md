@@ -40,13 +40,25 @@ Branch:   autoresearch/cut-prime-count-from-80ms
 
 Shaka creates a git worktree next to your repo, switches to a new branch (your main checkout is untouched), and **hands your terminal to your installed provider CLI's interactive TUI** (claude, opencode, codex, or pi) with a setup agent seeded by the `autoresearch-setup` skill. You talk to the agent directly — no wizard, no hand-editing — and it produces the setup artifacts:
 
-- `autoresearch.md` — the spec (metric name, direction, unit, which benchmark is being wrapped)
+- `autoresearch.md` — the spec (metric, workload, measurement boundaries, configuration, correctness evidence, and setup baseline observations)
 - `autoresearch.sh` — the executable harness that emits one `METRIC name=... value=... unit=...` line on stdout
 - `autoresearch.checks.sh` — optional correctness gate
 
 If your objective is ambiguous (e.g. "make it faster" in a repo with two plausible benchmarks), the agent asks you in the TUI. When it's done, type `/exit` or Ctrl-D and control returns to Shaka.
 
 Shaka then **validates the setup independently** — agent success text is never enough. The validation gate checks that `autoresearch.md` parses, `./autoresearch.sh` exits 0 and emits a parseable METRIC line, any `autoresearch.checks.sh` passes against the baseline, and only setup artifacts are dirty. If validation passes, Shaka commits the setup with message `autoresearch: finalize agent-generated setup` and enters the optimization loop. If it fails, Shaka prints a diagnostic naming the failing phase (`spec` / `benchmark` / `checks` / `dirty`), leaves the worktree on disk, and exits — you can inspect, fix by hand if you like, or re-run with a more specific objective.
+
+The setup agent must also inspect the wrapped workload and record what each run
+does, where measurement starts and stops, and which build and data settings apply.
+The harness must fail on errors or missing required work. Observable output,
+completed operations, or artifact checks establish that the work ran. Run any
+correctness gate against the baseline and explain an absent separate checks script.
+For noisy timing or throughput, record repeated setup baseline runs and their
+spread; deterministic counts do not require repetition. These observations belong
+in the spec. The runner continues to own iteration measurements and history.
+
+These are setup authoring requirements. The automated validation gate cannot
+determine whether an arbitrary benchmark measures meaningful work.
 
 ### Opt-outs and overrides
 

@@ -676,12 +676,15 @@ Requires [Bun](https://bun.sh) and [just](https://github.com/casey/just).
 
 ```bash
 bun install          # Install dependencies
-just check           # Run all checks (typecheck + lint + tests)
+just check           # Run all checks (typecheck + lint + architecture + tests)
 just test            # Run tests
 just typecheck       # Run typechecker
 just lint            # Run linter
 just format          # Format code
 ```
+
+See the [verification guide](docs/verification.md) for checks by behavior,
+provider E2E prerequisites, and the evidence to include in a review or handoff.
 
 ### E2E Tests (Docker)
 

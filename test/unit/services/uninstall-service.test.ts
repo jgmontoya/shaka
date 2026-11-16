@@ -9,7 +9,7 @@ import { getProviderNames } from "../../../src/providers/registry";
 import type { ProviderConfigurer, ProviderName } from "../../../src/providers/types";
 import { InitService } from "../../../src/services/init-service";
 import type { DetectedProviders } from "../../../src/services/provider-detection";
-import { UninstallService, type UninstallResult } from "../../../src/services/uninstall-service";
+import { type UninstallResult, UninstallService } from "../../../src/services/uninstall-service";
 
 describe("UninstallService", () => {
   const testHome = join(tmpdir(), "shaka-test-uninstall");

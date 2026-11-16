@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { claudeInference } from "../../../../src/providers/claude/inference";
 import type { ProcessInvocation, ProcessResult } from "../../../../src/platform/process-runner";
+import { claudeInference } from "../../../../src/providers/claude/inference";
 
 function successResult(stdout = "OK"): ProcessResult {
   return { exitCode: 0, stdout, stderr: "", timedOut: false };

@@ -247,5 +247,5 @@ if (import.meta.main) {
   program.addCommand(createScanCommand());
   program.addCommand(createSkillCommand());
 
-  program.parse(process.argv);
+  await program.parseAsync(process.argv);
 }

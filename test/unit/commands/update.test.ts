@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { createInitCommand } from "../../../src/commands/init";
 import {
+  type UpdateInfo,
   buildReinitArgs,
   buildUpdatePlan,
   createUpdateCommand,
-  type UpdateInfo,
 } from "../../../src/commands/update";
 import type { ShakaConfig } from "../../../src/domain/config";
 import { getProviderNames } from "../../../src/providers/registry";

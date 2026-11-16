@@ -129,36 +129,8 @@ async function loadRollingSummaries(shakaHome: string): Promise<string> {
   }
 }
 
-function elapsedMs(start: number): number {
-  return Math.round(performance.now() - start);
-}
-
-async function main() {
-  const t0 = performance.now();
-  const timings: string[] = [];
-
-  function mark(label: string, startMs: number, detail = "") {
-    const ms = elapsedMs(startMs);
-    const line = `  [${ms}ms] ${label}${detail ? ` (${detail})` : ""}`;
-    console.error(line);
-    timings.push(line);
-  }
-
-  // Skip context loading for subagent sessions
-  if (isSubagent()) {
-    console.error("🤖 Subagent session - skipping context loading");
-    process.exit(0);
-  }
-
-  const shakaHome = resolveShakaHome();
-  const config = await loadConfig(shakaHome);
-  const learningsBudget = config?.memory?.learnings_budget ?? DEFAULT_LEARNINGS_BUDGET;
-  const sessionsBudget = config?.memory?.sessions_budget ?? DEFAULT_SESSIONS_BUDGET;
-  const recencyWindowDays = config?.memory?.recency_window_days ?? DEFAULT_RECENCY_WINDOW_DAYS;
-
-  // Clean up stale session-end temp files (from crashed workers)
-  const memoryDir = join(shakaHome, "memory");
-  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+/** Clean up stale session-end temp files (from crashed workers). */
+async function cleanupStaleSessionEndInputs(memoryDir: string, oneHourAgo: number): Promise<void> {
   try {
     const glob = new Bun.Glob(".session-end-input-*.json");
     for await (const file of glob.scan({ cwd: memoryDir })) {
@@ -175,10 +147,14 @@ async function main() {
   } catch {
     /* memory dir might not exist yet */
   }
+}
 
-  // Recover stale Codex debounce markers (crash recovery).
-  // For each stale marker: read session data, write a temp file for the
-  // session-end worker, and spawn a detached worker to process it.
+/**
+ * Recover stale Codex debounce markers (crash recovery).
+ * For each stale marker: read session data, write a temp file for the
+ * session-end worker, and spawn a detached worker to process it.
+ */
+async function recoverStaleCodexMarkers(memoryDir: string, oneHourAgo: number): Promise<void> {
   try {
     const codexGlob = new Bun.Glob(".codex-pending-*.json");
     for await (const file of codexGlob.scan({ cwd: memoryDir })) {
@@ -229,6 +205,71 @@ async function main() {
   } catch {
     /* memory dir might not exist yet */
   }
+}
+
+type Mark = (label: string, startMs: number, detail?: string) => void;
+
+/**
+ * Load the knowledge index (topic list with paths — LLM reads pages on demand).
+ * Returns an empty string when disabled, empty, or unreadable (fail-open).
+ */
+async function loadKnowledgeSection(
+  enabled: boolean,
+  memoryDir: string,
+  mark: Mark,
+  t: number,
+): Promise<string> {
+  if (!enabled) {
+    mark("Knowledge base disabled", t);
+    return "";
+  }
+  try {
+    const knowledgeIndex = await loadKnowledgeIndex(memoryDir, process.cwd());
+    if (knowledgeIndex) {
+      mark("Loaded knowledge index", t, `${knowledgeIndex.length} chars`);
+      return knowledgeIndex;
+    }
+    mark("No knowledge base to load", t);
+  } catch {
+    mark("Knowledge index load failed (fail-open)", t);
+  }
+  return "";
+}
+
+function elapsedMs(start: number): number {
+  return Math.round(performance.now() - start);
+}
+
+async function main() {
+  const t0 = performance.now();
+  const timings: string[] = [];
+
+  function mark(label: string, startMs: number, detail = "") {
+    const ms = elapsedMs(startMs);
+    const line = `  [${ms}ms] ${label}${detail ? ` (${detail})` : ""}`;
+    console.error(line);
+    timings.push(line);
+  }
+
+  // Skip context loading for subagent sessions
+  if (isSubagent()) {
+    console.error("🤖 Subagent session - skipping context loading");
+    process.exit(0);
+  }
+
+  const shakaHome = resolveShakaHome();
+  const config = await loadConfig(shakaHome);
+  const learningsBudget = config?.memory?.learnings_budget ?? DEFAULT_LEARNINGS_BUDGET;
+  const sessionsBudget = config?.memory?.sessions_budget ?? DEFAULT_SESSIONS_BUDGET;
+  const recencyWindowDays = config?.memory?.recency_window_days ?? DEFAULT_RECENCY_WINDOW_DAYS;
+
+  // Clean up stale session-end temp files (from crashed workers)
+  const memoryDir = join(shakaHome, "memory");
+  const oneHourAgo = Date.now() - 60 * 60 * 1000;
+  await cleanupStaleSessionEndInputs(memoryDir, oneHourAgo);
+
+  // Recover stale Codex debounce markers (crash recovery).
+  await recoverStaleCodexMarkers(memoryDir, oneHourAgo);
 
   const contextParts: string[] = [];
 
@@ -263,21 +304,8 @@ async function main() {
   // Load knowledge index (topic list with paths — LLM reads pages on demand)
   t = performance.now();
   const knowledgeEnabled = config?.memory?.knowledge_enabled ?? true;
-  if (knowledgeEnabled) {
-    try {
-      const knowledgeIndex = await loadKnowledgeIndex(memoryDir, process.cwd());
-      if (knowledgeIndex) {
-        contextParts.push(knowledgeIndex);
-        mark("Loaded knowledge index", t, `${knowledgeIndex.length} chars`);
-      } else {
-        mark("No knowledge base to load", t);
-      }
-    } catch {
-      mark("Knowledge index load failed (fail-open)", t);
-    }
-  } else {
-    mark("Knowledge base disabled", t);
-  }
+  const knowledgeIndex = await loadKnowledgeSection(knowledgeEnabled, memoryDir, mark, t);
+  if (knowledgeIndex) contextParts.push(knowledgeIndex);
 
   // Load rolling summaries (compressed history between learnings and sessions)
   t = performance.now();

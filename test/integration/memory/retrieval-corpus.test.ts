@@ -6,11 +6,8 @@ import memorySearchTool from "../../../defaults/system/tools/memory-search";
 import { createMemoryCommand } from "../../../src/commands/memory/index";
 import { findKnowledgeSourceImpact, inspectKnowledge } from "../../../src/memory/inspection";
 import { loadKnowledgeIndex, rebuildIndex } from "../../../src/memory/knowledge";
-import {
-  type LearningCategory,
-  type LearningEntry,
-} from "../../../src/memory/learnings";
 import { appendToArchive, writeLearnings } from "../../../src/memory/learning-store";
+import type { LearningCategory, LearningEntry } from "../../../src/memory/learnings";
 import { projectSlug } from "../../../src/memory/rollups";
 import { type SearchFilter, type SearchResult, searchMemory } from "../../../src/memory/search";
 import { writeSummary } from "../../../src/memory/storage";

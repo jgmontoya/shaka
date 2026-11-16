@@ -28,6 +28,10 @@ Default to using Bun instead of Node.js.
 
 Use `bun test` to run tests.
 
+For Shaka repository changes, use [the verification guide](docs/verification.md)
+to choose focused checks, identify when provider E2E tests are needed, and report
+the scope and checkout behind verification results. Run `just check` before handoff.
+
 ```ts#index.test.ts
 import { test, expect } from "bun:test";
 

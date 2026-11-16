@@ -18,8 +18,8 @@ import { projectSlug } from "../../../src/memory/rollups";
 import { writeSummary } from "../../../src/memory/storage";
 import type { SessionSummary } from "../../../src/memory/summarize";
 import { hashContent } from "../../../src/memory/utils";
-import { makeRunShaka } from "../../helpers/run-shaka";
 import { testCwd, testCwds } from "../../helpers/memory-path";
+import { makeRunShaka } from "../../helpers/run-shaka";
 
 function makeEntry(overrides: Partial<LearningEntry> = {}): LearningEntry {
   return {

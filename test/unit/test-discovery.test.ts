@@ -17,19 +17,26 @@ test("repository test configuration excludes tests outside test/", async () => {
     await Bun.write(join(fixtureRoot, "bunfig.toml"), configuration);
     await Bun.write(
       join(fixtureRoot, "test", "included.test.ts"),
-      'import { expect, test } from "bun:test";\n' +
-        'test("included test runs", () => expect(true).toBe(true));\n',
+      'import { test } from "bun:test";\n' +
+        'test("included test runs", async () => {\n' +
+        '  await Bun.write(new URL("./included.ran", import.meta.url), "included");\n' +
+        "});\n",
     );
     await Bun.write(
       join(fixtureRoot, "experiments", "excluded.test.ts"),
       'import { test } from "bun:test";\n' +
-        'test("outside test does not run", () => { throw new Error("outside test ran"); });\n',
+        'test("outside test does not run", async () => {\n' +
+        '  await Bun.write(new URL("./excluded.ran", import.meta.url), "excluded");\n' +
+        "});\n",
     );
 
-    const subprocess = Bun.spawn(["bun", "test"], {
+    const subprocess = Bun.spawn([process.execPath, "test"], {
       cwd: fixtureRoot,
+      stdin: "ignore",
       stdout: "pipe",
       stderr: "pipe",
+      timeout: 5000,
+      killSignal: "SIGKILL",
     });
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(subprocess.stdout).text(),
@@ -39,9 +46,11 @@ test("repository test configuration excludes tests outside test/", async () => {
     const output = `${stdout}\n${stderr}`;
 
     expect(exitCode, output).toBe(0);
-    expect(output).toContain("included test runs");
-    expect(output).not.toContain("outside test ran");
+    expect(await Bun.file(join(fixtureRoot, "test/included.ran")).exists(), output).toBe(true);
+    expect(await Bun.file(join(fixtureRoot, "experiments/excluded.ran")).exists(), output).toBe(
+      false,
+    );
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }
-});
+}, 10_000);

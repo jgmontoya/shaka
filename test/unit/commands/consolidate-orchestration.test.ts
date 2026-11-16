@@ -10,9 +10,9 @@ import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { lstat, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { writeLearnings } from "../../../src/memory/learning-store";
 import type { LearningEntry } from "../../../src/memory/learnings";
 import { parseLearnings, promoteToGlobal, renderLearnings } from "../../../src/memory/learnings";
-import { writeLearnings } from "../../../src/memory/learning-store";
 import { testCwd, testCwds } from "../../helpers/memory-path";
 
 const testMemoryDir = join(tmpdir(), "shaka-test-consolidate-orch");
