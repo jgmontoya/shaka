@@ -1,7 +1,13 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtemp, rm, symlink } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Eta } from "eta";
+import { writeSummary } from "../../../src/memory/storage";
+
+const repoRoot = join(import.meta.dir, "../../..");
+const defaultsDir = join(repoRoot, "defaults");
+const hookPath = join(defaultsDir, "system/hooks/session-start.ts");
 
 describe("session-start hook", () => {
   test("exports TRIGGER with session.start", async () => {
@@ -9,219 +15,222 @@ describe("session-start hook", () => {
     expect(mod.TRIGGER).toEqual(["session.start"]);
   });
 
-  test("source file imports memory functions from shaka", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    expect(source).toContain("listSummaries");
-    expect(source).toContain("selectRecentSummaries");
-  });
-
-  test("source file uses shared renderSessionSection", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    expect(source).toContain("renderSessionSection");
-  });
-
-  test("source file includes memory size cap", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    // Should have a constant or logic for capping memory section size
-    expect(source).toMatch(/MAX_MEMORY|5.*KB|5000|5120/i);
-  });
-
-  test("source file includes template skip logic", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    expect(source).toContain("isUnmodifiedTemplate");
-    expect(source).toContain("unmodified template, skipped");
-  });
-
   test("source file cleans up stale session-end-input files", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
+    const source = await Bun.file(hookPath).text();
     expect(source).toContain(".session-end-input-*.json");
   });
 
   test("source file cleans up stale codex pending marker files", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
+    const source = await Bun.file(hookPath).text();
     expect(source).toContain(".codex-pending-*.json");
   });
 
   test("source file recovers stale codex markers by spawning session-end workers", async () => {
-    const source = await Bun.file("defaults/system/hooks/session-start.ts").text();
-    // Should read marker data and delegate to the cross-platform worker launcher.
+    const source = await Bun.file(hookPath).text();
     expect(source).toContain("session_id");
     expect(source).toContain("transcript_path");
     expect(source).toContain("spawnSessionEndWorker(tmpPath, logPath)");
   });
 });
 
-/**
- * Integration tests for the unmodified-template detection.
- *
- * These create a fake SHAKA_HOME with a system/ symlink that points
- * to the real defaults/system directory, which lets the hook resolve
- * defaults/user/ templates via the same mechanism used in production.
- */
-describe("unmodified template detection", () => {
-  let fakeShakaHome: string;
-  const repoRoot = join(import.meta.dir, "../../..");
-  const defaultsDir = join(repoRoot, "defaults");
+describe("emitted session context", () => {
+  let testDir: string;
+  let shakaHome: string;
+  let projectDir: string;
 
-  beforeAll(async () => {
-    // Create a temp SHAKA_HOME with a system symlink → real defaults/system
-    fakeShakaHome = await mkdtemp(join(tmpdir(), "shaka-test-"));
+  async function writeConfig(sessionsBudget = 5000): Promise<void> {
     await Bun.write(
-      `${fakeShakaHome}/config.json`,
+      join(shakaHome, "config.json"),
       JSON.stringify({
-        version: "0.3.0",
+        version: "0.15.0",
         reasoning: { enabled: true },
+        permissions: { managed: true },
         providers: { claude: { enabled: false }, opencode: { enabled: false } },
         assistant: { name: "TestBot" },
         principal: { name: "Tester" },
+        memory: { sessions_budget: sessionsBudget },
       }),
     );
-    await symlink(`${defaultsDir}/system`, `${fakeShakaHome}/system`, "junction");
+  }
+
+  beforeEach(async () => {
+    testDir = await realpath(await mkdtemp(join(tmpdir(), "shaka-test-session-start-")));
+    shakaHome = join(testDir, "shaka");
+    projectDir = join(testDir, "project");
+    await mkdir(shakaHome, { recursive: true });
+    await mkdir(projectDir, { recursive: true });
+    await symlink(join(defaultsDir, "system"), join(shakaHome, "system"), "junction");
+    await writeConfig();
   });
 
-  afterAll(async () => {
-    await rm(fakeShakaHome, { recursive: true, force: true });
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
   });
 
-  async function setupUserDir(files: Record<string, string>): Promise<void> {
-    const { mkdir } = await import("node:fs/promises");
-    const userDir = `${fakeShakaHome}/user`;
-    await mkdir(userDir, { recursive: true });
+  async function runHook(): Promise<string> {
+    const userHome = join(testDir, "user-home");
+    const proc = Bun.spawn([process.execPath, hookPath], {
+      cwd: projectDir,
+      env: {
+        ...process.env,
+        SHAKA_HOME: shakaHome,
+        HOME: userHome,
+        USERPROFILE: userHome,
+        XDG_CONFIG_HOME: join(userHome, ".config"),
+        CLAUDE_CONFIG_DIR: join(userHome, ".claude"),
+        CODEX_HOME: join(userHome, ".codex"),
+        PI_CODING_AGENT_DIR: join(userHome, ".pi", "agent"),
+        CLAUDE_AGENT_TYPE: undefined,
+        CLAUDE_PROJECT_DIR: undefined,
+        SHAKA_OPENCODE_SUBAGENT: undefined,
+        SHAKA_CODEX_SUBAGENT: undefined,
+        SHAKA_PI_SUBAGENT: undefined,
+      },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 5000,
+      killSignal: "SIGKILL",
+    });
+
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect(exitCode, stderr).toBe(0);
+    return stdout;
+  }
+
+  async function writeUserFiles(files: Record<string, string>): Promise<void> {
     for (const [name, content] of Object.entries(files)) {
-      await Bun.write(`${userDir}/${name}`, content);
+      await Bun.write(join(shakaHome, "user", name), content);
     }
   }
 
-  async function cleanUserDir(): Promise<void> {
-    await rm(`${fakeShakaHome}/user`, { recursive: true, force: true });
+  async function writeSession(session: {
+    title: string;
+    body: string;
+    date: string;
+    cwd?: string;
+  }): Promise<void> {
+    await writeSummary(join(shakaHome, "memory"), {
+      metadata: {
+        date: session.date,
+        cwd: session.cwd ?? projectDir,
+        provider: "claude",
+        sessionId: session.title,
+      },
+      tags: [],
+      title: session.title,
+      body: session.body,
+    });
   }
 
-  test("skips unmodified goals.md (verbatim copy of default)", async () => {
-    const defaultGoals = await Bun.file(`${defaultsDir}/user/goals.md`).text();
-    await setupUserDir({ "goals.md": defaultGoals });
+  test("a customized reasoning framework replaces the system framework", async () => {
+    const systemFramework = await Bun.file(
+      join(defaultsDir, "system/base-reasoning-framework.md"),
+    ).text();
+    expect(await runHook()).toContain(systemFramework);
 
-    // Run session-start hook as subprocess pointing at fake home
-    const proc = Bun.spawn(["bun", `${defaultsDir}/system/hooks/session-start.ts`], {
-      env: {
-        ...process.env,
-        SHAKA_HOME: fakeShakaHome,
-        CLAUDE_CODE_ENTRYPOINT: undefined,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    const customFramework = "# Project reasoning\n\nCUSTOM_FRAMEWORK_CONTEXT";
+    await Bun.write(join(shakaHome, "customizations/base-reasoning-framework.md"), customFramework);
 
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    await proc.exited;
+    const context = await runHook();
+    expect(context).toContain(customFramework);
+    expect(context).not.toContain(systemFramework);
+  }, 15_000);
 
-    expect(stderr).toContain("goals.md (unmodified template, skipped)");
-    // The goals content should NOT appear in the output
-    expect(stdout).not.toContain("[Primary Goal]");
-
-    await cleanUserDir();
-  });
-
-  test("includes customized goals.md", async () => {
-    const customGoals = `# Goals
-
-## Active Goals
-
-### G0: Ship Shaka v1.0
-
-**Status:** Active
-**Target:** Q1 2026
-**Progress:**
-
-- [x] Implement session memory
-- [ ] Add plugin system
-`;
-    await setupUserDir({ "goals.md": customGoals });
-
-    const proc = Bun.spawn(["bun", `${defaultsDir}/system/hooks/session-start.ts`], {
-      env: {
-        ...process.env,
-        SHAKA_HOME: fakeShakaHome,
-        CLAUDE_CODE_ENTRYPOINT: undefined,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
-    });
-
-    const [stdout, stderr] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-    ]);
-    await proc.exited;
-
-    expect(stderr).toContain("goals.md");
-    expect(stderr).not.toContain("skipped");
-    expect(stdout).toContain("Ship Shaka v1.0");
-
-    await cleanUserDir();
-  });
-
-  test("skips all unmodified default templates", async () => {
-    // Copy all plain .md defaults verbatim
+  test("skips unmodified plain-markdown user templates", async () => {
     const files: Record<string, string> = {};
     for (const name of ["goals.md", "missions.md", "projects.md", "tech-stack.md"]) {
-      files[name] = await Bun.file(`${defaultsDir}/user/${name}`).text();
+      files[name] = await Bun.file(join(defaultsDir, "user", name)).text();
     }
-    await setupUserDir(files);
+    await writeUserFiles({ ...files, "notes.md": "CUSTOM_USER_CONTEXT" });
 
-    const proc = Bun.spawn(["bun", `${defaultsDir}/system/hooks/session-start.ts`], {
-      env: {
-        ...process.env,
-        SHAKA_HOME: fakeShakaHome,
-        CLAUDE_CODE_ENTRYPOINT: undefined,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+    const context = await runHook();
+    expect(context).toContain("CUSTOM_USER_CONTEXT");
+    for (const content of Object.values(files)) {
+      expect(context).not.toContain(content.trim());
+    }
+  }, 15_000);
+
+  test("includes customized goals", async () => {
+    const goals = "# Goals\n\nShip Shaka v1.0";
+    await writeUserFiles({ "goals.md": goals });
+
+    expect(await runHook()).toContain(goals);
+  }, 15_000);
+
+  test("loads top-level user content without nested reference files", async () => {
+    await writeUserFiles({
+      "notes.md": "TOP_LEVEL_USER_CONTEXT",
+      "references/notes.md": "NESTED_REFERENCE_CONTEXT",
     });
 
-    const stderr = await new Response(proc.stderr).text();
-    await proc.exited;
+    const context = await runHook();
+    expect(context).toContain("TOP_LEVEL_USER_CONTEXT");
+    expect(context).not.toContain("NESTED_REFERENCE_CONTEXT");
+  }, 15_000);
 
-    expect(stderr).toContain("goals.md (unmodified template, skipped)");
-    expect(stderr).toContain("missions.md (unmodified template, skipped)");
-    expect(stderr).toContain("projects.md (unmodified template, skipped)");
-    expect(stderr).toContain("tech-stack.md (unmodified template, skipped)");
-
-    await cleanUserDir();
-  });
-
-  test("always includes eta-sourced files (user.md) even when unmodified", async () => {
-    // Render the .eta template exactly as shaka init would
-    const { Eta } = await import("eta");
+  test("includes rendered user identity even when unmodified", async () => {
     const eta = new Eta({ autoEscape: false });
-    const etaSource = await Bun.file(`${defaultsDir}/user/user.md.eta`).text();
-    const rendered = eta.renderString(etaSource, {
+    const template = await Bun.file(join(defaultsDir, "user/user.md.eta")).text();
+    const identity = eta.renderString(template, {
       principalName: "Tester",
       assistantName: "TestBot",
     });
+    await writeUserFiles({ "user.md": identity });
 
-    await setupUserDir({ "user.md": rendered });
+    expect(await runHook()).toContain(identity);
+  }, 15_000);
 
-    const proc = Bun.spawn(["bun", `${defaultsDir}/system/hooks/session-start.ts`], {
-      env: {
-        ...process.env,
-        SHAKA_HOME: fakeShakaHome,
-        CLAUDE_CODE_ENTRYPOINT: undefined,
-      },
-      stdout: "pipe",
-      stderr: "pipe",
+  test("includes related sessions and excludes an unrelated project", async () => {
+    await writeSession({
+      title: "Current project session",
+      body: "CURRENT_PROJECT_SESSION_CONTEXT",
+      date: "2026-10-19",
+    });
+    await writeSession({
+      title: "Nested project session",
+      body: "NESTED_PROJECT_SESSION_CONTEXT",
+      date: "2026-10-18",
+      cwd: join(projectDir, "nested"),
+    });
+    await writeSession({
+      title: "Unrelated project session",
+      body: "UNRELATED_PROJECT_SESSION_CONTEXT",
+      date: "2026-10-20",
+      cwd: join(testDir, "unrelated-project"),
     });
 
-    const stderr = await new Response(proc.stderr).text();
-    await proc.exited;
+    const context = await runHook();
+    expect(context).toContain("CURRENT_PROJECT_SESSION_CONTEXT");
+    expect(context).toContain("NESTED_PROJECT_SESSION_CONTEXT");
+    expect(context).not.toContain("UNRELATED_PROJECT_SESSION_CONTEXT");
+  }, 15_000);
 
-    // user.md has no direct .md template in defaults/user/ (only .eta),
-    // so it should NOT be skipped — it contains configured identity info
-    expect(stderr).toContain("user.md");
-    expect(stderr).not.toContain("user.md (unmodified template, skipped)");
+  test("uses the configured session budget and preserves the first oversized summary", async () => {
+    const latestBody = `LATEST_SESSION_CONTEXT\n${"Latest session detail. ".repeat(10).trim()}`;
+    await writeSession({
+      title: "Latest session",
+      body: latestBody,
+      date: "2026-10-20",
+    });
+    await writeSession({
+      title: "Older session",
+      body: "OLDER_SESSION_CONTEXT",
+      date: "2026-10-19",
+    });
 
-    await cleanUserDir();
-  });
+    const defaultContext = await runHook();
+    expect(defaultContext).toContain(latestBody);
+    expect(defaultContext).toContain("OLDER_SESSION_CONTEXT");
+
+    await writeConfig(1);
+
+    const limitedContext = await runHook();
+    expect(limitedContext).toContain(latestBody);
+    expect(limitedContext).not.toContain("OLDER_SESSION_CONTEXT");
+  }, 15_000);
 });
