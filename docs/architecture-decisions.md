@@ -45,6 +45,12 @@ src/
 
 **Consequences:** Simple to navigate. May need splitting if Phase 1+ adds significant infrastructure.
 
+**Current implementation (2026-11-14):** This describes the original layout and
+purity goal. `domain/config.ts` performs configuration I/O, and
+`domain/agent-execution.ts` coordinates provider capabilities. The directory is
+not wholly pure. Keep new logic aligned with nearby responsibilities; moving
+existing modules to match the original diagram is separate work.
+
 ---
 
 ## ADR-006: Two-Tier Override Pattern
@@ -93,6 +99,13 @@ A file at `customizations/base-reasoning-framework.md` replaces `system/base-rea
 Since hooks run at `~/.config/shaka/` (not in the repo), any code they import must travel with them. Putting `inference.ts` in `src/` would break hooks because `src/` isn't deployed.
 
 **Consequences:** `inference.ts` lives at `defaults/system/tools/inference.ts`. Hooks import via relative path or the `shaka` package name (resolved by `bun link`).
+
+**Current implementation (2026-11-14):** The placement rule above is superseded.
+Inference lives in `src/inference.ts`; hooks use exports from the public `shaka`
+package, resolved through the installed link. Shared runtime code can live in
+`src/` when it is available through that supported package boundary. Generated
+standalone provider artifacts retain their deployment constraints and cannot
+assume a repository checkout is available.
 
 ---
 
@@ -146,10 +159,28 @@ better than an abstract provider base class with many overrides.
 **Consequences:** Provider-specific argv, env guards, output parsing, command
 formatting, setup invocation, and health checks live beside the provider. Shared
 helpers are allowed when at least two providers use the same behavior and tests
-name that shared contract. A warning-only architecture check guards large
-configurers, provider branches outside provider modules, stale opencode agent
-names, provider-specific generic option fields, and duplicate process timeout
-chains.
+name that shared contract.
+
+Concrete providers must not import or re-export modules from another provider
+directory. Common behavior belongs in generic provider helpers; same-provider
+internal dependencies remain valid.
+
+The architecture check rejects shared production code outside `src/providers/`
+depending on concrete adapters and dependencies between different provider
+directories. Provider subdirectories contain concrete adapters; files directly
+under `src/providers/` contain generic helpers and registry wiring.
+It parses module syntax and resolves targets with TypeScript, including configured
+path aliases. Import declarations, re-exports, type imports, import-equals
+declarations, and literal dynamic imports are checked. This is a static dependency
+gate; computed import targets and runtime dispatch require other checks.
+
+The shared-to-concrete dependency rule has no compatibility exceptions.
+Adapter-specific parsers live and are tested in their owning adapter modules.
+
+Both `just check` and `bun run check` include this gate. Large configurers,
+provider branches outside provider modules, stale opencode agent names,
+provider-specific generic option fields, and duplicate process timeout chains
+remain warning-only tripwires.
 
 ---
 

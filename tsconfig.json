@@ -33,6 +33,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src/**/*", "defaults/**/*", "test/**/*"],
+  "include": ["src/**/*", "scripts/**/*", "defaults/**/*", "test/**/*"],
   "exclude": ["node_modules", "experiments", "dist"]
 }

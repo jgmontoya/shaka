@@ -93,7 +93,6 @@ export async function resolveInferenceAttempts(
 }
 
 export { parseResponse } from "./providers/inference-response";
-export { parseOpencodeJsonStream } from "./providers/opencode/inference";
 
 // ---------------------------------------------------------------------------
 // Main Entry Point

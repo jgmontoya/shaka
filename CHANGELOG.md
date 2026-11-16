@@ -6,6 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the undocumented `parseOpencodeJsonStream` re-export from
+  `shaka/src/inference`. Package-root exports are unchanged.
+
 ## [0.15.0] - 2026-07-25
 
 ### Changed
