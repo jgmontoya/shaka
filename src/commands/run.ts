@@ -52,7 +52,7 @@ async function resolveWorkflow(shakaHome: string, name: string): Promise<Workflo
 }
 
 /** Print run result summary. */
-function printSummary({ metadata, artifactDir }: RunResult): void {
+function printSummary({ metadata, artifactDir }: RunResult, hasUntil: boolean): void {
   console.log("");
   const iterInfo =
     metadata.satisfiedAt != null
@@ -61,6 +61,9 @@ function printSummary({ metadata, artifactDir }: RunResult): void {
         ? ` (${metadata.completedIterations}/${metadata.totalIterations} iterations)`
         : "";
   console.log(`Status: ${metadata.status}${iterInfo}`);
+  if (hasUntil && metadata.status === "completed" && metadata.satisfiedAt === null) {
+    console.log("Stopping condition unconfirmed at the iteration limit");
+  }
   if (metadata.branch) console.log(`Branch: ${metadata.branch}`);
   console.log(`Artifacts: ${artifactDir}`);
 
@@ -121,12 +124,12 @@ export function createRunCommand(): Command {
           console.log(`${iterPrefix}Checking until condition...`);
         },
         onUntilResult: (satisfied, _iteration, durationMs) => {
-          const icon = satisfied ? "✓" : "↻";
-          const verdict = satisfied ? "satisfied" : "continue";
+          const icon = satisfied ? "✓" : "·";
+          const verdict = satisfied ? "satisfied" : "unconfirmed";
           console.log(`  ${icon} until ${verdict} (${durationMs}ms)`);
         },
       });
-      printSummary(result);
+      printSummary(result, workflow.until !== undefined);
 
       if (result.metadata.status === "failed") {
         process.exit(1);
