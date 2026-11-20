@@ -72,3 +72,6 @@ To customize the framework:
 Upgrades replace the shipped version and leave your custom file intact.
 If you use a customized framework or startup hook, adopt the new guidance in
 your own copy.
+
+Run `shaka doctor --context` to see which framework file the built-in startup
+loader selects and whether it is empty or missing.

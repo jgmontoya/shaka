@@ -103,6 +103,7 @@ describe("collectMeasurements", () => {
 
       expect(m.shakaHome).toBe(testDir);
       expect(m.framework.chars).toBe(0);
+      expect(m.framework.detail).toContain("No framework file found");
       expect(m.userFiles).toEqual([]);
       expect(m.learnings.chars).toBe(0);
       expect(m.learnings.entryCount).toBe(0);
@@ -131,16 +132,45 @@ describe("collectMeasurements", () => {
   });
 
   describe("framework measurement", () => {
-    test("measures framework file via loadShakaFile", async () => {
+    async function writeFramework(directory: "system" | "customizations", content: string) {
+      const dir = join(testDir, directory);
+      await mkdir(dir, { recursive: true });
+      await Bun.write(join(dir, "base-reasoning-framework.md"), content);
+    }
+
+    test("reports the shipped framework when there is no customization", async () => {
       await setupMinimalHome(testDir);
-      const systemDir = join(testDir, "system");
-      await mkdir(systemDir, { recursive: true });
       const content = "# Reasoning Framework\n\nSome content here.";
-      await Bun.write(join(systemDir, "base-reasoning-framework.md"), content);
+      await writeFramework("system", content);
 
-      const m = await collectMeasurements(testDir);
+      const { framework } = await collectMeasurements(testDir);
 
-      expect(m.framework.chars).toBe(content.length);
+      expect(framework.chars).toBe(content.length);
+      expect(framework.detail).toBe("system/base-reasoning-framework.md (built-in startup loader)");
+    });
+
+    test("reports the selected customization when both framework files exist", async () => {
+      await setupMinimalHome(testDir);
+      await writeFramework("system", "# Shipped framework");
+      const content = "# My custom framework";
+      await writeFramework("customizations", content);
+
+      const { framework } = await collectMeasurements(testDir);
+
+      expect(framework.chars).toBe(content.length);
+      expect(framework.detail).toContain("customizations/base-reasoning-framework.md");
+    });
+
+    test("reports an empty customization without falling back to the shipped framework", async () => {
+      await setupMinimalHome(testDir);
+      await writeFramework("system", "# Shipped framework");
+      await writeFramework("customizations", "");
+
+      const { framework } = await collectMeasurements(testDir);
+
+      expect(framework.chars).toBe(0);
+      expect(framework.detail).toContain("customizations/base-reasoning-framework.md");
+      expect(framework.detail).toContain("empty file");
     });
   });
 

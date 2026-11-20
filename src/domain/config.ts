@@ -231,16 +231,24 @@ export async function loadShakaFile(
   relativePath: string,
   shakaHome?: string,
 ): Promise<string | null> {
+  const file = await loadShakaFileWithSource(relativePath, shakaHome);
+  return file?.content ?? null;
+}
+
+/** Load the contents and selected path relative to SHAKA_HOME. */
+export async function loadShakaFileWithSource(
+  relativePath: string,
+  shakaHome?: string,
+): Promise<{ content: string; relativePath: string } | null> {
   const home = shakaHome ?? resolveShakaHome();
 
   // For system files, check customization override first
   // relativePath uses forward slashes by convention (not OS-native separators)
   if (relativePath.startsWith("system/")) {
-    const basename = relativePath.replace("system/", "");
-    const customPath = join(home, "customizations", basename);
-    const customFile = Bun.file(customPath);
+    const customRelativePath = `customizations/${relativePath.slice("system/".length)}`;
+    const customFile = Bun.file(join(home, customRelativePath));
     if (await customFile.exists()) {
-      return customFile.text();
+      return { content: await customFile.text(), relativePath: customRelativePath };
     }
   }
 
@@ -248,7 +256,7 @@ export async function loadShakaFile(
   const fullPath = join(home, relativePath);
   const file = Bun.file(fullPath);
   if (await file.exists()) {
-    return file.text();
+    return { content: await file.text(), relativePath };
   }
 
   return null;
