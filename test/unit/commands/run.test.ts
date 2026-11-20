@@ -5,8 +5,35 @@ import { join } from "node:path";
 import { isCwdAllowed } from "../../../src/commands/run";
 import { discoverWorkflows } from "../../../src/providers/workflow-discovery";
 
+function stopAtIteration(iteration: number | "{loop.total}"): string {
+  return process.platform === "win32"
+    ? `if {loop.iteration}==${iteration} (exit /b 0) else (exit /b 1)`
+    : `test {loop.iteration} -eq ${iteration}`;
+}
+
 describe("run command", () => {
   const testHome = join(tmpdir(), `shaka-test-run-cmd-${process.pid}`);
+
+  async function runFixture(yaml: string, ...args: string[]) {
+    const cwd = join(testHome, "work");
+    await mkdir(cwd, { recursive: true });
+    await Bun.write(join(testHome, "system", "workflows", "fixture.yaml"), yaml);
+    const result = Bun.spawnSync({
+      cmd: [
+        process.execPath,
+        join(import.meta.dir, "../../../src/index.ts"),
+        "run",
+        "fixture",
+        ...args,
+      ],
+      cwd,
+      env: { ...process.env, SHAKA_HOME: testHome },
+      stdout: "pipe",
+      stderr: "pipe",
+      timeout: 10_000,
+    });
+    return { exitCode: result.exitCode, stdout: result.stdout.toString() };
+  }
 
   beforeEach(async () => {
     await rm(testHome, { recursive: true, force: true });
@@ -59,47 +86,79 @@ steps:
     expect(cmd.name()).toBe("run");
   });
 
-  test("prints until progress and satisfied summary", async () => {
-    const workDir = join(testHome, "work");
-    await mkdir(workDir, { recursive: true });
-    await Bun.write(
-      join(testHome, "system", "workflows", "done.yaml"),
-      `description: Done workflow
+  test.each([1, 2])(
+    "reports an unconfirmed stopping condition with a limit of %i",
+    async (limit) => {
+      const { exitCode, stdout } = await runFixture(
+        `description: Exhausted workflow
 state: none
 loop: 2
 until:
-  run: test -f done.txt
+  run: exit 1
 steps:
-  - name: done
-    run: echo done > done.txt`,
-    );
+  - name: work
+    run: echo work`,
+        "--loop",
+        String(limit),
+      );
 
-    const oldHome = process.env.SHAKA_HOME;
-    const oldCwd = process.cwd();
-    const oldLog = console.log;
-    const lines: string[] = [];
+      expect(exitCode).toBe(0);
+      expect(stdout.split(/\r?\n/)).toContain(
+        limit === 1 ? "Status: completed" : "Status: completed (2/2 iterations)",
+      );
+      expect(stdout).toContain("Stopping condition unconfirmed at the iteration limit");
+    },
+  );
 
-    try {
-      process.env.SHAKA_HOME = testHome;
-      process.chdir(workDir);
-      console.log = (...args: unknown[]) => {
-        lines.push(args.map(String).join(" "));
-      };
+  test("reports a group condition verdict without claiming a workflow-level outcome", async () => {
+    const { exitCode, stdout } = await runFixture(`description: Group condition
+state: none
+steps:
+  - name: nested
+    loop: 2
+    until:
+      run: ${stopAtIteration("{loop.total}")}
+    steps:
+      - name: work
+        run: echo work`);
 
-      const { createRunCommand } = await import("../../../src/commands/run");
-      await createRunCommand().parseAsync(["done"], { from: "user" });
-    } finally {
-      console.log = oldLog;
-      process.chdir(oldCwd);
-      if (oldHome === undefined) {
-        delete process.env.SHAKA_HOME;
-      } else {
-        process.env.SHAKA_HOME = oldHome;
-      }
-    }
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("until unconfirmed");
+    expect(stdout).toContain("until satisfied");
+    expect(stdout).not.toContain("until continue");
+    expect(stdout).not.toContain("Stopping condition unconfirmed at the iteration limit");
+  });
 
-    expect(lines.join("\n")).toContain("[iter 1/2] Checking until condition...");
-    expect(lines.join("\n")).toContain("until satisfied");
-    expect(lines.join("\n")).toContain("Status: completed (satisfied after 1/2 iterations)");
+  test("reports a failed step without claiming that the stopping condition was evaluated", async () => {
+    const { exitCode, stdout } = await runFixture(`description: Failed step
+state: none
+loop: 2
+until:
+  run: exit 0
+steps:
+  - name: work
+    run: exit 7`);
+
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("Status: failed (0/2 iterations)");
+    expect(stdout).not.toContain("Checking until condition");
+    expect(stdout).not.toContain("Stopping condition unconfirmed at the iteration limit");
+  });
+
+  test.each([1, 2])("reports satisfaction on iteration %i of two", async (iteration) => {
+    const { exitCode, stdout } = await runFixture(`description: Done workflow
+state: none
+loop: 2
+until:
+  run: ${stopAtIteration(iteration)}
+steps:
+  - name: work
+    run: echo work`);
+
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain(`[iter ${iteration}/2] Checking until condition...`);
+    expect(stdout).toContain("until satisfied");
+    expect(stdout).toContain(`Status: completed (satisfied after ${iteration}/2 iterations)`);
+    expect(stdout).not.toContain("Stopping condition unconfirmed at the iteration limit");
   });
 });

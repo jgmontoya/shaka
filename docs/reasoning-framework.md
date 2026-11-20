@@ -1,6 +1,6 @@
 # Base Reasoning Framework
 
-Shaka uses a structured reasoning framework inspired by [PAI's Algorithm](https://github.com/danielmiessler/TheAlgorithm). It's loaded at session start via the `SessionStart` hook and injected into the AI's context.
+Shaka uses a structured reasoning framework inspired by [PAI's Algorithm](https://github.com/danielmiessler/TheAlgorithm). The default startup hook includes it in main-session context. The separate prompt-submit hook reminds the agent which response depth to use.
 
 ## The 7 Phases
 
@@ -10,7 +10,7 @@ OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
 
 | Phase   | Purpose                                                            |
 | ------- | ------------------------------------------------------------------ |
-| OBSERVE | Reverse-engineer the request — what's asked, implied, and unwanted |
+| OBSERVE | Identify the requested outcome and its boundaries                   |
 | THINK   | Select capabilities, evaluate approaches                           |
 | PLAN    | Finalize the approach                                              |
 | BUILD   | Create artifacts                                                   |
@@ -22,11 +22,11 @@ OBSERVE → THINK → PLAN → BUILD → EXECUTE → VERIFY → LEARN
 
 Before acting, the AI defines what success looks like as testable criteria:
 
-- **Concise** (<15 words) — forces precision without word-counting
-- **Binary yes/no** — testable in <2 seconds
-- **State-based** — "X is true" not "do X"
-- **Granular** — one concern per criterion
-- **Anti-criteria** (≥1 required) — what must NOT happen
+- **Concise** (<15 words)
+- **Binary yes/no** (testable in <2 seconds)
+- **State-based** (describes the outcome)
+- **Granular** (one concern per criterion)
+- **Anti-criteria** (at least one outcome to avoid)
 
 **Example:**
 
@@ -35,7 +35,13 @@ Criterion: "All authentication tests pass after fix applied"
 Anti-criterion: "No credentials exposed in git commit history"
 ```
 
-The AI verifies all criteria before claiming "done." This prevents the common failure of solving one problem while creating another.
+## Verification
+
+In FULL and ITERATION, the agent looks for the project's existing checks and
+reports each material claim as PASS or FAIL with the observed result, or
+UNVERIFIED with the missing prerequisite. A failed assertion is FAIL. Checks
+that can run independently still go ahead. For runtime claims, the agent
+checks the result and side effects through the public interface.
 
 ## Response Depth
 
@@ -51,11 +57,8 @@ Depth is determined automatically based on the request.
 
 ## Configuration
 
-Enable or disable the reasoning framework in `config.json`:
-
-```json
-{ "reasoning": { "enabled": true } }
-```
+`reasoning.enabled` remains in `config.json` for compatibility. The default
+startup and prompt-submit hooks ignore this setting.
 
 ## Customization
 
@@ -63,6 +66,12 @@ To customize the framework:
 
 1. Copy `system/base-reasoning-framework.md` to `customizations/base-reasoning-framework.md`
 2. Edit your copy
-3. Your version takes priority (Shaka's override system)
+3. Keep any shipped sections you want in your copy. The default startup hook
+   uses the entire custom file in place of the shipped file.
 
-The system version is replaced on upgrades. Your customization is never touched.
+Upgrades replace the shipped version and leave your custom file intact.
+If you use a customized framework or startup hook, adopt the new guidance in
+your own copy.
+
+Run `shaka doctor --context` to see which framework file the built-in startup
+loader selects and whether it is empty or missing.

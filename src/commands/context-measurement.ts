@@ -15,7 +15,7 @@ import {
   getPrincipalName,
   isUnmodifiedTemplate,
   loadConfig,
-  loadShakaFile,
+  loadShakaFileWithSource,
   resolveDefaultsUserDir,
   resolveShakaHome,
 } from "../domain/config";
@@ -128,11 +128,13 @@ async function fileText(path: string): Promise<string> {
 // ─── Measurement functions ───────────────────────────────────────────────────
 
 async function measureFramework(shakaHome: string): Promise<Component> {
-  const content = await loadShakaFile("system/base-reasoning-framework.md", shakaHome);
+  const file = await loadShakaFileWithSource("system/base-reasoning-framework.md", shakaHome);
+  const source = file?.relativePath ?? "No framework file found";
+  const emptyNote = file?.content === "" ? ", empty file" : "";
   return {
     name: "Reasoning Framework",
-    chars: content?.length ?? 0,
-    detail: "system/base-reasoning-framework.md (via loadShakaFile, respects customizations)",
+    chars: file?.content.length ?? 0,
+    detail: `${source} (built-in startup loader${emptyNote})`,
     hook: "SessionStart",
   };
 }

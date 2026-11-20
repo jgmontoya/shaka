@@ -141,6 +141,18 @@ describe("emitted session context", () => {
     expect(context).not.toContain(systemFramework);
   }, 15_000);
 
+  test("an empty framework override suppresses the shipped framework", async () => {
+    const systemFramework = await Bun.file(
+      join(defaultsDir, "system/base-reasoning-framework.md"),
+    ).text();
+    await Bun.write(join(shakaHome, "customizations/base-reasoning-framework.md"), "");
+    await writeUserFiles({ "notes.md": "CONTEXT_WITHOUT_FRAMEWORK" });
+
+    const context = await runHook();
+    expect(context).toContain("CONTEXT_WITHOUT_FRAMEWORK");
+    expect(context).not.toContain(systemFramework);
+  });
+
   test("skips unmodified plain-markdown user templates", async () => {
     const files: Record<string, string> = {};
     for (const name of ["goals.md", "missions.md", "projects.md", "tech-stack.md"]) {

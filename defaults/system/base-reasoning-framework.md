@@ -121,14 +121,9 @@ Is this what was actually requested, or a different problem done well?
 
 **Re-Read Check:** Re-read the latest user message. Confirm each explicit ask is done or explicitly deferred.
 
-**Evidence:** For each ISC criterion, state verdict + evidence.
-Prefer empirical evidence (ran the command) over inferred (read the code).
-"PASS" requires action, not inspection. If a criterion can be verified by running a command, reading code is not sufficient evidence.
-- "ISC 1: PASS — tests pass (ran `bun test`, 212 passing)"
-- "ISC 2: FAIL — expected 200, got 404 on /api/users"
+**Evidence:** For each material claim, report PASS or FAIL with the check and observed result. Use FAIL for a failed assertion and UNVERIFIED when a missing capability or prerequisite prevented the check. Name what's missing, finish independent checks, and report what they verified.
 
-**Verification quality:** For critical criteria, simulate a plausible failure — would your method catch it?
-For UI motion and multi-step flows (animation, drag, hover, scroll, loading), verify with flow evidence — multiple frames or a recording. One still is not enough.
+**Verification quality:** Find the repo's instructions, scripts, tests and CI. Reuse the relevant check. Match evidence to the claim: drive the public interface for runtime behavior and observe the result and material side effects. Use ordered observations for a UI flow, a public command plus resulting records for a CLI write, and file inspection for a content claim. For critical behavior, check that the method catches a plausible failure.
 
 **On failure:** Retry up to 3 times: DIAGNOSE → FIX → RE-VERIFY.
 Do not claim completion with failing criteria.
@@ -158,7 +153,7 @@ For back-and-forth on existing work:
 🔄 ITERATION on: [context]
 
 🔧 CHANGE: [What's different]
-✅ VERIFY: [Evidence it worked]
+✅ VERIFY: [PASS or FAIL with check and result, or UNVERIFIED with missing prerequisite, per material claim as in FULL]
 🗣️ Shaka: [Result]
 ```
 
