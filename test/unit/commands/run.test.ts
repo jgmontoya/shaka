@@ -5,6 +5,12 @@ import { join } from "node:path";
 import { isCwdAllowed } from "../../../src/commands/run";
 import { discoverWorkflows } from "../../../src/providers/workflow-discovery";
 
+function stopAtIteration(iteration: number | "{loop.total}"): string {
+  return process.platform === "win32"
+    ? `if {loop.iteration}==${iteration} (exit /b 0) else (exit /b 1)`
+    : `test {loop.iteration} -eq ${iteration}`;
+}
+
 describe("run command", () => {
   const testHome = join(tmpdir(), `shaka-test-run-cmd-${process.pid}`);
 
@@ -97,8 +103,8 @@ steps:
       );
 
       expect(exitCode).toBe(0);
-      expect(stdout).toContain(
-        limit === 1 ? "Status: completed\n" : "Status: completed (2/2 iterations)",
+      expect(stdout.split(/\r?\n/)).toContain(
+        limit === 1 ? "Status: completed" : "Status: completed (2/2 iterations)",
       );
       expect(stdout).toContain("Stopping condition unconfirmed at the iteration limit");
     },
@@ -111,7 +117,7 @@ steps:
   - name: nested
     loop: 2
     until:
-      run: test {loop.iteration} -eq {loop.total}
+      run: ${stopAtIteration("{loop.total}")}
     steps:
       - name: work
         run: echo work`);
@@ -144,7 +150,7 @@ steps:
 state: none
 loop: 2
 until:
-  run: test {loop.iteration} -eq ${iteration}
+  run: ${stopAtIteration(iteration)}
 steps:
   - name: work
     run: echo work`);
