@@ -314,7 +314,7 @@ ${decisions.join("\n")}
 
       assertRequiredAndForbidden(rendered, searchCase, evidencePaths);
       if (searchCase.expectedResultCount === 0) {
-        expect(rendered).toContain("No session memories found");
+        expect(rendered).toBe(`No results found matching "${searchCase.query}"`);
       } else {
         expect(rendered).toContain(`Found ${searchCase.expectedResultCount} matching result`);
       }

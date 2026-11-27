@@ -70,7 +70,7 @@ export default {
     );
 
     if (results.length === 0) {
-      return `No session memories found matching "${query}"`;
+      return `No results found matching "${query}"`;
     }
 
     const formatted = results.map((r) => {
