@@ -164,4 +164,3 @@ Create a story concept that blends [INSERT GENRES AND DETAILS]
 - Creativity flows naturally without artificial structure requirements
 - Focus remains on quality and originality
 - Output adapts to the specific creative challenge
-- Voice server and structured response format handle presentation
