@@ -28,7 +28,7 @@ Running the **WorkflowName** workflow in the **be-creative** skill to ACTION...
 | `Workflows/IdeaGeneration.md`             | "brainstorm", "ideas for", "solve this problem"              | Problem-solving and innovation focus                  |
 | `Workflows/TreeOfThoughts.md`             | "complex problem", "multi-factor", "explore paths"           | Branching exploration for complex challenges          |
 | `Workflows/DomainSpecific.md`             | "artistic", "business innovation", domain-specific           | Domain-tailored creativity templates                  |
-| `Workflows/TechnicalCreativityGemini3.md` | "technical creativity", "algorithm", "architecture"          | Engineering creativity via Gemini 3 Pro               |
+| `Workflows/TechnicalCreativityGemini3.md` | "technical creativity", "algorithm", "architecture"          | Engineering design with Gemini                        |
 
 ---
 
@@ -95,6 +95,6 @@ User: "be creative - need names for this security tool"
 ```
 User: "deep thinking this architecture problem"
 -> Invokes TechnicalCreativityGemini3 workflow
--> Uses Gemini 3 Pro for mathematical/algorithmic creativity
+-> Uses Gemini to compare candidate algorithms against performance and resource limits
 -> Returns novel technical solution
 ```
