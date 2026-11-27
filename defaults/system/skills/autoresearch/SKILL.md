@@ -19,13 +19,13 @@ You are inside an autoresearch loop. Each iteration you propose **one** targeted
 
 ### Verdicts
 
-| Verdict     | Trigger                                               | What happens                                                                      |
-| ----------- | ----------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `keep`      | Metric improved AND checks passed                     | Your change is committed on the experiment branch. Next iteration starts from it. |
-| `discard`   | Metric didn't improve                                 | Your change is reverted. Next iteration starts from the prior best.               |
-| `incorrect` | Checks failed OR the commit hook rejected it          | Reverted. Track distinctly — usually means a real correctness regression.         |
-| `crash`     | Benchmark exited non-zero or emitted no `METRIC` line | Reverted. Usually means you broke the build.                                      |
-| `timeout`   | You timed out before producing a hypothesis           | Reverted.                                                                         |
+| Verdict     | Trigger                                                                                 | What happens                                                                      |
+| ----------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `keep`      | Metric improved AND checks passed                                                       | Your change is committed on the experiment branch. Next iteration starts from it. |
+| `discard`   | Metric didn't improve                                                                   | Your change is reverted. Next iteration starts from the prior best.               |
+| `incorrect` | Checks failed, the commit failed, or protected setup or runner files changed            | Reverted. Check the protected files, correctness checks, or commit error.         |
+| `crash`     | Benchmark exited non-zero or the measurement was missing, invalid, or in the wrong unit | Reverted. Check benchmark output against the metric in the spec.                  |
+| `timeout`   | The agent reached its time limit                                                        | Reverted before benchmarking. The runner records any hypothesis already emitted.  |
 
 You can't influence the verdict directly. You can only improve your probability of `keep` by proposing changes that are **well-targeted, safe, and different from what's already been tried**.
 
