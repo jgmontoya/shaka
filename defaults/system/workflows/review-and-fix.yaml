@@ -2,11 +2,12 @@ description: Review code changes and fix issues found — loops until the review
 # Override with --loop N for a different refinement budget.
 loop: 3
 until:
-  prompt: |
-    Read the code review in reviews/review.md. Condition: the review reports no
-    issues requiring code changes (an empty or absent Issues section; suggestions,
-    praise, and comments about the reviews/ directory itself don't count — the
-    review file is a workflow artifact, not part of the change under review).
+  prompt: |-
+    First read reviews/review.md. If you cannot read a completed review, return CONTINUE immediately. A passing test or your own inspection cannot substitute for that review.
+
+    Use the review to identify the intended behavior, reviewed revision and required fixes. Compare the reviewed revision with the current working tree, including committed and uncommitted changes. An empty diff against HEAD only describes uncommitted changes. If the report omits a revision, use the available history and files to establish the reviewed scope. Continue if a material change cannot be accounted for.
+
+    For each required fix and each behavior changed since review, check the current implementation against the requirement. When relying on a test, verify that it exercises the disputed behavior. Return SATISFIED when the evidence covers the changes and all required fixes are resolved. Otherwise return CONTINUE. Optional suggestions, praise and edits to the review artifact do not require another pass. Leave the workspace unchanged.
 steps:
   - name: review
     command: /code-review

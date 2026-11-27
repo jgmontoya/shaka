@@ -347,13 +347,14 @@ shaka commands enable <name>     # Re-enable a disabled command
 Multi-step pipelines that chain commands, prompts, and shell scripts. Each step runs with a fresh AI context, communicating through the file system and template variables — preventing the context degradation that happens when one long conversation tries to do everything.
 
 ```yaml
-# review-and-fix.yaml
+# review-and-fix.yaml (abridged)
 description: Review code changes and fix issues found — loops until the review is clean
 loop: 3
 until:
   prompt: |
-    Read the code review in reviews/review.md. Condition: the review
-    reports no issues requiring code changes.
+    Read reviews/review.md. Continue if the review is missing or unfinished.
+    Compare the reviewed revision with the current tree. Stop when the
+    evidence covers the changes and all required fixes are resolved.
 steps:
   - name: review
     command: /code-review
