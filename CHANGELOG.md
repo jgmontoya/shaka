@@ -6,6 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/). Versions follow 
 
 ## [Unreleased]
 
+### Changed
+
+- The `review-and-fix` stop judge now requires a completed review and checks required fixes and subsequent changes against the current tree.
+
 ### Removed
 
 - Removed the undocumented `parseOpencodeJsonStream` re-export from
