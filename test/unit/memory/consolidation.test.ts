@@ -902,6 +902,12 @@ Run tests locally before every commit.`;
     expect(clusters[0]!.body).toContain("Run tests locally before every commit.");
   });
 
+  test("a CLUSTER BY clause remains part of the rule body", () => {
+    const raw =
+      "CLUSTER [1, 2] — Storage\nTITLE: Sort records\nBODY: For this table use\nCLUSTER BY timestamp.";
+    expect(parseCondensationOutput(raw)[0]?.body).toBe("For this table use\nCLUSTER BY timestamp.");
+  });
+
   test("NO CLUSTERS returns empty array", () => {
     expect(parseCondensationOutput("NO CLUSTERS")).toEqual([]);
   });
@@ -989,11 +995,57 @@ BODY: Solo body.`;
     expect(clusters).toHaveLength(1);
     expect(clusters[0]!.indices).toEqual([0]);
   });
+
+  test.each(["1 3, 2", "1,,2", "1, 2,", "0, 1, 2"])(
+    "rejects the malformed index list [%s] without losing the next valid cluster",
+    (list) => {
+      const raw = `CLUSTER [${list}] — malformed
+TITLE: Invalid
+BODY: Should be ignored.
+CLUSTER [ 3, 4 ] — valid
+TITLE: Kept
+BODY: Unaffected.`;
+      expect(parseCondensationOutput(raw)).toEqual([
+        { indices: [2, 3], label: "valid", title: "Kept", body: "Unaffected." },
+      ]);
+    },
+  );
 });
 
 // --- Condensation: Apply ---
 
 describe("applyCondensation", () => {
+  test.each([
+    ["one distinct source", "CLUSTER [1, 1] — invalid\nTITLE: Wrong merge\nBODY: Bad advice."],
+    [
+      "an unavailable source",
+      "CLUSTER [1, 2, 5] — invalid\nTITLE: Wrong merge\nBODY: Includes a missing rule.",
+    ],
+    ["no body", "CLUSTER [1, 2] — incomplete\nTITLE: Missing the rule"],
+    ["a blank body", "CLUSTER [1, 2] — incomplete\nTITLE: Empty rule\nBODY:   "],
+    ["a blank title", "CLUSTER [1, 2] — incomplete\nTITLE:   \nBODY: Missing the title."],
+    [
+      "a missing body followed by an invalid cluster header",
+      "CLUSTER [1, 2] — incomplete\nTITLE: First rule\nCLUSTER [x, 4] — unrelated\nTITLE: Unrelated rule\nBODY: Applies only to the unrelated group.",
+    ],
+  ])(
+    "preserves source rules when a proposal has %s and processes the next valid cluster",
+    (_, invalid) => {
+      const entries = ["A", "B", "C", "D"].map((title) => makeEntry({ title }));
+      const candidate = { cwd: entries[0]!.cwds[0]!, entries, indices: [0, 1, 2, 3] };
+      const valid = "CLUSTER [3, 4] — related\nTITLE: Combined rule\nBODY: Keep both conditions.";
+      const clusters = parseCondensationOutput(`${invalid}\n${valid}`);
+      const result = applyCondensation(entries, [{ candidate, clusters }]);
+
+      expect(result.compoundsCreated).toBe(1);
+      expect(result.entries.slice(0, 2)).toEqual(entries.slice(0, 2));
+      expect(result.entries.slice(2)).toMatchObject([
+        { title: "Combined rule", body: "Keep both conditions." },
+      ]);
+      expect(result.archived).toEqual(entries.slice(2));
+    },
+  );
+
   test("category tiebreak: pattern > correction > preference > fact", () => {
     const entries = [
       makeEntry({ title: "A", category: "fact", cwds: testCwds("/myapp") }),

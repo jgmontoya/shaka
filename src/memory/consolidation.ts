@@ -589,7 +589,7 @@ NO CLUSTERS`;
 
 // --- Condensation: Output Parsing ---
 
-const CLUSTER_LINE_RE = /^CLUSTER\s*\[([0-9,\s]+)\]\s*[-–—]\s*(.+)$/;
+const CLUSTER_LINE_RE = /^CLUSTER\s*\[\s*([1-9]\d*(?:\s*,\s*[1-9]\d*)*)\s*\]\s*[-–—]\s*(\S.*)$/;
 const TITLE_LINE_RE = /^TITLE:\s*(.+)$/;
 const BODY_LINE_RE = /^BODY:\s*(.*)$/;
 
@@ -625,19 +625,16 @@ function parseClusterLine(line: string): { indices: number[]; label: string } | 
   const match = line.match(CLUSTER_LINE_RE);
   if (!match?.[1] || !match[2]) return null;
 
-  const indices = match[1]
-    .split(",")
-    .map((s) => Number.parseInt(s.trim(), 10) - 1)
-    .filter((n) => !Number.isNaN(n) && n >= 0);
+  const indices = match[1].split(",").map((s) => Number(s) - 1);
 
   return { indices, label: match[2].trim() };
 }
 
 function processLine(line: string, state: ParserState, clusters: CondensationCluster[]): void {
-  const cluster = parseClusterLine(line);
-  if (cluster) {
+  const header = line.trimStart();
+  if (/^CLUSTER\s*\[/.test(header)) {
     flushCluster(state, clusters);
-    Object.assign(state, emptyParserState(), cluster);
+    Object.assign(state, emptyParserState(), parseClusterLine(header));
     return;
   }
 
@@ -735,17 +732,17 @@ function resolveClusterIndices(
   candidateConsumed: Set<number>,
   globalConsumed: Set<number>,
 ): number[] | null {
-  const originalIndices: number[] = [];
+  const originalIndices = new Set<number>();
 
   for (const localIdx of cluster.indices) {
-    if (!isValidIndex(localIdx, candidate.entries.length)) continue;
+    if (!isValidIndex(localIdx, candidate.entries.length)) return null;
     const originalIdx = candidate.indices[localIdx];
-    if (originalIdx === undefined) continue;
+    if (originalIdx === undefined) return null;
     if (candidateConsumed.has(originalIdx) || globalConsumed.has(originalIdx)) continue;
-    originalIndices.push(originalIdx);
+    originalIndices.add(originalIdx);
   }
 
-  return originalIndices.length >= CONDENSATION_CLUSTER_MIN ? originalIndices : null;
+  return originalIndices.size >= CONDENSATION_CLUSTER_MIN ? [...originalIndices] : null;
 }
 
 function processCluster(
@@ -756,6 +753,7 @@ function processCluster(
   state: ApplyState,
   candidateConsumed: Set<number>,
 ): void {
+  if (!cluster.title.trim() || !cluster.body.trim()) return;
   const sourceEntries = originalIndices.flatMap((idx) => {
     const entry = entries[idx];
     return entry ? [entry] : [];
