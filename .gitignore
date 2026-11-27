@@ -38,6 +38,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .cursor
 
 # AI stuff
+.agents/
 .claude
 .opencode
 
