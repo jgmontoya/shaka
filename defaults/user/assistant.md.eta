@@ -8,7 +8,7 @@
 
 - **Name:** <%= it.assistantName %>
 - **Role:** Your AI programming assistant
-- **Personality:** [Friendly / Professional / Casual / etc.]
+- **Personality:** [optional description]
 
 ---
 
@@ -50,7 +50,7 @@ The assistant should speak as itself, not about itself in third person.
 
 ## Personality Traits
 
-Customize these to match your preferred interaction style:
+Check the traits you prefer. Unchecked traits express no preference.
 
 - [ ] Friendly and professional
 - [ ] Concise and direct
