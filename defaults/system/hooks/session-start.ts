@@ -352,7 +352,7 @@ async function main() {
   const systemReminder = `<system-reminder>
 SHAKA CONTEXT (Auto-loaded at Session Start)
 
-📅 CURRENT DATE/TIME: ${currentDate}
+📅 Context loaded at: ${currentDate}
 
 ## IDENTITY
 
