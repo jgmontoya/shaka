@@ -2125,23 +2125,37 @@ describe("parseQualityAssessmentOutput", () => {
   test("parses LOW verdicts", () => {
     const raw = `LOW [2] — Generic engineering advice
 LOW [5] — One-time code review finding`;
-    const verdicts = parseQualityAssessmentOutput(raw);
-    expect(verdicts).toHaveLength(2);
-    expect(verdicts[0]).toEqual({ index: 1, reason: "Generic engineering advice" });
-    expect(verdicts[1]).toEqual({ index: 4, reason: "One-time code review finding" });
+    expect(parseQualityAssessmentOutput(raw, 5)).toEqual({
+      verdicts: [
+        { index: 1, reason: "Generic engineering advice" },
+        { index: 4, reason: "One-time code review finding" },
+      ],
+      complete: true,
+    });
   });
 
   test("returns empty for ALL HIGH QUALITY", () => {
-    expect(parseQualityAssessmentOutput("ALL HIGH QUALITY")).toEqual([]);
+    expect(parseQualityAssessmentOutput(" \nALL HIGH QUALITY\r\n", 5)).toEqual({
+      verdicts: [],
+      complete: true,
+    });
   });
 
-  test("ignores malformed lines", () => {
-    const raw = `LOW [3] — Valid reason
+  test("preserves distinct, in-range flags from a partially usable assessment", () => {
+    const raw = `LOW [3] — First valid reason
 Not a valid line
-LOW [] — Missing index`;
-    const verdicts = parseQualityAssessmentOutput(raw);
-    expect(verdicts).toHaveLength(1);
-    expect(verdicts[0]?.index).toBe(2);
+LOW [] — Missing index
+LOW [0] — Invalid index
+LOW [6] — Invalid index
+LOW [3] — Repeated flag
+LOW [5] — Second valid reason`;
+    expect(parseQualityAssessmentOutput(raw, 5)).toEqual({
+      verdicts: [
+        { index: 2, reason: "First valid reason" },
+        { index: 4, reason: "Second valid reason" },
+      ],
+      complete: false,
+    });
   });
 });
 

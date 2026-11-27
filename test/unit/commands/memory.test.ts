@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { chmod, lstat, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ mock.module("../../../src/inference", () => ({
 }));
 
 import { createMemoryCommand } from "../../../src/commands/memory/index";
+import * as inferenceModule from "../../../src/inference";
 import { CONDENSATION_COMMIT_FILE } from "../../../src/memory/condensation-commit";
 import { rebuildIndex } from "../../../src/memory/knowledge";
 import { appendToArchive, writeLearnings } from "../../../src/memory/learning-store";
@@ -302,7 +303,7 @@ Body.`;
   });
 });
 
-describe("memory review scope", () => {
+describe("memory review", () => {
   let reviewRoot: string;
   let reviewMemoryDir: string;
   let savedIsTTY: boolean | undefined;
@@ -317,6 +318,40 @@ describe("memory review scope", () => {
   afterEach(async () => {
     process.stdin.isTTY = savedIsTTY as boolean;
     await rm(reviewRoot, { recursive: true, force: true });
+  });
+
+  test.each([
+    ["LOW [2]", "Unable to assess learning quality", 0],
+    ["", "Unable to assess learning quality", 0],
+    ["ALL HIGH QUALITY\nLOW [1] — Generic advice.", "Unable to assess learning quality", 0],
+    ["LOW [1] — Generic advice.\nLOW [2]", "Assessment incomplete", 1],
+    ["LOW [2] — Missing entry.", "Unable to assess learning quality", 0],
+    ["LOW [1] — Generic advice.\nLOW [1] — Repeated flag.", "Assessment incomplete", 1],
+    ["ALL HIGH QUALITY", "All entries look good", 0],
+    ["LOW [1] — Generic advice.", "Generic advice.", 1],
+  ])("prune interprets assessment %s", async (reply, expectedMessage, expectedPrompts) => {
+    const entry = makeEntry();
+    await writeLearnings(reviewMemoryDir, [entry]);
+    const logs: string[] = [];
+    const logger = spyOn(console, "log").mockImplementation((...args) => {
+      logs.push(args.join(" "));
+    });
+    const assessment = spyOn(inferenceModule, "inference").mockResolvedValue({
+      success: true,
+      text: reply,
+    });
+    const keep = mock(async () => "k");
+    try {
+      const { runReview } = await import("../../../src/commands/memory/review");
+      await runReview(reviewMemoryDir, { prune: true }, keep);
+    } finally {
+      assessment.mockRestore();
+      logger.mockRestore();
+    }
+    expect(logs.join("\n")).toContain(expectedMessage);
+    expect(logs.join("\n").includes("All entries look good")).toBe(reply === "ALL HIGH QUALITY");
+    expect(keep).toHaveBeenCalledTimes(expectedPrompts);
+    expect(await loadLearnings(reviewMemoryDir)).toEqual([entry]);
   });
 
   test("excludes a target and accepts the displayed common ancestor", async () => {
