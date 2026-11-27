@@ -97,28 +97,24 @@ export function resolveTemplates(
   previousResult: StepResult | null,
   loop: LoopContext = DEFAULT_LOOP,
 ): string {
-  let result = template;
+  // Match the template once so placeholders in user input or step output stay literal.
+  return template.replace(/\{([^{}]+)\}/g, (placeholder, key: string) => {
+    switch (key) {
+      case "input":
+        return input;
+      case "loop.iteration":
+        return String(loop.iteration);
+      case "loop.total":
+        return String(loop.total);
+    }
 
-  result = result.replace(/\{input\}/g, () => input);
-  result = result.replace(/\{previous\.output\}/g, () => previousResult?.output ?? "");
-  result = result.replace(/\{previous\.exitCode\}/g, () =>
-    previousResult != null ? String(previousResult.exitCode) : "",
-  );
+    const reference = /^(?:previous|steps\.([^.]+))\.(output|exitCode)$/.exec(key);
+    if (!reference) return placeholder;
 
-  // Named step references: {steps.<name>.output} and {steps.<name>.exitCode}
-  result = result.replace(/\{steps\.([^.}]+)\.output\}/g, (_match, name: string) => {
-    return steps.get(name)?.output ?? "";
+    const [, stepName, field] = reference;
+    const step = stepName === undefined ? previousResult : steps.get(stepName);
+    return field === "output" ? (step?.output ?? "") : String(step?.exitCode ?? "");
   });
-  result = result.replace(/\{steps\.([^.}]+)\.exitCode\}/g, (_match, name: string) => {
-    const step = steps.get(name);
-    return step != null ? String(step.exitCode) : "";
-  });
-
-  // Loop context
-  result = result.replace(/\{loop\.iteration\}/g, () => String(loop.iteration));
-  result = result.replace(/\{loop\.total\}/g, () => String(loop.total));
-
-  return result;
 }
 
 /** Execute a single leaf workflow step (not a group). */
