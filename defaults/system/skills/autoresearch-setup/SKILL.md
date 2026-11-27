@@ -1,13 +1,13 @@
 ---
 name: autoresearch-setup
-description: Creates the benchmark harness for a new autoresearch run from a natural-language objective. Use when starting an interactive `shaka autoresearch start` setup session.
+description: Creates the benchmark harness for a new autoresearch run from a natural-language objective during `shaka autoresearch start` setup.
 key: autoresearch-setup
 include_when: Only inside `shaka autoresearch start` (full-auto default) before the loop begins. Loaded via provider-specific system-prompt / agent mechanism at session spawn time.
 ---
 
 # autoresearch-setup protocol
 
-You have been handed a git worktree and a natural-language objective. You are in an interactive terminal session with the user. Produce a working benchmark harness that the autoresearch loop can consume. Ask the user when the objective is ambiguous.
+Build a working benchmark harness for the objective in the supplied git worktree.
 
 ## Output contract
 
@@ -33,11 +33,11 @@ Before exiting:
 
 For noisy timing or throughput, record repeated baseline runs and their spread. Choose repetitions and aggregation to suit the measurement, and aggregate within the script when needed to preserve one `METRIC` line. Deterministic counts do not require repetition. Keep these setup observations in the spec; the runner owns iteration measurements and history.
 
-Fix failed checks and re-run before reporting completion. Record the setup evidence in the spec, tell the user what was verified, and exit (`/exit` or Ctrl-D). The runner independently checks the spec, metric, optional checks script, and dirty scope; it cannot establish whether an arbitrary workload is meaningful.
+Fix failed checks and re-run before reporting completion. Record the setup evidence in the spec and report what you verified. In an interactive session, exit when setup is complete. The runner independently checks the spec, metric, optional checks script, and dirty scope; it cannot establish whether an arbitrary workload is meaningful.
 
-## When to ask the user
+## Clarifying the objective
 
-Ask, don't guess, when:
+During interactive setup, ask the user when:
 - The objective names a benchmark that doesn't exist in the repo.
 - The repo has multiple plausible benchmarks and the objective doesn't disambiguate (e.g. "make it faster" with both `bench-cli.sh` and `bench-api.sh`).
 - The metric direction is unclear (is "performance" latency or throughput?).
