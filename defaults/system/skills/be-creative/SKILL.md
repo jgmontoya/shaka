@@ -7,7 +7,7 @@ include_when: Need creative divergence. Novel solution space. Avoiding obvious a
 
 # be-creative Skill
 
-Enhance AI creativity using deep thinking + Verbalized Sampling. Combines research-backed techniques (Zhang et al., 2024) for 1.6-2.1x diversity increase and extended thinking for quality.
+Explore several candidate responses using Verbalized Sampling, then evaluate them against the request. The creative-writing evidence is summarized in [ResearchFoundation.md](ResearchFoundation.md).
 
 ---
 
@@ -98,7 +98,3 @@ User: "deep thinking this architecture problem"
 -> Uses Gemini 3 Pro for mathematical/algorithmic creativity
 -> Returns novel technical solution
 ```
-
----
-
-**Research-backed creative enhancement: 1.6-2.1x diversity, 25.7% quality improvement.**
