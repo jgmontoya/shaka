@@ -89,6 +89,6 @@ User: "be creative - need names for this security tool"
 ```
 User: "deep thinking this architecture problem"
 -> Invokes TECHNICALCREATIVITYGEMINI3 workflow
--> Uses Gemini 3 Pro for mathematical/algorithmic creativity
+-> Uses Gemini to compare candidate algorithms against performance and resource limits
 -> Returns novel technical solution
 ```

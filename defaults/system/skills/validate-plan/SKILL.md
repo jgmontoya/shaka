@@ -36,6 +36,7 @@ Provider neutrality rules:
 - If a sibling workflow says `Task`, `subagent_type`, or another provider-specific dispatch term, translate that to the active provider's Shaka-supported agent dispatch.
 - If the active provider cannot launch true parallel agents, run independent passes sequentially. Preserve independence by giving each pass the same input and no prior reviewer output.
 - If no research agent is available, do local code search directly and record that Phase 1 was local.
+- A review pass is independent only when a fresh agent ran it without this conversation. If a role could not launch, failed, or inherited this conversation, do the pass yourself or use what it returned, and record it as `local`, `shared history`, or `failed` in Review coverage. Coverage is a disclosure, not a verdict criterion: decide the verdict from the findings and the Quality Bar.
 
 Sibling-skill routing is narrow:
 
@@ -141,6 +142,9 @@ You have permission to challenge and override the user when the design is wrong.
 - Files in scope: <3–7 paths, or "new feature: <dirs> following <sibling-features>", or "no repo: <artifacts>">
 - Patterns the plan must respect: <list>
 - Missing assumptions: <none, or list>
+
+### Review coverage
+- Research, Architect, Engineer, Cold reader: <fresh | local | shared history | failed> each
 
 ### Convergent defects (Architect ∩ Engineer)
 - <defect> — <blocker | medium | nit> — <fix>

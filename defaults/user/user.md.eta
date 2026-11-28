@@ -2,7 +2,7 @@
 
 **Quick reference information your assistant needs frequently.**
 
-Essential facts that help your AI assistant understand you and work effectively.
+Fill in the fields you want your assistant to use. Bracketed examples are placeholders.
 
 ---
 
@@ -51,9 +51,9 @@ Essential facts that help your AI assistant understand you and work effectively.
 
 ## Common Paths
 
-- Projects: `~/Projects/`
-- Downloads: `~/Downloads/`
-- Documents: `~/Documents/`
+- Projects: [project directory]
+- Downloads: [downloads directory]
+- Documents: [documents directory]
 
 ---
 

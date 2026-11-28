@@ -8,12 +8,9 @@ Enable deep, extended thinking with diverse exploration for maximum quality and 
 
 ## Research Backing
 
-### Verbalized Sampling (Zhang et al., 2024, arXiv:2510.01171)
+### Verbalized Sampling
 
-- Asking models to generate multiple responses with probabilities (p<0.10) increases creative diversity by **1.6-2.1x**
-- Improves quality by **25.7%**
-- Circumvents "typicality bias" in alignment training data
-- Forces exploration of low-probability creative options
+Zhang et al. asked models to generate several responses and give each a probability. On poems, stories and jokes, the authors reported 1.6–2.1 times the diversity of direct prompting. Human raters gave the methods comparable quality scores. [Study and human evaluation, first posted in 2025](https://arxiv.org/html/2510.01171v4#S5)
 
 ### Extended Thinking (deep thinking)
 
@@ -23,15 +20,9 @@ Enable deep, extended thinking with diverse exploration for maximum quality and 
 
 ---
 
-## Why the Combined Approach Works
+## Application in Shaka
 
-1. **Verbalized Sampling** forces exploration of low-probability creative options (diversity)
-2. **Extended thinking** develops each option with depth and sophistication (quality)
-3. Thinking blocks allow internal generation of 5 options without cluttering output
-4. User receives single best response, but it's selected from diverse distribution
-5. Combats both mode collapse (VS) and shallow thinking (deep thinking)
-
-**Output Format:** Generate diversity internally via thinking blocks, output single best response to user.
+The study measured diversity across multiple generated outputs. Shaka also uses candidate generation when choosing a single response or exploring an engineering design. Judge those choices by whether the result satisfies the user's requirements.
 
 ---
 

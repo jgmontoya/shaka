@@ -1,4 +1,4 @@
-# Technical Creativity with Gemini 3 Pro
+# Technical Creativity with Gemini
 
 Running **TechnicalCreativityGemini3** in **be-creative**...
 
@@ -8,17 +8,7 @@ Running **TechnicalCreativityGemini3** in **be-creative**...
 
 **Complementary workflow to be-creative skill for TECHNICAL creativity.**
 
-This workflow uses Gemini 3 Pro's deep reasoning capabilities to generate creative technical solutions for engineering challenges. While the main be-creative skill focuses on artistic creativity, creative writing, and diverse narrative ideas, this workflow specializes in algorithmic innovations, system architectures, and engineering elegance.
-
-**Critical Distinction:**
-
-| be-creative (main skill)            | technical-creativity-gemini-3 (this workflow) |
-| ----------------------------------- | --------------------------------------------- |
-| Artistic creativity                 | Technical creativity                          |
-| Creative writing, narratives        | Algorithms, architectures                     |
-| Human-centric insights              | Engineering solutions                         |
-| deep thinking + Verbalized Sampling | Gemini 3 Pro deep reasoning                   |
-| Stories, poems, marketing angles    | Data structures, protocols, systems           |
+Use a separate Gemini model to explore algorithms, architectures and engineering trade-offs against the problem, constraints and success criteria. Use the requested model when specified. Otherwise select an available Gemini Pro model. With the `llm` CLI, pass its configured model ID with `-m` and send the chosen prompt on stdin. Identify the model that produced the result. If Gemini is unavailable, give the requester the prompt and explain what is needed to run it.
 
 ## When to Use This Workflow
 
@@ -31,7 +21,7 @@ This workflow uses Gemini 3 Pro's deep reasoning capabilities to generate creati
 - "Generate innovative product names"
 - "Brainstorm content ideas"
 
-**Use technical-creativity-gemini-3 (this workflow):**
+**Use technical creativity (this workflow):**
 
 - "Creative sorting algorithms for this problem"
 - "Novel database architecture approaches"
@@ -39,26 +29,6 @@ This workflow uses Gemini 3 Pro's deep reasoning capabilities to generate creati
 - "Creative API design patterns"
 - "Non-obvious performance optimizations"
 - "Elegant mathematical solutions"
-
-## Why Gemini 3 Pro for Technical Creativity
-
-**Gemini 3 Pro advantages for engineering problems:**
-
-1. **Deep Reasoning**: Multi-step technical analysis for complex engineering challenges
-2. **Mathematical Pattern Recognition**: Identifies elegant mathematical approaches others miss
-3. **1M Context Window**: Analyzes entire technical problem spaces, codebases, specifications
-4. **Engineering Mindset**: Trained on extensive technical content, understands trade-offs
-5. **Creative Engineering**: Generates non-obvious technical approaches with solid foundations
-
-**Best for:**
-
-- Algorithm design challenges
-- System architecture decisions
-- Performance optimization approaches
-- Data structure innovations
-- Protocol design
-- Technical pattern exploration
-- Engineering trade-off analysis
 
 ## Workflow Structure
 
@@ -101,12 +71,12 @@ Identify requirements and limitations:
 - [Measurable outcome 3]
 ```
 
-### Step 3: Creative Generation with Gemini 3 Pro
+### Step 3: Generate alternatives
 
-Use the llm CLI to invoke Gemini 3 Pro for diverse technical solutions:
+Fill in the technical problem, requirements and success criteria:
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5-10 diverse creative technical solutions for this problem:
+```text
+Generate 5-10 diverse creative technical solutions for this problem:
 
 PROBLEM:
 [Your technical challenge here]
@@ -137,7 +107,7 @@ Provide diverse solutions ranging from:
 - Hybrid approaches combining multiple paradigms
 - Counter-intuitive optimizations
 - Novel data structure applications
-- Creative protocol designs"
+- Creative protocol designs
 ```
 
 ### Step 4: Evaluation and Selection
@@ -169,10 +139,10 @@ Need to cache API responses, but:
 - Limited memory (2GB cache budget)
 - Sub-10ms cache lookup requirement
 
-**Command:**
+**Prompt:**
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5 diverse creative caching strategies for this problem:
+```text
+Generate 5 diverse creative caching strategies for this problem:
 
 PROBLEM:
 API gateway needs to cache responses for 1M+ unique endpoints. Data updates frequently but follows patterns (time-of-day, user-cohort, region). Traditional LRU cache wastes memory on rarely-accessed endpoints.
@@ -197,7 +167,7 @@ For each solution:
 4. Implementation difficulty (1-10)
 5. Why this approach is creative/non-obvious
 
-Focus on creative uses of data structures, probabilistic algorithms, predictive caching, multi-tier strategies, and non-obvious optimizations."
+Focus on creative uses of data structures, probabilistic algorithms, predictive caching, multi-tier strategies, and non-obvious optimizations.
 ```
 
 **Expected Creative Solutions:**
@@ -218,10 +188,10 @@ Sort streaming data where:
 - Memory constraint prevents storing all elements
 - Data has temporal locality (similar values cluster in time)
 
-**Command:**
+**Prompt:**
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5-10 creative sorting/selection algorithms for this streaming top-K problem:
+```text
+Generate 5-10 creative sorting/selection algorithms for this streaming top-K problem:
 
 PROBLEM:
 Continuously process incoming stream of numerical values, maintain top-K (K=1000) elements at all times. Incoming rate: 100K elements/sec. Must support 'get current top-K' query in under 1ms.
@@ -246,7 +216,7 @@ For each solution:
 4. Implementation difficulty
 5. Why creative/non-obvious
 
-Consider: Skip lists, probabilistic structures, approximate algorithms, hybrid approaches, temporal caching, adaptive thresholds."
+Consider: Skip lists, probabilistic structures, approximate algorithms, hybrid approaches, temporal caching, adaptive thresholds.
 ```
 
 **Expected Creative Solutions:**
@@ -267,10 +237,10 @@ Time-series database for IoT sensors:
 - 99th percentile query: last 24hrs for specific sensor
 - Write-heavy (1B writes/sec), read-light (10K reads/sec)
 
-**Command:**
+**Prompt:**
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5 creative database architectures for this IoT time-series problem:
+```text
+Generate 5 creative database architectures for this IoT time-series problem:
 
 PROBLEM:
 Store and query time-series data from 100M IoT sensors. Each sensor reports every 10 seconds. Need to support fast queries for recent data (last 24hrs) while archiving older data (30+ days) to cheaper storage.
@@ -297,7 +267,7 @@ For each solution:
 4. Implementation difficulty
 5. Why creative/non-obvious
 
-Consider: Time-bucketed partitioning, LSM trees, columnar storage, tiered storage, compression strategies, distributed architectures, creative indexing."
+Consider: Time-bucketed partitioning, LSM trees, columnar storage, tiered storage, compression strategies, distributed architectures, creative indexing.
 ```
 
 **Expected Creative Solutions:**
@@ -318,10 +288,10 @@ Rate limit API without traditional token bucket:
 - Global rate limit plus per-user limits
 - Distributed across multiple servers
 
-**Command:**
+**Prompt:**
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5-10 creative rate limiting algorithms beyond traditional token bucket:
+```text
+Generate 5-10 creative rate limiting algorithms beyond traditional token bucket:
 
 PROBLEM:
 API rate limiting that rewards good behavior and adapts to usage patterns. Traditional token bucket is too rigid - good users hit limits during legitimate bursts, abusers game the system.
@@ -347,7 +317,7 @@ For each solution:
 4. Implementation difficulty
 5. Why creative/non-obvious
 
-Consider: Adaptive algorithms, reputation systems, predictive allowances, sliding windows with decay, multi-tier limits, behavioral analysis, probabilistic fairness."
+Consider: Adaptive algorithms, reputation systems, predictive allowances, sliding windows with decay, multi-tier limits, behavioral analysis, probabilistic fairness.
 ```
 
 **Expected Creative Solutions:**
@@ -365,18 +335,18 @@ This workflow is part of the be-creative skill ecosystem but serves a specialize
 **When invoking from be-creative skill:**
 
 ```markdown
-For technical creativity challenges, use the technical-creativity-gemini-3 workflow:
+For technical creativity challenges, use the technical creativity workflow:
 
 1. Load workflow: `read Workflows/TechnicalCreativityGemini3.md`
 2. Follow the workflow structure (Problem → Constraints → Generation → Evaluation)
-3. Use Gemini 3 Pro via llm CLI for creative technical solutions
+3. Generate technical alternatives using the problem, constraints and success criteria
 4. Return diverse technical approaches with trade-off analysis
 ```
 
 **Complementary Usage:**
 
 - **be-creative skill** handles creative vision, problem framing, narrative
-- **technical-creativity-gemini-3** handles algorithmic solutions, architecture, implementation
+- **technical creativity** handles algorithmic solutions, architecture, implementation
 - Can be used in sequence: creative framing → technical solutions
 
 **Example Combined Usage:**
@@ -387,7 +357,7 @@ User: "I need a creative approach to user authentication"
 Step 1 (be-creative): Generate creative high-level concepts
 → "Passwordless magic links", "Biometric trust scores", "Social proof authentication"
 
-Step 2 (technical-creativity-gemini-3): Design technical implementation
+Step 2 (technical creativity): Design technical implementation
 → Use this workflow to generate 5 creative technical architectures for selected concept
 ```
 
@@ -505,40 +475,40 @@ Step 2 (technical-creativity-gemini-3): Design technical implementation
 
 For complex problems, use iterative refinement:
 
-```bash
+```text
 # Stage 1: Generate high-level architectural approaches
-llm -m gemini-3-pro-preview "Generate 5 high-level architectural approaches for [problem]..."
+Generate 5 high-level architectural approaches for [problem]...
 
 # Stage 2: For selected approach, generate detailed component designs
-llm -m gemini-3-pro-preview "For this architecture: [selected approach]
-Generate 5 creative implementations for the [specific component]..."
+For this architecture: [selected approach]
+Generate 5 creative implementations for the [specific component]...
 
 # Stage 3: For critical component, generate algorithmic variations
-llm -m gemini-3-pro-preview "For this component: [selected component]
-Generate 5 algorithmic variations optimizing for [specific goal]..."
+For this component: [selected component]
+Generate 5 algorithmic variations optimizing for [specific goal]...
 ```
 
 ### Cross-Domain Pattern Mining
 
 Explicitly prompt for patterns from other fields:
 
-```bash
-llm -m gemini-3-pro-preview "Generate solutions for [technical problem] by applying patterns from:
+```text
+Generate solutions for [technical problem] by applying patterns from:
 - Biological systems (evolution, immune systems, neural networks)
 - Economics (markets, auctions, game theory)
 - Physics (thermodynamics, quantum mechanics, relativity)
 - Social systems (cooperation, reputation, governance)
 - Mathematics (graph theory, topology, category theory)
 
-For each domain-inspired solution, explain the source pattern and technical mapping."
+For each domain-inspired solution, explain the source pattern and technical mapping.
 ```
 
 ### Constraint Relaxation
 
 Explore solutions if constraints were different:
 
-```bash
-llm -m gemini-3-pro-preview "Generate solutions for [problem] under different constraint scenarios:
+```text
+Generate solutions for [problem] under different constraint scenarios:
 
 1. Unlimited memory (relax memory constraint)
 2. Relaxed latency (100ms instead of 10ms)
@@ -546,15 +516,15 @@ llm -m gemini-3-pro-preview "Generate solutions for [problem] under different co
 4. Distributed system (multiple servers available)
 5. Quantum computing available (future-forward thinking)
 
-This helps identify which constraints are driving complexity and potential future optimizations."
+This helps identify which constraints are driving complexity and potential future optimizations.
 ```
 
 ## Quick Reference
 
-**Basic Command Template:**
+**Basic Prompt Template:**
 
-```bash
-llm -m gemini-3-pro-preview "Generate 5-10 diverse creative technical solutions for:
+```text
+Generate 5-10 diverse creative technical solutions for:
 
 PROBLEM: [technical challenge]
 CONSTRAINTS: [requirements]
@@ -565,7 +535,7 @@ For each solution provide:
 2. Key innovation
 3. Trade-offs
 4. Implementation difficulty
-5. Why creative/non-obvious"
+5. Why creative/non-obvious
 ```
 
 **When to use this workflow:**

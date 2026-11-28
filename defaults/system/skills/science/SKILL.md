@@ -135,7 +135,8 @@ Route to the appropriate workflow based on the request.
 → Observe: 60% drop-off at step 3
 → Hypothesize: H1: Form too long. H2: Unclear instructions. H3: Bug.
 → Test: Session recordings, form analytics, error logs
-→ Result: H2 supported - users pause 30+ seconds at field X
+→ Result: Users pause 30+ seconds at field X. The pause identifies where to investigate; all three explanations still fit.
+→ Next: Vary only the instructions at field X and compare completion rates across the two versions.
 ```
 
 ---

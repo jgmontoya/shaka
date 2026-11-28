@@ -152,7 +152,7 @@ async function measureIdentityHeader(shakaHome: string): Promise<Component> {
   const header = `<system-reminder>
 SHAKA CONTEXT (Auto-loaded at Session Start)
 
-📅 CURRENT DATE/TIME: ${currentDate}
+📅 Context loaded at: ${currentDate}
 
 ## IDENTITY
 

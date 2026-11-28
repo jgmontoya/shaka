@@ -190,31 +190,40 @@ async function deleteAndRefresh(
 
 // --- Prune review ---
 
-async function runPruneReview(review: ReviewState, initialFilter?: string): Promise<void> {
-  const candidates = applyFilter(review, initialFilter ?? "");
-
-  if (candidates.length === 0) {
-    console.log("\nNo candidates to assess.");
-    return;
-  }
-
+async function assessPruneCandidates(candidates: LearningEntry[]): Promise<QualityVerdict[]> {
   console.log(`\nAnalyzing ${candidates.length} learnings for quality...`);
 
   const prompt = buildQualityAssessmentPrompt(candidates);
   const result = await inference({ userPrompt: prompt, timeout: 60000 });
 
-  if (!result.success || !result.text) {
+  if (!result.success) {
     console.log("Quality assessment inference failed.");
-    return;
+    return [];
   }
 
-  const verdicts = parseQualityAssessmentOutput(result.text);
-
+  const { verdicts, complete } = parseQualityAssessmentOutput(result.text ?? "", candidates.length);
   if (verdicts.length === 0) {
-    console.log("AI found no low-quality entries. All entries look good.");
+    console.log(
+      complete
+        ? "AI found no low-quality entries. All entries look good."
+        : "Unable to assess learning quality from the response.",
+    );
+    return [];
+  }
+
+  if (!complete) console.log("Assessment incomplete. Showing only the valid, distinct flags.");
+  return verdicts;
+}
+
+async function runPruneReview(review: ReviewState, initialFilter?: string): Promise<void> {
+  const candidates = applyFilter(review, initialFilter ?? "");
+  if (candidates.length === 0) {
+    console.log("\nNo candidates to assess.");
     return;
   }
 
+  const verdicts = await assessPruneCandidates(candidates);
+  if (verdicts.length === 0) return;
   console.log(`\nAI flagged ${verdicts.length} entries as low-quality:\n`);
 
   let deleted = 0;

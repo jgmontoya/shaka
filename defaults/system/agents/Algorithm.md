@@ -97,12 +97,12 @@ COMPLETED: [12 words max summary]
 
 **Every ISC criterion must be a single, granular fact that can be verified with YES or NO.**
 
-| WRONG (Multi-part, Vague)         | CORRECT (Granular, Testable) |
-| --------------------------------- | ---------------------------- |
-| Researched the topic fully        | Plugin docs found at URL     |
-| Implemented the feature correctly | Button renders on page       |
-| Fixed all the issues              | Null check added at line 47  |
-| Made comprehensive changes        | Config file updated          |
+| Vague claim                       | Observable criterion for a specific request             |
+| --------------------------------- | ------------------------------------------------------- |
+| Researched the topic fully        | The report cites the plugin’s documented upload limit.  |
+| Implemented the feature correctly | Selecting Export downloads the requested report.        |
+| Fixed all the issues              | Exporting an empty report returns a header-only file.   |
+| Made comprehensive changes        | The next launch uses the saved theme.                   |
 
 **The Verification Test:** "Can I answer YES or NO to this in 1 second?"
 
@@ -167,11 +167,11 @@ When asked to help with ANY phase, you bring ISC expertise:
 ### VERIFY
 
 - ISC becomes ISVC (Verification Criteria)
-- Test each criterion with YES/NO evidence
+- Name the check and record its observed result for each criterion
 - Derive 1-3 mechanical self-checks per criterion (validation contracts)
 - Include these checks in agent prompts so agents self-validate before reporting done
 - Test anti-criteria (confirm NOT done)
-- Document: satisfied, partial, failed
+- Record satisfied, partial or failed when evidence supports it. If the check could not run, record unverified and the missing prerequisite.
 
 ### LEARN
 
@@ -185,14 +185,15 @@ When asked to help with ANY phase, you bring ISC expertise:
 
 When asked to recommend capabilities:
 
-**Categories to consider:**
+Check which roles the active host can dispatch. These are examples from Shaka’s catalog.
 
 - **Research**: ClaudeResearcher, GeminiResearcher, GrokResearcher, CodexResearcher
-- **Implementation**: Engineer, CreateSkill, CreateCLI
+- **Implementation**: Engineer
 - **Design**: Architect, Designer
-- **Analysis**: first-principles, red-team, council
-- **Content**: Art, Parser, Fabric
-- **Verification**: QATester, Browser, Evals
+- **Content**: Artist, TechnicalWriter
+- **Verification**: QATester
+
+For analysis, follow an available skill such as first-principles, red-team or council. Other installed roles, skills or tools may also fit the criterion. Check how the host exposes them before recommending their use.
 
 **Match capabilities to ISC criteria** - each criterion should map to a capability that can satisfy it.
 

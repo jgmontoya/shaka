@@ -1078,25 +1078,39 @@ ALL HIGH QUALITY
 Do not modify any entry. Only flag entries you are confident are low quality.`;
 }
 
-/** Parse quality assessment output into verdicts. Returns 0-based indices. */
-export function parseQualityAssessmentOutput(raw: string): QualityVerdict[] {
-  if (raw.trim() === "ALL HIGH QUALITY") return [];
+/** A complete assessment with no verdicts represents an explicit all-clear. */
+export function parseQualityAssessmentOutput(
+  raw: string,
+  candidateCount: number,
+): { verdicts: QualityVerdict[]; complete: boolean } {
+  if (raw.trim() === "ALL HIGH QUALITY") return { verdicts: [], complete: true };
 
   const verdicts: QualityVerdict[] = [];
+  const seen = new Set<number>();
   const lineRe = /^LOW\s*\[(\d+)\]\s*[-–—]\s*(.+)$/;
+  let complete = true;
 
   for (const line of raw.split("\n")) {
-    const match = line.trim().match(lineRe);
-    if (!match) continue;
-
-    const index = Number.parseInt(match[1] ?? "", 10) - 1;
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    if (trimmed === "ALL HIGH QUALITY") return { verdicts: [], complete: false };
+    const match = trimmed.match(lineRe);
+    if (!match) {
+      complete = false;
+      continue;
+    }
+    const index = Number(match[1]) - 1;
     const reason = match[2]?.trim() ?? "";
-    if (!(index >= 0) || !reason) continue;
+    if (index < 0 || index >= candidateCount || seen.has(index) || !reason) {
+      complete = false;
+      continue;
+    }
 
+    seen.add(index);
     verdicts.push({ index, reason });
   }
 
-  return verdicts;
+  return { verdicts, complete: complete && verdicts.length > 0 };
 }
 
 // --- Ranking (auto-prune) ---

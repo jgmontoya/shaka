@@ -958,16 +958,15 @@ ${topicsBlock}
 Topic tags must use lowercase ASCII letters and digits separated by single hyphens
 (for example, auth-system). Do not wrap tags in quotes or code formatting.
 
-For each session, output:
+Start each session's output with SESSION: followed by its exact input filename.
+If the session has no qualifying fragments, put (no knowledge) on the next line.
+Otherwise, repeat the heading, body and Topics line for each fragment:
 
 SESSION: {filename}
 ### {Fragment Title}
 
 {Body 1-5 sentences}
 Topics: tag1, tag2
-
-SESSION: {filename}
-(no knowledge)
 
 ---
 

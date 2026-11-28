@@ -5,7 +5,7 @@
 1. **Verbalized Sampling drives diversity** - Generate 5 options (p<0.10) to escape typicality bias
 2. **deep thinking drives quality** - Deep reasoning develops each option with sophistication
 3. **Best of both worlds** - Multiple options for diversity, deep thinking for quality, single output for user
-4. **Research-backed effectiveness** - VS increases creativity 1.6-2.1x (Zhang et al., 2024)
+4. **Judge quality separately** - A set of varied ideas can still miss the brief. Check each promising option for usefulness and feasibility.
 5. **Avoid formulaic patterns** - Question assumptions and explore unconventional territory
 6. **Creative AND practical** - Innovation balanced with viability
 

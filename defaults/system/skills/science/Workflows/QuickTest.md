@@ -47,12 +47,12 @@ Execute minimal viable test:
 ```markdown
 ## Quick Hypothesis Test
 
-**H**: The API timeout is causing the 500 errors
-**P**: If true, increasing timeout will reduce 500s
-**T**: Set timeout from 5s to 30s, monitor for 10 minutes
-**R**: 500 errors dropped from 50/min to 2/min
-**V**: ✓ Supported
-**→**: Investigate why upstream is slow, set timeout to 15s as interim fix
+**H**: The API returns a 500 when this upstream call exceeds its 5s timeout.
+**P**: With a 6s upstream response, the request fails at a 5s timeout and succeeds at 10s.
+**T**: Replay the same request against a test upstream with a fixed 6s delay. Change only the timeout.
+**R**: At 5s the API returned 500 and logged an upstream timeout. At 10s it returned 200.
+**V**: ✓ Supported for the replayed request.
+**→**: Check how many production 500s have the same timeout signature before changing the setting.
 ```
 
 ## When to Use

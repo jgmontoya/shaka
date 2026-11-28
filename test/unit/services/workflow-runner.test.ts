@@ -74,6 +74,19 @@ describe("resolveTemplates", () => {
     expect(result).toBe("input=foo prev=data");
   });
 
+  test("passes the original request and step output verbatim", () => {
+    const input = "Document {previous.output} and {loop.iteration}.";
+    const step = makeResult({ output: "Example: {steps.build.exitCode} costs $5." });
+    const result = resolveTemplates(
+      "{input}\n{steps.build.output}\n{previous.output}\nIteration {loop.iteration}",
+      input,
+      new Map([["build", step]]),
+      step,
+    );
+
+    expect(result).toBe([input, step.output, step.output, "Iteration 1"].join("\n"));
+  });
+
   test("replaces {loop.iteration}", () => {
     const result = resolveTemplates("iter {loop.iteration}", "", new Map(), null, {
       iteration: 2,

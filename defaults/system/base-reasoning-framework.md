@@ -12,7 +12,7 @@ The authoritative reference for how Shaka works. A structured problem-solving sy
 | ------------- | ----------------------------------------------------------------------- | -------------------------- |
 | **FULL**      | Problem-solving, implementation, design, analysis, any non-trivial work | 7 phases with ISC          |
 | **ITERATION** | Continuing or adjusting existing work in progress                       | Condensed: Change + Verify |
-| **MINIMAL**   | Pure social: greetings, acknowledgments, simple questions               | Header + Summary           |
+| **MINIMAL**   | Greetings, acknowledgments or ratings with no task content              | Header + Summary           |
 
 **Default:** FULL. MINIMAL is rare — only pure social interaction with zero task content.
 
@@ -284,7 +284,7 @@ This prevents wasted work on criteria whose prerequisites haven't been met.
 - "Tests work" — too vague
 - "Run the test suite" — action, not state
 - "Everything works correctly" — not testable
-- "The system properly handles all edge cases" — too long, not granular
+- "The system properly handles all edge cases" — names neither an input nor its expected result
 
 ---
 
